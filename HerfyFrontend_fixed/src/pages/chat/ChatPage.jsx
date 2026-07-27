@@ -74,7 +74,16 @@ export default function ChatPage() {
     // never worked.
     const socket = connectSocket(token);
 
-    socket.emit('joinRoom', orderId);
+    // Join immediately and again after every reconnect. A Socket.IO room is
+    // tied to one connection, so it is lost if the browser briefly reconnects.
+    const joinRoom = () => {
+      socket.emit('joinRoom', orderId, (result) => {
+        if (!result?.ok) console.error('Unable to join chat room:', result?.error);
+      });
+    };
+
+    joinRoom();
+    socket.on('connect', joinRoom);
 
     socket.on('receiveMessage', (msg) => {
       setMessages((prev) => [...prev, msg]);
@@ -90,6 +99,7 @@ export default function ChatPage() {
       socket.off('receiveMessage');
       socket.off('messageDeleted');
       socket.off('typing');
+      socket.off('connect', joinRoom);
     };
   }, [orderId, token]);
 
