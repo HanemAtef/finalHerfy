@@ -1,0 +1,79 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Public+Sans:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+@import 'leaflet/dist/leaflet.css';
+
+@theme {
+  --color-primary: #0F4C75;
+  --color-secondary: #F68B1E;
+  --color-tertiary: #28A745;
+  --color-emergency: #EF4444;
+  --color-neutral: #F8F9FA;
+  --color-textDark: #1F2937;
+  --color-textGray: #6B7280;
+  --color-borderGray: #D1D5DB;
+  --color-white: #FFFFFF;
+  --font-sans: 'Cairo', 'Public Sans', sans-serif;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --shadow-card: 0 2px 8px rgba(15, 76, 117, 0.08);
+  --max-width-container-max: 1280px;
+}
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    direction: rtl;
+  }
+
+  body {
+    background-color: var(--color-neutral);
+    color: var(--color-textDark);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-primary text-white px-6 py-3 rounded-xl font-medium hover:bg-primary/90 transition-all disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply bg-secondary text-white px-6 py-3 rounded-xl font-medium hover:bg-secondary/90 transition-all;
+  }
+
+  .btn-emergency {
+    @apply bg-emergency text-white px-6 py-3 rounded-xl font-medium hover:bg-emergency/90 transition-all;
+  }
+
+  .btn-outline {
+    @apply border-2 border-primary text-primary px-6 py-3 rounded-xl font-medium hover:bg-primary hover:text-white transition-all;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl border border-borderGray focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all bg-white text-textDark placeholder:text-textGray;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl shadow-card border border-neutral p-4;
+  }
+
+  .badge-verified {
+    @apply bg-tertiary text-white text-xs px-2 py-1 rounded-full;
+  }
+
+  .badge-primary {
+    @apply bg-primary text-white text-xs px-2 py-1 rounded-full;
+  }
+
+  .bento-pattern {
+    background-image: radial-gradient(circle at 2px 2px, #e1e8eb 1px, transparent 0);
+    background-size: 24px 24px;
+  }
+}

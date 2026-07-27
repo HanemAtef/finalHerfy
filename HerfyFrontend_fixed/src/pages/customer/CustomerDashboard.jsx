@@ -1,0 +1,98 @@
+import { useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { FaWrench, FaBolt, FaChevronLeft, FaArrowRight } from 'react-icons/fa';
+import { getCustomerOrders } from '../../store/slices/orderSlice';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
+import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
+
+const statusColors = {
+  completed: 'bg-tertiary/10 text-tertiary',
+  pending: 'bg-secondary/10 text-secondary',
+  cancelled: 'bg-emergency/10 text-emergency',
+  accepted: 'bg-primary/10 text-primary',
+  'in-progress': 'bg-primary/10 text-primary',
+};
+
+export default function CustomerDashboard() {
+  const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const { user } = useSelector((state) => state.auth);
+  const { orders, isLoading } = useSelector((state) => state.orders);
+
+  useEffect(() => {
+    if (user?._id) dispatch(getCustomerOrders(user._id));
+  }, [dispatch, user?._id]);
+
+  const completed = orders.filter((o) => o.status === 'completed').length;
+
+  return (
+    <div>
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="rounded-full p-2 text-primary hover:bg-primary/5"
+            aria-label="رجوع"
+          >
+            <FaArrowRight />
+          </button>
+          <div>
+            <h1 className="text-2xl font-bold text-textDark">حجوزاتي</h1>
+            <p className="text-sm text-textGray">تتبع جميع طلباتك وحالتها</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="card bg-primary text-white">
+          <p className="text-sm opacity-80">ملخص النشاط</p>
+          <p className="mt-2 text-2xl font-bold">{orders.length}</p>
+          <p className="text-sm opacity-80">إجمالي الحجوزات</p>
+          <div className="mt-4 flex items-center gap-2 text-sm">
+            <span className="h-2 w-2 rounded-full bg-tertiary" />
+            {completed} مكتمل
+          </div>
+        </div>
+        <div className="card sm:col-span-2">
+          <h3 className="mb-4 font-bold text-textDark">آخر الحجوزات</h3>
+          {isLoading ? (
+            <LoadingSpinner />
+          ) : orders.length === 0 ? (
+            <p className="text-center text-textGray py-8">لا توجد حجوزات بعد</p>
+          ) : (
+            <div className="space-y-3">
+              {orders.slice(0, 5).map((order) => (
+                <Link
+                  key={order._id}
+                  to={
+                    order.status === 'completed'
+                      ? `/customer/review/${order._id}`
+                      : `/customer/tracking/${order._id}`
+                  }
+                  className="flex items-center gap-4 rounded-xl border border-borderGray p-4 transition hover:shadow-sm"
+                >
+                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    {order.profession?.includes('كهرب') ? <FaBolt /> : <FaWrench />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-textDark truncate">{order.profession}</p>
+                    <p className="text-xs text-textGray">{formatDate(order.createdAt)}</p>
+                  </div>
+                  <div className="text-left">
+                    <p className="font-bold">{formatPrice(order.totalPrice || order.estimatedPrice)}</p>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[order.status] || ''}`}>
+                      {ORDER_STATUS_LABELS[order.status] || order.status}
+                    </span>
+                  </div>
+                  <FaChevronLeft className="text-textGray shrink-0" />
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
