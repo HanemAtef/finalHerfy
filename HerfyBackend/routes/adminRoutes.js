@@ -11,6 +11,8 @@ const {
   autoVerifyAll,
   getWallets,
   settleWallet,
+   getDashboardChart,
+   broadcastAnnouncement,
 } = require("../controllers/adminControllers");
 const {
   approveHandyman,
@@ -82,5 +84,11 @@ router.get("/analytics/craftsmen", getCraftsmenAnalytics);
 router.get("/analytics/jobs", getJobsAnalytics);
 router.get("/analytics/reviews", getReviewsAnalytics);
 router.get("/export/:type", exportCSV);
+
+//refactor chart 
+router.get("/dashboard/chart", getDashboardChart);
+
+//  Broadcast a general announcement to users
+router.post("/broadcast", broadcastAnnouncement);
 
 module.exports = router;

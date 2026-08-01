@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { FaPlus, FaTrash, FaToggleOn, FaToggleOff } from 'react-icons/fa';
+import { useSearchParams } from 'react-router-dom';
+import { FaPlus, FaTrash, FaToggleOn, FaToggleOff, FaSearch } from 'react-icons/fa';
 import { adminService } from '../../services/api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 
-function ReferenceList({ title, items, onAdd, onToggle, onDelete }) {
+function ReferenceList({ title, items, onAdd, onToggle, onDelete, initialQuery }) {
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [query, setQuery] = useState(initialQuery || '');
 
   const handleAdd = async () => {
     if (!name.trim()) return;
@@ -18,9 +20,22 @@ function ReferenceList({ title, items, onAdd, onToggle, onDelete }) {
     }
   };
 
+  const filteredItems = query.trim()
+    ? items.filter((item) => item.name?.toLowerCase().includes(query.trim().toLowerCase()))
+    : items;
+
   return (
     <div className="card">
       <h3 className="mb-4 font-bold text-textDark">{title}</h3>
+      <div className="mb-3 relative">
+        <FaSearch className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" size={13} />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={`بحث في ${title}...`}
+          className="input-field pr-9 text-sm"
+        />
+      </div>
       <div className="mb-4 flex gap-2">
         <input
           value={name}
@@ -39,8 +54,12 @@ function ReferenceList({ title, items, onAdd, onToggle, onDelete }) {
         </button>
       </div>
       <div className="space-y-2">
-        {items.length === 0 && <p className="py-4 text-center text-sm text-textGray">لا توجد عناصر بعد</p>}
-        {items.map((item) => (
+        {filteredItems.length === 0 && (
+          <p className="py-4 text-center text-sm text-textGray">
+            {query.trim() ? 'لا توجد نتائج مطابقة' : 'لا توجد عناصر بعد'}
+          </p>
+        )}
+        {filteredItems.map((item) => (
           <div key={item._id} className="flex items-center justify-between rounded-lg border border-borderGray px-3 py-2">
             <span className={item.isActive ? 'text-textDark' : 'text-textGray line-through'}>{item.name}</span>
             <div className="flex items-center gap-3">
@@ -59,6 +78,8 @@ function ReferenceList({ title, items, onAdd, onToggle, onDelete }) {
 }
 
 export default function AdminReferenceDataPage() {
+  const [searchParams] = useSearchParams();
+  const initialQuery = searchParams.get('q') || '';
   const [cities, setCities] = useState([]);
   const [serviceTypes, setServiceTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -73,6 +94,7 @@ export default function AdminReferenceDataPage() {
       .finally(() => setLoading(false));
   };
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(load, []);
 
   if (loading) return <LoadingSpinner />;
@@ -88,8 +110,10 @@ export default function AdminReferenceDataPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ReferenceList
+          key={`cities-${initialQuery}`}
           title="المدن"
           items={cities}
+          initialQuery={initialQuery}
           onAdd={async (name) => {
             await adminService.createCity({ name });
             load();
@@ -104,8 +128,10 @@ export default function AdminReferenceDataPage() {
           }}
         />
         <ReferenceList
+          key={`services-${initialQuery}`}
           title="التخصصات (المهن)"
           items={serviceTypes}
+          initialQuery={initialQuery}
           onAdd={async (name) => {
             await adminService.createServiceType({ name });
             load();

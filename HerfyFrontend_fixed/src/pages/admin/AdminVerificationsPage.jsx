@@ -11,6 +11,9 @@ export default function AdminVerificationsPage() {
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null); // { type: 'reject'|'suspend', userId }
+  const [stats, setStats] = useState(null);
+  const [craftsmen, setCraftsmen] = useState([]);
+  const [byProfession, setByProfession] = useState([]);
 
   useEffect(() => {
     adminService
@@ -18,6 +21,10 @@ export default function AdminVerificationsPage() {
       .then((res) => setPending(res.data.data || res.data || []))
       .catch(() => setPending([]))
       .finally(() => setLoading(false));
+
+    adminService.getStats().then((res) => setStats(res.data)).catch(() => {});
+    adminService.getCraftsmenAnalytics().then((res) => setCraftsmen(res.data.data || [])).catch(() => {});
+    adminService.getJobsAnalytics().then((res) => setByProfession(res.data.byProfession || [])).catch(() => {});
   }, []);
 
   const handleVerify = async (handymanId) => {
@@ -35,12 +42,20 @@ export default function AdminVerificationsPage() {
     setPending((prev) => prev.filter((p) => p.userId !== modal.userId));
   };
 
-  const stats = [
-    { label: 'متوسط وقت الرد', value: '4.2 س', color: 'text-primary' },
-    { label: 'تم توثيقه اليوم', value: '18', color: 'text-tertiary' },
+  const verifiedCount = craftsmen.filter((c) => c.verified).length;
+
+  const statCards = [
     { label: 'قيد المراجعة', value: pending.length, color: 'text-secondary' },
-    { label: 'إجمالي الطلبات', value: '124', color: 'text-primary' },
+    { label: 'الحرفيون الموثقون', value: verifiedCount, color: 'text-tertiary' },
+    { label: 'إجمالي الحرفيين', value: stats?.totalHandymen ?? '—', color: 'text-primary' },
+    { label: 'إجمالي الطلبات', value: stats?.totalOrders ?? '—', color: 'text-primary' },
   ];
+
+  const professionTotal = byProfession.reduce((sum, p) => sum + p.count, 0);
+  const topProfessions = byProfession.slice(0, 3).map((p) => ({
+    name: p._id || 'غير محدد',
+    pct: professionTotal ? Math.round((p.count / professionTotal) * 100) : 0,
+  }));
 
   return (
     <div>
@@ -52,7 +67,7 @@ export default function AdminVerificationsPage() {
       </div>
 
       <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {stats.map(({ label, value, color }) => (
+        {statCards.map(({ label, value, color }) => (
           <div key={label} className="card">
             <p className="text-sm text-textGray">{label}</p>
             <p className={`text-2xl font-bold ${color}`}>{value}</p>
@@ -141,27 +156,27 @@ export default function AdminVerificationsPage() {
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <div className="card">
           <h3 className="mb-4 font-bold">المهن الأكثر طلباً</h3>
-          {[
-            { name: 'كهربائي', pct: 45 },
-            { name: 'سباك', pct: 32 },
-            { name: 'فني تكييف', pct: 23 },
-          ].map(({ name, pct }) => (
-            <div key={name} className="mb-3">
-              <div className="mb-1 flex justify-between text-sm">
-                <span>{name}</span>
-                <span>{pct}%</span>
+          {topProfessions.length === 0 ? (
+            <p className="py-4 text-center text-sm text-textGray">لا توجد بيانات كافية بعد</p>
+          ) : (
+            topProfessions.map(({ name, pct }) => (
+              <div key={name} className="mb-3">
+                <div className="mb-1 flex justify-between text-sm">
+                  <span>{name}</span>
+                  <span>{pct}%</span>
+                </div>
+                <div className="h-2 rounded-full bg-neutral">
+                  <div className="h-2 rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                </div>
               </div>
-              <div className="h-2 rounded-full bg-neutral">
-                <div className="h-2 rounded-full bg-primary" style={{ width: `${pct}%` }} />
-              </div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
         <div className="card bg-primary text-white">
-          <h3 className="mb-2 font-bold">كفاءة المراجعة</h3>
-          <p className="mb-4 text-sm opacity-80">أداء فريق المراجعة هذا الشهر</p>
-          <p className="text-3xl font-bold">1,402</p>
-          <p className="text-sm opacity-80">طلبات منجزة</p>
+          <h3 className="mb-2 font-bold">الطلبات المكتملة</h3>
+          <p className="mb-4 text-sm opacity-80">إجمالي الطلبات المكتملة على المنصة</p>
+          <p className="text-3xl font-bold">{stats?.completedOrders?.toLocaleString('ar-EG') ?? '—'}</p>
+          <p className="text-sm opacity-80">طلب مكتمل</p>
         </div>
       </div>
 
