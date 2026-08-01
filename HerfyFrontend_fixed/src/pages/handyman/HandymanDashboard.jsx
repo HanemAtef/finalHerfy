@@ -205,18 +205,7 @@ export default function HandymanDashboard() {
         )}
       </section>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="card border-2 border-dashed border-borderGray text-center py-8">
-          <p className="text-3xl text-textGray mb-2">+</p>
-          <p className="font-bold text-textDark">تحديث الجدول الأسبوعي</p>
-          <p className="text-sm text-textGray">حدد ساعات عملك للأسبوع القادم</p>
-        </div>
-        <div className="card bg-primary text-white">
-          <h3 className="font-bold mb-2">أكمل ملفك الشخصي</h3>
-          <p className="text-sm opacity-80 mb-4">إضافة صور للأعمال السابقة يزيد فرص اختيارك بنسبة 40%</p>
-          <button type="button" className="btn-secondary text-sm">أضف صوراً الآن</button>
-        </div>
-      </div>
+  
     </div>
   );
 }
