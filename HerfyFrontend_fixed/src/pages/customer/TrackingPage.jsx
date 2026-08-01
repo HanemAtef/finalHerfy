@@ -76,14 +76,16 @@ export default function TrackingPage() {
       if (arrivalTime !== undefined) setArrivalTime(arrivalTime);
     });
 
-    socket.on('tracking-started', () => {
+    // FIX: الباك اند بيعمل emit باسم 'trackingStarted' (camelCase) مش
+    // 'tracking-started'، فكان الحدث ده مبيتستقبلش أبدًا.
+    socket.on('trackingStarted', () => {
       dispatch(fetchOrderById(orderId));
     });
 
     return () => {
       socket.emit('leaveOrderRoom', orderId);
       socket.off('locationUpdate');
-      socket.off('tracking-started');
+      socket.off('trackingStarted');
     };
   }, [orderId, dispatch, token]);
 
