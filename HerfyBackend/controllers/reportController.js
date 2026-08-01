@@ -4,6 +4,7 @@
 const Report = require("../models/Report");
 const Order = require("../models/Order");
 const AuditLog = require("../models/AuditLog");
+const User = require("../models/User");
 const { createNotification } = require("./notificationController");
 
 // ========== Customer/handyman files a report on an order ==========
@@ -53,6 +54,23 @@ const createReport = async (req, res) => {
 
     order.status = "disputed";
     await order.save();
+
+    // Admins had no way of knowing a dispute was filed except by manually
+    // checking the reports page — notify them directly.
+    const io = req.app.get("io");
+    const admins = await User.find({ role: "admin" }).select("_id").lean();
+    await Promise.all(
+      admins.map((admin) =>
+        createNotification(
+          io,
+          admin._id,
+          "report_filed",
+          "بلاغ جديد",
+          `بلاغ جديد على طلب #${orderId.toString().slice(-6)} — السبب: ${reason}`,
+          { reportId: report._id, orderId }
+        )
+      )
+    );
 
     res.status(201).json({ msg: "تم إرسال البلاغ، سيقوم فريق الدعم بمراجعته", data: report });
   } catch (error) {

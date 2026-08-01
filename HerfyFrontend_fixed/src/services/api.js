@@ -98,6 +98,7 @@ export const referenceService = {
 
 export const adminService = {
   getStats: () => api.get('/admin/stats'),
+  getDashboardChart: () => api.get('/admin/dashboard/chart'),
   getUsers: () => api.get('/admin/users'),
   banUser: (userId, data) => api.patch(`/admin/users/${userId}/ban`, data),
   banUserWithReason: (userId, data) => api.patch(`/admin/users/${userId}/ban-with-reason`, data),
