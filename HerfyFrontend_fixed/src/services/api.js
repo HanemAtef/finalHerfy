@@ -1,21 +1,43 @@
 import api from '../api/axios';
 
 const AUTH = {
+  // authRoutes is mounted by the backend at /api/users.
   REGISTER: '/users/register',
   LOGIN: '/users/login',
   GET_ME: '/users/me',
+  VERIFY_EMAIL: '/users/verify-email',
+  RESEND_OTP: '/users/resend-otp',
+  LOGOUT: '/users/logout',
+  REFRESH: '/users/refresh',
+  FORGOT_PASSWORD: '/users/forgot-password',
+  RESET_PASSWORD: '/users/reset-password',
+  UPDATE_PROFILE: '/users/me',
+  CHANGE_PASSWORD: '/users/change-password',
 };
 
 export const authService = {
-  register: (data) => api.post(AUTH.REGISTER, data),
+  // Register with FormData support
+  register: (data) => {
+    if (data instanceof FormData) {
+      // Let the browser set multipart/form-data including its required boundary.
+      return api.post(AUTH.REGISTER, data);
+    }
+    return api.post(AUTH.REGISTER, data);
+  },
+  
   login: (data) => api.post(AUTH.LOGIN, data),
   getMe: () => api.get(AUTH.GET_ME),
-  updateProfile: (data) => api.put('/users/me', data),
-  forgotPassword: (data) => api.post('/users/forgot-password', data),
-  resetPassword: (data) => api.post('/users/reset-password', data),
-  verifyEmail: (data) => api.post('/users/verify-email', data),
-  resendOtp: (data) => api.post('/users/resend-otp', data),
-  logout: (data) => api.post('/users/logout', data),
+  updateProfile: (data) => api.put(AUTH.UPDATE_PROFILE, data),
+  changePassword: (data) => api.put(AUTH.CHANGE_PASSWORD, data),
+  forgotPassword: (data) => api.post(AUTH.FORGOT_PASSWORD, data),
+  resetPassword: (data) => api.post(AUTH.RESET_PASSWORD, data),
+  verifyEmail: (data) => api.post(AUTH.VERIFY_EMAIL, data),
+  resendOtp: (data) => api.post(AUTH.RESEND_OTP, data),
+  logout: (data) => api.post(AUTH.LOGOUT, data),
+  refreshToken: (data) => api.post(AUTH.REFRESH, data),
+  
+  // ===== NEW: Handyman status endpoints =====
+
 };
 
 export const uploadService = {
@@ -51,6 +73,10 @@ export const handymanService = {
   updateProfile: (id, data) => api.put(`/handymen/${id}`, data),
   getAnalytics: (id) => api.get(`/handymen/${id}/analytics`),
   toggleAvailability: (id, data) => api.patch(`/handymen/${id}/availability`, data),
+  // Backend mounts handymanRoutes at /api/handymen.
+  getStatus: () => api.get('/handymen/status'),
+  getHandymanStatus: () => api.get('/handymen/status'),
+  getHandymanProfile: () => api.get('/handymen/profile'),
 };
 
 export const orderService = {
@@ -103,10 +129,10 @@ export const adminService = {
   banUser: (userId, data) => api.patch(`/admin/users/${userId}/ban`, data),
   banUserWithReason: (userId, data) => api.patch(`/admin/users/${userId}/ban-with-reason`, data),
   deleteUser: (userId, reason) => api.delete(`/admin/users/${userId}`, { data: { reason } }),
-  getPendingVerification: () => api.get('/admin/handymen/pending-verification'),
+  getPendingVerification: () => api.get('/admin/pending-registrations'),
   autoVerify: (handymanId) => api.patch(`/admin/handymen/${handymanId}/auto-verify`),
-  approveHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/approve`, data),
-  rejectHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/reject`, data),
+  approveHandyman: (handymanId, data) => api.patch(`/admin/approve-registration/${handymanId}`, data),
+  rejectHandyman: (handymanId, data) => api.patch(`/admin/reject-registration/${handymanId}`, data),
   suspendHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/suspend`, data),
   getAuditLogs: (params) => api.get('/admin/audit-logs', { params }),
   getCities: () => api.get('/admin/cities?all=true'),

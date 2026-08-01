@@ -1,5 +1,6 @@
+// HerfyBackend/controllers/authController.js
 const User = require("../models/User");
-const HandyMan=require("../models/Handyman");
+const HandyMan = require("../models/Handyman");
 const RefreshToken = require("../models/RefreshToken");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
@@ -35,27 +36,22 @@ const publicUser = (user) => ({
   phone: user.phone,
   location: user.location,
   city: user.city,
+  profileImage: user.profileImage,
+  isVerified: user.isVerified,
 });
 
-/********* register user *********/
+/********* register user - مع دعم الملفات وحالة pending *********/
 const registerUser = async (req, res) => {
   try {
     let {
       email, name, password, role, phone, location, city,
-      profession, price, experienceYears, bio, gallery
+      profession, price, experienceYears, bio, gallery, address
     } = req.body;
 
-    // FIX (M2): normalize before any lookup/write so casing never causes a
-    // duplicate account or a false "not found".
+    // Normalize email
     email = email?.toLowerCase().trim();
 
-    // SECURITY/BUG FIX (C7/H2): all validation now happens BEFORE any User
-    // document is written. Previously the admin-role check and the
-    // handyman profession/price check both ran AFTER `User.create(...)`,
-    // so a failed handyman registration left a real, unverified,
-    // permanently-orphaned account behind (no Handyman profile, email
-    // forever "already exists" on retry). The admin check was also
-    // unreachable dead code since it ran after creation.
+    // Validation
     if (role === "admin") {
       return res.status(400).json({ msg: "Cannot register as admin" });
     }
@@ -68,11 +64,7 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ msg: "User already exist" });
     }
 
-    // FIX (Low #2): previously defaulted to coordinates=[0,0] and always
-    // wrote a real GeoJSON Point, even when no location was supplied —
-    // silently polluting $near queries (see models/User.js for the schema
-    // side of this fix). Now the field is only set at all when the client
-    // actually gave real coordinates.
+    // Handle location
     let coordinates = null;
     if (location && location.coordinates && Array.isArray(location.coordinates)) {
       coordinates = location.coordinates;
@@ -80,6 +72,7 @@ const registerUser = async (req, res) => {
       coordinates = location;
     }
 
+    // Create User
     const user = await User.create({
       email,
       name,
@@ -90,49 +83,111 @@ const registerUser = async (req, res) => {
       ...(coordinates ? { location: { type: "Point", coordinates } } : {}),
     });
 
+    // If handyman, create Handyman profile with pending status
     if (role === "handyman") {
       try {
-        await HandyMan.create({
-          userId: user._id,
-          profession,
-          price,
-          experienceYears,
-          bio,
-          gallery: gallery || [],
-        });
+        // Get uploaded files from multer (if any)
+        const nationalId = req.files?.nationalId ? req.files.nationalId[0].path : null;
+        const certificate = req.files?.certificate ? req.files.certificate[0].path : null;
+        const profileImage = req.files?.profileImage ? req.files.profileImage[0].path : null;
+
+        // Check if handyman already exists (shouldn't happen, but just in case)
+        const existingHandyman = await HandyMan.findOne({ userId: user._id });
+        if (existingHandyman) {
+          // If exists, update it instead of creating new
+          existingHandyman.profession = profession;
+          existingHandyman.price = parseFloat(price);
+          existingHandyman.experienceYears = parseInt(experienceYears) || 0;
+          existingHandyman.bio = bio || '';
+          existingHandyman.gallery = gallery || [];
+          existingHandyman.nationalId = nationalId || existingHandyman.nationalId;
+          existingHandyman.certificate = certificate || existingHandyman.certificate;
+          existingHandyman.profileImage = profileImage || existingHandyman.profileImage;
+          existingHandyman.address = address || existingHandyman.address;
+          existingHandyman.location = coordinates ? { type: 'Point', coordinates } : existingHandyman.location;
+          existingHandyman.registrationStatus = 'pending';
+          existingHandyman.registeredAt = new Date();
+          existingHandyman.verified = false;
+          await existingHandyman.save();
+        } else {
+          // Create new handyman
+          await HandyMan.create({
+            userId: user._id,
+            profession,
+            price: parseFloat(price),
+            experienceYears: parseInt(experienceYears) || 0,
+            bio: bio || '',
+            gallery: gallery || [],
+            nationalId,
+            certificate,
+            profileImage,
+            address: address || '',
+            location: coordinates ? { type: 'Point', coordinates } : undefined,
+            registrationStatus: 'pending',
+            registeredAt: new Date(),
+            verified: false,
+            isAvailable: true,
+            rating: 0,
+            completedOrders: 0
+          });
+        }
+
+        // Send notification to admin via Socket.io
+        const io = req.app?.get('io');
+        if (io) {
+          io.emit('newRegistrationRequest', {
+            handymanId: user._id,
+            userId: user._id,
+            name: user.name,
+            profession: profession,
+            email: user.email,
+            phone: user.phone
+          });
+        }
+
+        console.log(`✅ New handyman registration: ${user.name} (${user.email}) - pending approval`);
+
       } catch (handymanErr) {
-        // Roll back the User row rather than leaving an orphaned,
-        // permanently-blocked account behind if the Handyman profile
-        // creation fails for any reason (e.g. a future schema constraint).
+        // Rollback: delete user if handyman creation fails
         await User.deleteOne({ _id: user._id });
+        console.error('❌ Handyman creation failed:', handymanErr);
         throw handymanErr;
       }
     }
 
-    // Registration no longer logs the user in directly: an email OTP must be
-    // verified first (see verifyEmail below). We still create the account so
-    // the handyman profile linkage above works, but no JWT is issued yet.
+    // Generate OTP for email verification
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.emailOtp = otp;
     user.emailOtpExpire = Date.now() + 10 * 60 * 1000;
     await user.save();
 
+    // Send verification email
     try {
       await sendVerificationEmail(user.email, otp);
     } catch (mailErr) {
       console.log("Failed to send verification email:", mailErr.message);
-      // Don't fail registration just because the mail provider hiccuped —
-      // the user can hit /resend-otp from the verify screen.
     }
 
-    res.status(201).json({
+    // Response
+    const response = {
       msg: "تم إنشاء الحساب، من فضلك تحقق من بريدك الإلكتروني",
       needsVerification: true,
       email: user.email,
-    });
+      role: user.role,
+    };
+
+    // Add handyman specific info
+    if (role === 'handyman') {
+      response.registrationStatus = 'pending';
+      response.handymanId = user._id;
+      response.message = 'تم تسجيل حسابك كحرفي. في انتظار موافقة الأدمن.';
+    }
+
+    res.status(201).json(response);
+
   } catch (err) {
     console.log(err);
-    res.status(500).json({ msg: "Server error" });
+    res.status(500).json({ msg: "Server error", error: err.message });
   }
 };
 
@@ -147,9 +202,6 @@ const verifyEmail = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      // FIX (M1): "User not found" here previously let an attacker confirm
-      // whether an email is registered. Same generic message as an invalid
-      // OTP — the two cases are indistinguishable from the outside.
       return res.status(400).json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
     }
 
@@ -170,13 +222,34 @@ const verifyEmail = async (req, res) => {
     user.emailOtpExpire = undefined;
     await user.save();
 
+    // Check if user is handyman and get registration status
+    let registrationStatus = null;
+    if (user.role === 'handyman') {
+      const handyman = await HandyMan.findOne({ userId: user._id });
+      if (handyman) {
+        registrationStatus = handyman.registrationStatus;
+      }
+    }
+
     const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
-    res.status(200).json({
+    
+    const response = {
       msg: "تم توثيق الحساب بنجاح",
       token: accessToken,
       refreshToken,
       user: publicUser(user),
-    });
+    };
+
+    if (registrationStatus) {
+      response.registrationStatus = registrationStatus;
+      if (registrationStatus === 'pending') {
+        response.msg = "تم توثيق الحساب. حسابك في انتظار موافقة الأدمن.";
+      } else if (registrationStatus === 'approved') {
+        response.msg = "تم توثيق الحساب. حسابك مفعل بالكامل!";
+      }
+    }
+
+    res.status(200).json(response);
   } catch (err) {
     console.log(err);
     res.status(500).json({ msg: "Server error" });
@@ -190,9 +263,6 @@ const resendVerificationOtp = async (req, res) => {
     email = email?.toLowerCase().trim();
     const user = await User.findOne({ email });
 
-    // FIX (M1): don't reveal whether this email is registered (or already
-    // verified) via response differences — always respond the same way,
-    // and only actually send an OTP if there's a real, unverified account.
     if (user && !user.isVerified) {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       user.emailOtp = otp;
@@ -209,54 +279,90 @@ const resendVerificationOtp = async (req, res) => {
 };
 
 /********* login user *********/
-const loginUser=async(req,res)=>{
-    try{    
-        //get data from request body
-        let{email,password,location}=req.body;
-        // FIX (M2): normalize before lookup so case doesn't cause a false negative.
-        email = email?.toLowerCase().trim();
-        //find user by email
-        const user=await User.findOne({email});
-        // FIX (M1): "User not found" vs "Invalid password" let an attacker
-        // enumerate registered emails. Both cases now return the same
-        // generic message.
-        if(!user){
-            return res.status(400).json({msg:"Invalid email or password"});
-        }    
-        //compare password
-        const isMatch=await user.matchPassword(password);
-        if(!isMatch){
-            return res.status(400).json({msg:"Invalid email or password"});
-        }
-        if (user.isBanned) {
-            return res.status(403).json({ msg: user.banReason ? `تم حظر هذا الحساب: ${user.banReason}` : "تم حظر هذا الحساب. تواصل مع الدعم الفني." });
-        }
-        // FIX (M4): soft-deleted accounts can no longer log in.
-        if (user.deletedAt) {
-            return res.status(400).json({ msg: "Invalid email or password" });
-        }
-        if (!user.isVerified) {
-            return res.status(403).json({
-                msg: "من فضلك وثّق بريدك الإلكتروني أولاً",
-                needsVerification: true,
-                email: user.email,
-            });
-        }
-        //generate token pair
-        const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
-        //send response 
-        res.status(200).json({
-            msg:"User logged in successfully",
-            token: accessToken,
-            refreshToken,
-            user: publicUser(user),
-        });
-    }   
-    catch(err){
-        console.log(err);
-        res.status(500).json({msg:"Server error"});
+const loginUser = async (req, res) => {
+  try {
+    let { email, password, location } = req.body;
+    email = email?.toLowerCase().trim();
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ msg: "Invalid email or password" });
     }
-}
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(400).json({ msg: "Invalid email or password" });
+    }
+
+    if (user.isBanned) {
+      return res.status(403).json({ 
+        msg: user.banReason ? `تم حظر هذا الحساب: ${user.banReason}` : "تم حظر هذا الحساب. تواصل مع الدعم الفني." 
+      });
+    }
+
+    if (user.deletedAt) {
+      return res.status(400).json({ msg: "Invalid email or password" });
+    }
+
+    if (!user.isVerified) {
+      return res.status(403).json({
+        msg: "من فضلك وثّق بريدك الإلكتروني أولاً",
+        needsVerification: true,
+        email: user.email,
+      });
+    }
+
+    // Check handyman status if role is handyman
+    let handymanStatus = null;
+    if (user.role === 'handyman') {
+      const handyman = await HandyMan.findOne({ userId: user._id });
+      if (handyman) {
+        handymanStatus = handyman.registrationStatus;
+        
+        // If handyman registration is rejected
+        if (handymanStatus === 'rejected') {
+          return res.status(403).json({
+            msg: `تم رفض طلب التسجيل الخاص بك. السبب: ${handyman.adminNote || handyman.rejectedReason || 'غير محدد'}`,
+            status: 'rejected',
+            note: handyman.adminNote || handyman.rejectedReason
+          });
+        }
+        
+        // If handyman registration is pending
+        if (handymanStatus === 'pending') {
+          return res.status(403).json({
+            msg: "حسابك في انتظار موافقة الأدمن. يرجى التحقق من بريدك الإلكتروني للإشعارات.",
+            status: 'pending',
+            email: user.email
+          });
+        }
+      } else {
+        // User is handyman but no profile exists (shouldn't happen)
+        return res.status(403).json({
+          msg: "بيانات الحرفي غير مكتملة. يرجى التواصل مع الدعم.",
+        });
+      }
+    }
+
+    const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
+
+    const response = {
+      msg: "User logged in successfully",
+      token: accessToken,
+      refreshToken,
+      user: publicUser(user),
+    };
+
+    if (handymanStatus) {
+      response.handymanStatus = handymanStatus;
+    }
+
+    res.status(200).json(response);
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ msg: "Server error" });
+  }
+};
 
 /********* refresh access token *********/
 const refreshAccessToken = async (req, res) => {
@@ -274,13 +380,10 @@ const refreshAccessToken = async (req, res) => {
     }
 
     const user = await User.findById(stored.userId);
-    // FIX (M4): a soft-deleted user's outstanding refresh token should no
-    // longer be usable, same as a banned user's.
     if (!user || user.isBanned || user.deletedAt) {
       return res.status(401).json({ msg: "جلسة غير صالحة" });
     }
 
-    // Rotate: revoke the used token, issue a brand new pair.
     stored.revoked = true;
     await stored.save();
 
@@ -315,20 +418,28 @@ const logoutUser = async (req, res) => {
 };
 
 /********* get user profile *********/
-const getMe=async(req,res)=>{   
-    try{
-        const user=req.user;
-        res.status(200).json({
-            msg:"User profile",
-            user: publicUser(user),
-        });
-    }   
-    catch(err){
-        console.log(err);
-        res.status(500).json({msg:"Server error"});
-    }   
-}
-//generate reset password 
+const getMe = async (req, res) => {
+  try {
+    const user = req.user;
+    
+    let handymanData = null;
+    if (user.role === 'handyman') {
+      handymanData = await HandyMan.findOne({ userId: user._id })
+        .select('profession price rating verified isAvailable registrationStatus adminNote experienceYears bio gallery');
+    }
+
+    res.status(200).json({
+      msg: "User profile",
+      user: publicUser(user),
+      ...(handymanData && { handyman: handymanData })
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ msg: "Server error" });
+  }
+};
+
+/********* generate reset password *********/
 const sendResetOtp = async (req, res) => {
   try {
     let { email } = req.body;
@@ -336,8 +447,6 @@ const sendResetOtp = async (req, res) => {
 
     const user = await User.findOne({ email });
 
-    // FIX (M1): always respond the same way regardless of whether the
-    // email is registered — only actually send an OTP if it is.
     if (user) {
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       user.otp = otp;
@@ -354,6 +463,7 @@ const sendResetOtp = async (req, res) => {
     res.status(500).json({ msg: "Server error" });
   }
 };
+
 const resetPassword = async (req, res) => {
   try {
     let { email, otp, newPassword } = req.body;
@@ -362,8 +472,6 @@ const resetPassword = async (req, res) => {
     const user = await User.findOne({ email });
 
     if (!user) {
-      // FIX (M1): same message as an actually-wrong OTP, for consistency
-      // with the rest of this flow's enumeration hardening.
       return res.status(400).json({ msg: "Invalid OTP" });
     }
 
@@ -375,16 +483,11 @@ const resetPassword = async (req, res) => {
       return res.status(400).json({ msg: "OTP expired" });
     }
 
-    // update password
     user.password = newPassword;
-
-    // clear otp
     user.otp = null;
     user.otpExpire = null;
-
     await user.save();
 
-    // Password changed — kill all existing sessions for this user.
     await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
 
     res.status(200).json({
@@ -395,7 +498,6 @@ const resetPassword = async (req, res) => {
     res.status(500).json({ msg: "Server error" });
   }
 };
-////////////////////////
 
 /********* update current user's profile *********/
 const updateProfile = async (req, res) => {
@@ -428,13 +530,38 @@ const updateProfile = async (req, res) => {
   }
 };
 
-module.exports={
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+
+    const matches = await user.matchPassword(currentPassword);
+    if (!matches) return res.status(400).json({ msg: 'Current password is incorrect' });
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ msg: 'New password must be different' });
+    }
+
+    user.password = newPassword;
+    await user.save();
+    await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
+
+    res.status(200).json({ msg: 'Password changed successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ msg: 'Server error' });
+  }
+};
+
+module.exports = {
   registerUser,
   loginUser,
   getMe,
   sendResetOtp,
   resetPassword,
   updateProfile,
+  changePassword,
   verifyEmail,
   resendVerificationOtp,
   refreshAccessToken,

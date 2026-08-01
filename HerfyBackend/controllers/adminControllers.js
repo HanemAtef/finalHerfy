@@ -1,15 +1,82 @@
+// HerfyBackend/controllers/adminControllers.js
 const User = require("../models/User");
 const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
 const AuditLog = require("../models/AuditLog");
+const RefreshToken = require("../models/RefreshToken");
 const { createNotification } = require("./notificationController");
 
-// FIX (Low #4): only adminModerationController.js's newer actions were
-// writing AuditLog rows — these legacy endpoints had no audit trail at all
-// for admin actions that ban a user, verify a handyman, or zero out a
-// wallet debt. Same lightweight helper used there.
+// ========== Helper: Log admin actions ==========
 const logAction = (adminId, action, targetType, targetId, reason, meta = {}) =>
   AuditLog.create({ adminId, action, targetType, targetId, reason, meta });
+
+// ========== Helper: Send approval/rejection email ==========
+const sendApprovalEmail = async (email, name, status, note) => {
+  try {
+    const sendEmail = require('../utils/sendEmail');
+    
+    const subject = status === 'approved' 
+      ? '✅ تم الموافقة على طلب تسجيلك كحرفي في هرفي' 
+      : '❌ تم رفض طلب تسجيلك كحرفي في هرفي';
+
+    const html = `
+      <div dir="rtl" style="font-family: 'Tahoma', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #ffffff;">
+        <div style="text-align: center; padding: 15px 0; background: linear-gradient(135deg, #4CAF50, #45a049); border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">🏠 هرفي</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 5px 0 0 0;">منصة الحرفيين الموثوقين</p>
+        </div>
+        
+        <div style="text-align: center; padding: 10px 0;">
+          <div style="font-size: 60px; margin: 10px 0;">
+            ${status === 'approved' ? '🎉' : '😔'}
+          </div>
+          <h2 style="color: ${status === 'approved' ? '#4CAF50' : '#f44336'}; margin: 0;">
+            ${status === 'approved' ? 'تهانينا!' : 'عذراً'}
+          </h2>
+        </div>
+        
+        <div style="padding: 0 10px;">
+          <h3 style="color: #333; margin-bottom: 10px;">السلام عليكم ${name}</h3>
+          
+          <p style="font-size: 16px; line-height: 1.8; color: #444; margin-bottom: 20px;">
+            ${status === 'approved' 
+              ? 'يسرنا إبلاغك بأنه تم الموافقة على طلب التسجيل الخاص بك كحرفي في منصة هرفي. 🎊'
+              : 'نأسف لإبلاغك بأن طلب التسجيل الخاص بك كحرفي في منصة هرفي لم يتم الموافقة عليه.'
+            }
+          </p>
+          
+          <div style="background-color: #f8f9fa; padding: 15px 20px; border-radius: 8px; margin: 20px 0; border-right: 4px solid ${status === 'approved' ? '#4CAF50' : '#f44336'};">
+            <strong style="color: #333; font-size: 15px;">📝 ملاحظة من الأدمن:</strong>
+            <p style="margin: 10px 0 0 0; color: #555; font-size: 15px; line-height: 1.6;">${note}</p>
+          </div>
+          
+          <div style="background-color: #e8f5e9; padding: 12px 20px; border-radius: 8px; margin: 20px 0; border-right: 4px solid #4CAF50;">
+            <p style="margin: 0; color: #2e7d32; font-size: 14px;">
+              ${status === 'approved' 
+                ? '🔑 يمكنك الآن تسجيل الدخول من خلال التطبيق والبدء في عرض خدماتك واستقبال الطلبات.'
+                : '💡 يمكنك محاولة التقديم مرة أخرى مع التأكد من استيفاء جميع الشروط المطلوبة وتقديم المعلومات الصحيحة.'
+              }
+            </p>
+          </div>
+        </div>
+        
+        <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 20px 0;" />
+        
+        <div style="text-align: center; color: #999; font-size: 12px;">
+          <p style="margin: 0;">هذا بريد إلكتروني آلي، يرجى عدم الرد عليه.</p>
+          <p style="margin: 5px 0 0 0;">© 2024 هرفي - جميع الحقوق محفوظة</p>
+        </div>
+      </div>
+    `;
+
+    await sendEmail(email, subject, html);
+    console.log(`✅ Approval email sent to ${email} with status: ${status}`);
+
+  } catch (error) {
+    console.error('❌ Error sending approval email:', error);
+    throw error;
+  }
+};
 
 // ========== 1. Get Admin Dashboard Statistics ==========
 const getAdminStats = async (req, res) => {
@@ -79,22 +146,20 @@ const toggleUserBan = async (req, res) => {
     user.isBanned = isBanned;
     await user.save();
 
-    // FIX (Low #4): this legacy endpoint had no audit trail at all.
     await logAction(
       req.user._id,
       isBanned ? "user.ban" : "user.unban",
       "User",
       userId,
-      "" // this legacy endpoint doesn't collect a reason; banUserWithReason does
+      ""
     );
 
-    //  Send notification
     const io = req.app.get('io');
     await createNotification(
       io,
       userId,
       'account_blocked',
-      isBanned ? ' Account Blocked' : ' Account Unblocked',
+      isBanned ? 'Account Blocked' : 'Account Unblocked',
       isBanned 
         ? 'Your account has been blocked for violating platform policies' 
         : 'Your account has been unblocked',
@@ -265,7 +330,6 @@ const autoVerifyHandyman = async (req, res) => {
     handyman.verified = true;
     await handyman.save();
 
-    // FIX (Low #4): this legacy endpoint had no audit trail at all.
     await logAction(
       req.user._id,
       "handyman.autoVerify",
@@ -275,13 +339,12 @@ const autoVerifyHandyman = async (req, res) => {
       { completedOrders, cancellationRate: Math.round(cancellationRate * 100) / 100 }
     );
 
-    //  Send notification
     const io = req.app.get('io');
     await createNotification(
       io,
       handymanId,
       'handyman_verified',
-      ' Account Verified',
+      'Account Verified',
       'Your account has been verified as a trusted handyman ✓',
       { handymanId }
     );
@@ -334,8 +397,6 @@ const autoVerifyAll = async (req, res) => {
       ) {
         handyman.verified = true;
         await handyman.save();
-        // FIX (Low #4): this legacy endpoint had no audit trail at all —
-        // one entry per handyman actually verified by this sweep.
         await logAction(
           req.user._id,
           "handyman.autoVerify",
@@ -365,7 +426,7 @@ const autoVerifyAll = async (req, res) => {
   }
 };
 
-// ========== Wallets: list handymen with outstanding commission debt ==========
+// ========== 8. Wallets: list handymen with outstanding commission debt ==========
 const getWallets = async (req, res) => {
   try {
     const handymen = await Handyman.find({ walletBalance: { $gt: 0 } })
@@ -379,7 +440,7 @@ const getWallets = async (req, res) => {
   }
 };
 
-// ========== Wallets: admin marks a handyman's debt as settled ==========
+// ========== 9. Wallets: admin marks a handyman's debt as settled ==========
 const settleWallet = async (req, res) => {
   try {
     const { handymanId } = req.params;
@@ -395,8 +456,6 @@ const settleWallet = async (req, res) => {
     handyman.suspendedReason = null;
     await handyman.save();
 
-    // FIX (Low #4): this legacy endpoint had no audit trail at all — worth
-    // having given it zeroes out a real commission debt.
     await logAction(
       req.user._id,
       "wallet.settle",
@@ -411,7 +470,7 @@ const settleWallet = async (req, res) => {
       io,
       handyman.userId,
       "system_alert",
-      " Wallet Settled",
+      "Wallet Settled",
       `تم تسوية رصيد العمولة (${settledAmount} ج.م) وتفعيل حسابك مجدداً`,
       { settledAmount }
     );
@@ -422,9 +481,8 @@ const settleWallet = async (req, res) => {
     res.status(500).json({ msg: "Server error", error: error.message });
   }
 };
- 
-//getDashboardChart
 
+// ========== 10. Get Dashboard Chart Data ==========
 const getDashboardChart = async (req, res) => {
   try {
     const currentYear = new Date().getFullYear();
@@ -503,9 +561,8 @@ const getDashboardChart = async (req, res) => {
     });
   }
 };
-// ========== Broadcast a general announcement to users ==========
-// audience: "all" | "customer" | "handyman" — sent as a system_alert
-// notification to every matching user, and logged in the audit trail.
+
+// ========== 11. Broadcast Announcement ==========
 const broadcastAnnouncement = async (req, res) => {
   try {
     const { title, body, audience = "all" } = req.body;
@@ -545,16 +602,257 @@ const broadcastAnnouncement = async (req, res) => {
   }
 };
 
+// =====================================================
+// ========== NEW: Registration Request Management ==========
+// =====================================================
+
+// ========== 12. Get All Pending Registration Requests ==========
+const getPendingRegistrationRequests = async (req, res) => {
+  try {
+    const pendingHandymen = await Handyman.find({ 
+      registrationStatus: 'pending' 
+    })
+    .populate('userId', 'name email phone profileImage createdAt')
+    .sort({ registeredAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      count: pendingHandymen.length,
+      data: pendingHandymen
+    });
+
+  } catch (error) {
+    console.error('Error fetching pending registration requests:', error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// ========== 13. Approve Registration Request ==========
+const approveRegistrationRequest = async (req, res) => {
+  try {
+    const { handymanId } = req.params;
+    const { note = '' } = req.body;
+
+    // Find handyman
+    const handyman = await Handyman.findById(handymanId).populate('userId');
+    if (!handyman) {
+      return res.status(404).json({ 
+        success: false, 
+        msg: 'الحرفي غير موجود' 
+      });
+    }
+
+    // Check if status is pending
+    if (handyman.registrationStatus !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        msg: `هذا الطلب تم ${handyman.registrationStatus === 'approved' ? 'الموافقة عليه' : 'رفضه'} بالفعل`
+      });
+    }
+
+    // Update handyman status
+    handyman.registrationStatus = 'approved';
+    handyman.approvedAt = new Date();
+    handyman.adminNote = note || 'تم الموافقة على حسابك';
+    handyman.verified = true;
+    handyman.rejected = false;
+    handyman.rejectedReason = null;
+    await handyman.save();
+
+    // Update user
+    const user = handyman.userId;
+    if (user) {
+      user.isVerified = true;
+      await user.save();
+    }
+
+    // Log action
+    await logAction(
+      req.user._id,
+      'registration.approve',
+      'Handyman',
+      handyman._id,
+      note || 'تم الموافقة على طلب التسجيل',
+      { 
+        handymanName: user?.name,
+        profession: handyman.profession,
+        email: user?.email 
+      }
+    );
+
+    // Send Socket.io notification
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('registrationApproved', {
+        handymanId: handyman._id,
+        userId: user?._id,
+        name: user?.name,
+        status: 'approved'
+      });
+    }
+
+    // Send in-app notification
+    await createNotification(
+      io,
+      user?._id,
+      'registration_approved',
+      '✅ تم الموافقة على طلب التسجيل',
+      `تم قبول طلب تسجيلك كحرفي في منصة هرفي. يمكنك الآن البدء في تقديم خدماتك.`,
+      { handymanId: handyman._id }
+    );
+
+    // Send email
+    try {
+      await sendApprovalEmail(
+        user?.email,
+        user?.name,
+        'approved',
+        handyman.adminNote
+      );
+    } catch (emailErr) {
+      console.error('Error sending approval email:', emailErr);
+    }
+
+    res.status(200).json({
+      success: true,
+      msg: 'تم الموافقة على طلب التسجيل بنجاح',
+      data: handyman
+    });
+
+  } catch (error) {
+    console.error('Error approving registration:', error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// ========== 14. Reject Registration Request ==========
+const rejectRegistrationRequest = async (req, res) => {
+  try {
+    const { handymanId } = req.params;
+    const { reason } = req.body;
+
+    if (!reason || reason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        msg: 'يجب كتابة سبب الرفض'
+      });
+    }
+
+    const handyman = await Handyman.findById(handymanId).populate('userId');
+    if (!handyman) {
+      return res.status(404).json({
+        success: false,
+        msg: 'الحرفي غير موجود'
+      });
+    }
+
+    // Check if status is pending
+    if (handyman.registrationStatus !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        msg: `هذا الطلب تم ${handyman.registrationStatus === 'approved' ? 'الموافقة عليه' : 'رفضه'} بالفعل`
+      });
+    }
+
+    // Update handyman status
+    handyman.registrationStatus = 'rejected';
+    handyman.rejectedAt = new Date();
+    handyman.adminNote = reason;
+    handyman.verified = false;
+    handyman.rejected = true;
+    handyman.rejectedReason = reason;
+    await handyman.save();
+
+    // Log action
+    await logAction(
+      req.user._id,
+      'registration.reject',
+      'Handyman',
+      handyman._id,
+      reason,
+      { 
+        handymanName: handyman.userId?.name,
+        profession: handyman.profession,
+        email: handyman.userId?.email 
+      }
+    );
+
+    // Send Socket.io notification
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('registrationRejected', {
+        handymanId: handyman._id,
+        userId: handyman.userId?._id,
+        name: handyman.userId?.name,
+        status: 'rejected',
+        reason: reason
+      });
+    }
+
+    // Send in-app notification
+    await createNotification(
+      io,
+      handyman.userId?._id,
+      'registration_rejected',
+      '❌ تم رفض طلب التسجيل',
+      `نأسف لإبلاغك بأن طلب تسجيلك كحرفي قد تم رفضه. السبب: ${reason}`,
+      { handymanId: handyman._id, reason }
+    );
+
+    // Send email
+    try {
+      await sendApprovalEmail(
+        handyman.userId?.email,
+        handyman.userId?.name,
+        'rejected',
+        reason
+      );
+    } catch (emailErr) {
+      console.error('Error sending rejection email:', emailErr);
+    }
+
+    res.status(200).json({
+      success: true,
+      msg: 'تم رفض طلب التسجيل بنجاح',
+      data: handyman
+    });
+
+  } catch (error) {
+    console.error('Error rejecting registration:', error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// =====================================================
+// ========== EXPORTS ==========
+// =====================================================
+
 module.exports = {
+  // Dashboard & Stats
   getAdminStats,
+  getDashboardChart,
+  
+  // User Management
   getAllUsers,
   toggleUserBan,
+  
+  // Order Management
   getAllOrders,
+  
+  // Handyman Verification (Auto)
   getPendingVerification,
   autoVerifyHandyman,
   autoVerifyAll,
+  
+  // Wallet Management
   getWallets,
   settleWallet,
-  getDashboardChart,
+  
+  // Announcements
   broadcastAnnouncement,
+  
+  // Registration Request Management (NEW)
+  getPendingRegistrationRequests,
+  approveRegistrationRequest,
+  rejectRegistrationRequest,
 };

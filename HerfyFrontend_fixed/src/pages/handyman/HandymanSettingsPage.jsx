@@ -7,6 +7,7 @@ import { updateHandymanProfile, getHandymanById } from '../../store/slices/handy
 import { uploadService } from '../../services/api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { getDefaultAvatar } from '../../utils/helpers';
+import ChangePasswordCard from '../../components/common/ChangePasswordCard';
 
 export default function HandymanSettingsPage() {
   const dispatch = useDispatch();
@@ -178,6 +179,10 @@ export default function HandymanSettingsPage() {
             />
           </div>
         </div>
+      </div>
+
+      <div className="mt-2">
+        <ChangePasswordCard />
       </div>
 
       <div className="card space-y-4">

@@ -1,3 +1,4 @@
+// HerfyFrontend_fixed/src/pages/handyman/HandymanDashboard.jsx
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -8,6 +9,10 @@ import {
   FaCheck,
   FaTimes,
   FaEdit,
+  FaHourglassHalf,
+  FaExclamationCircle,
+  FaBan,
+  FaArrowRight,
 } from 'react-icons/fa';
 import { getPendingOrders, updateOrderStatus } from '../../store/slices/orderSlice';
 import { handymanService } from '../../services/api';
@@ -26,13 +31,35 @@ export default function HandymanDashboard() {
   const { orders, isLoading } = useSelector((state) => state.orders);
   const [available, setAvailable] = useState(true);
   const [analytics, setAnalytics] = useState(null);
+  const [registrationStatus, setRegistrationStatus] = useState(null);
+  const [statusNote, setStatusNote] = useState(null);
+  const [loadingStatus, setLoadingStatus] = useState(true);
 
   useEffect(() => {
-    if (user?._id) {
+    // Check handyman registration status
+    const checkStatus = async () => {
+      try {
+        const res = await handymanService.getStatus();
+        setRegistrationStatus(res.data.status);
+        setStatusNote(res.data.note);
+      } catch (error) {
+        console.error('Error fetching status:', error);
+        // If error, try to get from user data
+        if (user?.registrationStatus) {
+          setRegistrationStatus(user.registrationStatus);
+        }
+      } finally {
+        setLoadingStatus(false);
+      }
+    };
+
+    checkStatus();
+  }, [user]);
+
+  useEffect(() => {
+    if (user?._id && registrationStatus === 'approved') {
       dispatch(getPendingOrders(user._id));
       handymanService.getAnalytics(user._id).then((res) => setAnalytics(res.data)).catch(() => {});
-      // Reflect the handyman's real saved availability instead of always
-      // defaulting the toggle to "available" on every page load.
       handymanService
         .getById(user._id)
         .then((res) => {
@@ -41,7 +68,7 @@ export default function HandymanDashboard() {
         })
         .catch(() => {});
     }
-  }, [dispatch, user?._id]);
+  }, [dispatch, user?._id, registrationStatus]);
 
   const handleAvailability = async (value) => {
     setAvailable(value);
@@ -52,15 +79,166 @@ export default function HandymanDashboard() {
     }
   };
 
-  // Rejecting doesn't need a price, so it can stay a one-click action here.
-  // Accepting DOES require the handyman to set a price first, so that flow
-  // lives on the order details page instead of firing blind from this list.
   const handleReject = (orderId) => {
     dispatch(updateOrderStatus({ id: orderId, status: 'cancelled' }));
   };
 
+  // =====================================================
+  // ========== RENDER BASED ON REGISTRATION STATUS ==========
+  // =====================================================
+
+  // Show loading while checking status
+  if (loadingStatus) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <LoadingSpinner />
+        <p className="mr-3 text-textGray">جاري التحقق من حالة الحساب...</p>
+      </div>
+    );
+  }
+
+  // Case 1: Registration is pending
+  if (registrationStatus === 'pending') {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+        <div className="text-center">
+          <div className="mb-6 text-6xl">⏳</div>
+          <h2 className="mb-3 text-2xl font-bold text-warning">في انتظار موافقة الأدمن</h2>
+          <div className="mx-auto max-w-md">
+            <p className="mb-4 text-textGray">
+              تم استلام طلب التسجيل الخاص بك بنجاح. سيتم مراجعته من قبل فريق الأدمن وسيتم إعلامك عند الموافقة.
+            </p>
+            {statusNote && (
+              <div className="mb-4 rounded-lg bg-warning/10 p-4 text-sm text-warning">
+                <FaHourglassHalf className="inline mr-2" />
+                {statusNote}
+              </div>
+            )}
+            <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-600">
+              <p className="flex items-center gap-2">
+                <FaExclamationCircle />
+                يرجى التحقق من بريدك الإلكتروني بشكل دوري للإشعارات
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/')}
+            className="mt-6 btn-outline flex items-center gap-2"
+          >
+            <FaArrowRight /> العودة للرئيسية
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Case 2: Registration is rejected
+  if (registrationStatus === 'rejected') {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+        <div className="text-center">
+          <div className="mb-6 text-6xl">❌</div>
+          <h2 className="mb-3 text-2xl font-bold text-danger">تم رفض طلب التسجيل</h2>
+          <div className="mx-auto max-w-md">
+            <p className="mb-4 text-textGray">
+              نأسف لإبلاغك بأن طلب التسجيل الخاص بك كحرفي في منصة حرفي لم يتم الموافقة عليه.
+            </p>
+            {statusNote && (
+              <div className="mb-4 rounded-lg bg-danger/10 p-4 text-sm text-danger">
+                <FaBan className="inline mr-2" />
+                <strong>سبب الرفض:</strong> {statusNote}
+              </div>
+            )}
+            <div className="rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
+              <p>يمكنك محاولة التقديم مرة أخرى مع التأكد من استيفاء جميع الشروط المطلوبة.</p>
+            </div>
+          </div>
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <button
+              onClick={() => navigate('/handyman/register')}
+              className="btn-secondary flex items-center gap-2"
+            >
+              إعادة التقديم
+            </button>
+            <button
+              onClick={() => navigate('/')}
+              className="btn-outline flex items-center gap-2"
+            >
+              العودة للرئيسية
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Case 3: Handyman is suspended
+  if (analytics?.isSuspended) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+        <div className="text-center">
+          <div className="mb-6 text-6xl">🚫</div>
+          <h2 className="mb-3 text-2xl font-bold text-danger">الحساب معلق مؤقتاً</h2>
+          <div className="mx-auto max-w-md">
+            <p className="mb-4 text-textGray">
+              عذراً، حسابك معلق حالياً. يرجى التواصل مع فريق الدعم لحل المشكلة.
+            </p>
+            {analytics?.suspendedReason && (
+              <div className="mb-4 rounded-lg bg-danger/10 p-4 text-sm text-danger">
+                <FaBan className="inline mr-2" />
+                <strong>سبب التعليق:</strong> {analytics.suspendedReason}
+              </div>
+            )}
+            {analytics?.walletBalance > 0 && (
+              <div className="rounded-lg bg-warning/10 p-4 text-sm text-warning">
+                <p>
+                  <strong>رصيد مستحق:</strong> {formatPrice(analytics.walletBalance)}
+                </p>
+                <p className="mt-1 text-xs">
+                  يرجى تسوية الرصيد المستحق لإعادة تفعيل الحساب
+                </p>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => navigate('/contact-support')}
+            className="mt-6 btn-primary flex items-center gap-2"
+          >
+            التواصل مع الدعم
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Case 4: Not approved but not pending/rejected (fallback)
+  if (registrationStatus !== 'approved') {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
+        <div className="text-center">
+          <div className="mb-6 text-6xl">⚠️</div>
+          <h2 className="mb-3 text-2xl font-bold text-warning">حالة الحساب غير معروفة</h2>
+          <p className="text-textGray">
+            يرجى التواصل مع فريق الدعم لمعرفة حالة حسابك.
+          </p>
+          <button
+            onClick={() => navigate('/contact-support')}
+            className="mt-6 btn-primary"
+          >
+            التواصل مع الدعم
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // =====================================================
+  // ========== APPROVED HANDYMAN DASHBOARD ==========
+  // =====================================================
+
   return (
     <div>
+      {/* Header */}
       <div className="card mb-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -68,6 +246,19 @@ export default function HandymanDashboard() {
             <p className="text-sm text-textGray">
               لديك {orders.length} طلب{orders.length !== 1 ? 'ات' : ''} جديد{orders.length !== 1 ? 'ة' : ''} اليوم
             </p>
+            {/* Status badge */}
+            <div className="mt-2 flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 rounded-full bg-tertiary/10 px-3 py-1 text-xs font-bold text-tertiary">
+                <span className="h-2 w-2 rounded-full bg-tertiary"></span>
+                حساب مفعل
+              </span>
+              {user?.verified && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-bold text-blue-500">
+                  <FaCheck size={10} />
+                  موثق
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex rounded-xl overflow-hidden border border-borderGray">
@@ -101,6 +292,7 @@ export default function HandymanDashboard() {
         </div>
       </div>
 
+      {/* Wallet Alert */}
       {analytics?.walletBalance > 0 && (
         <div
           className={`card mb-6 flex flex-wrap items-center justify-between gap-3 border-r-4 ${
@@ -123,6 +315,7 @@ export default function HandymanDashboard() {
         </div>
       )}
 
+      {/* Stats Cards */}
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
         {[
           {
@@ -156,6 +349,7 @@ export default function HandymanDashboard() {
         ))}
       </div>
 
+      {/* Orders Section */}
       <section className="mb-8">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 font-bold text-textDark">
@@ -167,7 +361,10 @@ export default function HandymanDashboard() {
         {isLoading ? (
           <LoadingSpinner />
         ) : orders.length === 0 ? (
-          <div className="card text-center py-8 text-textGray">لا توجد طلبات واردة</div>
+          <div className="card text-center py-8 text-textGray">
+            <div className="text-4xl mb-3">📭</div>
+            لا توجد طلبات واردة حالياً
+          </div>
         ) : (
           <div className="space-y-3">
             {orders.slice(0, 5).map((order) => (
@@ -204,8 +401,6 @@ export default function HandymanDashboard() {
           </div>
         )}
       </section>
-
-  
     </div>
   );
 }
