@@ -11,20 +11,10 @@ const rateLimit = require("express-rate-limit")
 const mongoSanitize = require("express-mongo-sanitize");
 const hpp = require("hpp");
 
-// Global error handlers for uncaught exceptions
-// process.on("uncaughtException", (err) => {
-//   console.error("UNCAUGHT EXCEPTION! 💥 Shutting down...");
-//   // console.error("UNCAUGHT EXCEPTION!  Shutting down...");
-//   console.error(err.name, err.message);
-//   process.exit(1);
-// });
+
 
 const app = express();
 const server = http.createServer(app);
-
-// ========== Security & Utility Middlewares ==========
-// Single source of truth for allowed origins, shared by REST CORS and
-// Socket.IO CORS (see H4 fix below — Socket.IO used to allow "*").
 
 const ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"];
 
@@ -55,9 +45,11 @@ const limiter = rateLimit({
 });
 app.use("/api", limiter);
 
+// Stripe webhook — MUST be registered before express.json() to get raw body
+app.use("/api/webhooks", require("./routes/webhookRoutes"));
+
 // Body parser, reading data from body into req.body
 // Limit payload size to prevent DOS attacks
-
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 
@@ -108,6 +100,8 @@ app.set("io", io);
 // ========== Database ==========
 const connectDB = require("./config/dbConnection");
 connectDB();
+// console.log(connectDB());
+
 
 // ========== Routes ==========
 app.get("/", (req, res) => {
@@ -126,6 +120,8 @@ app.use("/api/notifications", require("./routes/notificationRoutes"));
 app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
+app.use("/api/payments", require("./routes/paymentRoutes"));
+app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
 
 // Seed the ServiceType collection from the old hardcoded profession list
 // on first boot, so existing handyman records keep working before an
@@ -156,7 +152,7 @@ app.use((err, req, res, next) => {
   }
 });
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 
 server.listen(port, () => {
   console.log(` Server is running on port ${port}`);
