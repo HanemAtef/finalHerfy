@@ -7,11 +7,9 @@ const path = require("path");
 const { Server } = require("socket.io");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const rateLimit = require("express-rate-limit")
+const rateLimit = require("express-rate-limit");
 const mongoSanitize = require("express-mongo-sanitize");
 const hpp = require("hpp");
-
-
 
 const app = express();
 const server = http.createServer(app);
@@ -21,7 +19,7 @@ const ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http
 // Enable CORS (must be before rate limiters and other middlewares)
 app.use(cors({
   origin: ALLOWED_ORIGINS,
-  methods: ["GET", "POST", "PUT","PATCH", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   credentials: true
 }));
 
@@ -34,13 +32,10 @@ if (process.env.NODE_ENV !== "production") {
 }
 console.log(process.env.NODE_ENV);
 
-
 // Limit requests from same API
 const limiter = rateLimit({
-  // max: 1000, // Increased for development
-  // windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, 
-  windowMs: 15 * 60 * 1000, 
+  max: 1000,
+  windowMs: 15 * 60 * 1000,
   message: "Too many requests from this IP, please try again in 15 minutes!"
 });
 app.use("/api", limiter);
@@ -49,12 +44,10 @@ app.use("/api", limiter);
 app.use("/api/webhooks", require("./routes/webhookRoutes"));
 
 // Body parser, reading data from body into req.body
-// Limit payload size to prevent DOS attacks
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 
 // Data sanitization against NoSQL query injection
-// Custom wrapper to prevent Express 5 TypeError: Cannot set property query
 app.use((req, res, next) => {
   if (req.body) mongoSanitize.sanitize(req.body, { replaceWith: '_' });
   if (req.params) mongoSanitize.sanitize(req.params, { replaceWith: '_' });
@@ -65,12 +58,10 @@ app.use((req, res, next) => {
 // Prevent parameter pollution
 app.use(hpp());
 
-// Serve uploaded images statically (e.g. http://localhost:3000/uploads/xxx.jpg)
+// Serve uploaded images statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ========== Socket.IO ==========
-// SECURITY FIX (H4): previously origin: "*" — inconsistent with, and wider
-// than, the REST CORS policy above. Now matches it exactly.
 const io = new Server(server, {
   cors: {
     origin: ALLOWED_ORIGINS,
@@ -78,37 +69,29 @@ const io = new Server(server, {
   },
 });
 
-// Socket Authentication Middleware
 const socketAuth = require("./socket/socketAuth");
 io.use(socketAuth);
 
-// Chat Socket
 const registerChatSocket = require("./socket/chatSocket");
 registerChatSocket(io);
 
-// Live Tracking Socket
 const liveTrackingSocket = require("./socket/livetracking.socket");
 liveTrackingSocket(io);
 
-// Notification Socket
 const notificationSocket = require("./socket/notification.socket");
 notificationSocket(io);
 
-// Store io instance for use in controllers/routes
 app.set("io", io);
 
 // ========== Database ==========
 const connectDB = require("./config/dbConnection");
 connectDB();
-// console.log(connectDB());
-
 
 // ========== Routes ==========
 app.get("/", (req, res) => {
   res.send("Harfey API is running");
 });
 
-// ========== Routes ==========
 app.use("/api/users", require("./routes/authRoutes"));
 app.use("/api/handymen", require("./routes/handymanRoutes"));
 app.use("/api/orders", require("./routes/orderRoutes"));
@@ -123,13 +106,10 @@ app.use("/api/reports", require("./routes/reportRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
 
-// Seed the ServiceType collection from the old hardcoded profession list
-// on first boot, so existing handyman records keep working before an
-// admin has touched the new reference-data UI.
 require("./controllers/referenceDataController").ensureSeeded().catch((e) =>
   console.log("ServiceType seed skipped:", e.message)
 );
-// ========== Server ==========
+
 // Global error handling middleware
 app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR HANDLER CAUGHT:", err);
@@ -144,7 +124,6 @@ app.use((err, req, res, next) => {
       stack: err.stack
     });
   } else {
-    // Production: don't leak error details
     res.status(err.statusCode).json({
       status: err.status,
       message: err.isOperational ? err.message : "Something went very wrong!"
@@ -155,15 +134,11 @@ app.use((err, req, res, next) => {
 const port = process.env.PORT || 5000;
 
 server.listen(port, () => {
-  console.log(` Server is running on port ${port}`);
+  console.log(`Server is running on port ${port}`);
 });
 
-// Handle unhandled promise rejections
 process.on("unhandledRejection", (err) => {
-
-  console.error("UNHANDLED REJECTION! 💥 Shutting down...");
-
-
+  console.error("UNHANDLED REJECTION! Shutting down...");
   console.error(err.name, err.message);
   server.close(() => {
     process.exit(1);
