@@ -1,14 +1,11 @@
 const Order = require('../models/Order');
 const Handyman = require('../models/Handyman');
+const {calculateRoute} = require('../utils/tomtom');
 
 const liveTrackingSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(' New client connected:', socket.id);
 
-    // join order room
-    // SECURITY FIX (C6): previously any authenticated socket could join
-    // any order's tracking room and receive every locationUpdate broadcast
-    // for it — any user could watch another user's live handyman GPS trail.
     socket.on('joinOrderRoom', async (orderId) => {
       const order = await Order.findById(orderId);
       if (!order) return;
@@ -20,20 +17,15 @@ const liveTrackingSocket = (io) => {
       if (!allowed) return;
 
       socket.join(orderId);
-       // console.log(` Client joined order room: ${orderId}`);
     });
 
     // leave order room
     socket.on('leaveOrderRoom', (orderId) => {
       socket.leave(orderId);
-      //console.log(` Client left order room: ${orderId}`);
     });
 
-    // handle location updates from handyman
-    // SECURITY FIX (C6): previously any authenticated socket could overwrite
-    // handymanLiveLocation on ANY order — spoofing/polluting the tracking
-    // data a real customer sees. Only the order's own assigned handyman
-    // (or an admin) may write its live location.
+
+//sendLocation
     socket.on('sendLocation', async (data) => {
       const { orderId, lat, lng } = data;
 
@@ -51,16 +43,50 @@ const liveTrackingSocket = (io) => {
         return socket.emit('error', { msg: 'Not authorized to update this order\'s location' });
       }
 
-      //update handyman's live location in the order document
+      // calc route and ETA using TomTom API
+      let routeData = null;
+      if (order.customerLocation && order.customerLocation.coordinates) {
+        const [customerLng, customerLat] = order.customerLocation.coordinates;
+        routeData = await calculateRoute(
+            { lat, lng },
+            { lat: customerLat, lng: customerLng }
+        );
+      }
+
+      // update handyman live location 
       order.handymanLiveLocation = {
         type: 'Point',
         coordinates: [lng, lat],
+        updatedAt: new Date()
       };
+
+      //save ETA and distance if routeData is valid
+      if (routeData && routeData.distance !== null) {
+        order.eta = routeData.eta;
+        order.distanceRemaining = routeData.distance;
+        order.trafficDelay = routeData.trafficDelay;
+        order.arrivalTime = routeData.arrivalTime;
+      }
+
       await order.save();
 
-      // live location update to all clients in the order room except the sender
-      socket.broadcast.to(orderId).emit('locationUpdate', { lat, lng });
-     // console.log(` Location update for order ${orderId}: ${lat}, ${lng}`);
+      
+      const updateData = {
+        lat,
+        lng,
+        ...(routeData && routeData.distance !== null && {
+          distanceRemaining: routeData.distance,
+          eta: routeData.eta,
+          trafficDelay: routeData.trafficDelay,
+          arrivalTime: routeData.arrivalTime
+        })
+      };
+      io.to(orderId).emit('locationUpdate', updateData);
+
+
+      socket.emit('locationSent', { success: true, data: updateData });
+
+      console.log(`📍 Location update for order ${orderId}: ${lat}, ${lng} | ETA: ${routeData?.eta || 'N/A'} min`);
     });
 
     //live tracking events

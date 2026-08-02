@@ -1,12 +1,13 @@
 const User = require("../models/User");
-const HandyMan=require("../models/Handyman");
+const HandyMan = require("../models/Handyman");
 const RefreshToken = require("../models/RefreshToken");
 const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const generateToken = require("../utils/generateToken");
-const { generateAccessToken, generateRefreshTokenValue, hashToken } = generateToken;
+const { generateAccessToken, generateRefreshTokenValue, hashToken } =
+  generateToken;
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -35,14 +36,30 @@ const publicUser = (user) => ({
   phone: user.phone,
   location: user.location,
   city: user.city,
+  penaltyCount: user.penaltyCount,
+  penaltyAmount: user.penaltyAmount,
 });
+// console.log({
+//   penaltyCount: user.penaltyCount,
+//   penaltyAmount: user.penaltyAmount,
+// });
 
 /********* register user *********/
 const registerUser = async (req, res) => {
   try {
     let {
-      email, name, password, role, phone, location, city,
-      profession, price, experienceYears, bio, gallery
+      email,
+      name,
+      password,
+      role,
+      phone,
+      location,
+      city,
+      profession,
+      price,
+      experienceYears,
+      bio,
+      gallery,
     } = req.body;
 
     // FIX (M2): normalize before any lookup/write so casing never causes a
@@ -60,7 +77,9 @@ const registerUser = async (req, res) => {
       return res.status(400).json({ msg: "Cannot register as admin" });
     }
     if (role === "handyman" && (!profession || !price)) {
-      return res.status(400).json({ msg: "Profession and price are required for handyman" });
+      return res
+        .status(400)
+        .json({ msg: "Profession and price are required for handyman" });
     }
 
     const userExist = await User.findOne({ email });
@@ -74,7 +93,11 @@ const registerUser = async (req, res) => {
     // side of this fix). Now the field is only set at all when the client
     // actually gave real coordinates.
     let coordinates = null;
-    if (location && location.coordinates && Array.isArray(location.coordinates)) {
+    if (
+      location &&
+      location.coordinates &&
+      Array.isArray(location.coordinates)
+    ) {
       coordinates = location.coordinates;
     } else if (Array.isArray(location)) {
       coordinates = location;
@@ -150,7 +173,9 @@ const verifyEmail = async (req, res) => {
       // FIX (M1): "User not found" here previously let an attacker confirm
       // whether an email is registered. Same generic message as an invalid
       // OTP — the two cases are indistinguishable from the outside.
-      return res.status(400).json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
+      return res
+        .status(400)
+        .json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
     }
 
     if (user.isVerified) {
@@ -170,7 +195,10 @@ const verifyEmail = async (req, res) => {
     user.emailOtpExpire = undefined;
     await user.save();
 
-    const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
+    const { accessToken, refreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
     res.status(200).json({
       msg: "تم توثيق الحساب بنجاح",
       token: accessToken,
@@ -201,7 +229,9 @@ const resendVerificationOtp = async (req, res) => {
       await sendVerificationEmail(email, otp);
     }
 
-    res.status(200).json({ msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد" });
+    res.status(200).json({
+      msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد",
+    });
   } catch (err) {
     console.log(err);
     res.status(500).json({ msg: "Server error" });
@@ -209,54 +239,60 @@ const resendVerificationOtp = async (req, res) => {
 };
 
 /********* login user *********/
-const loginUser=async(req,res)=>{
-    try{    
-        //get data from request body
-        let{email,password,location}=req.body;
-        // FIX (M2): normalize before lookup so case doesn't cause a false negative.
-        email = email?.toLowerCase().trim();
-        //find user by email
-        const user=await User.findOne({email});
-        // FIX (M1): "User not found" vs "Invalid password" let an attacker
-        // enumerate registered emails. Both cases now return the same
-        // generic message.
-        if(!user){
-            return res.status(400).json({msg:"Invalid email or password"});
-        }    
-        //compare password
-        const isMatch=await user.matchPassword(password);
-        if(!isMatch){
-            return res.status(400).json({msg:"Invalid email or password"});
-        }
-        if (user.isBanned) {
-            return res.status(403).json({ msg: user.banReason ? `تم حظر هذا الحساب: ${user.banReason}` : "تم حظر هذا الحساب. تواصل مع الدعم الفني." });
-        }
-        // FIX (M4): soft-deleted accounts can no longer log in.
-        if (user.deletedAt) {
-            return res.status(400).json({ msg: "Invalid email or password" });
-        }
-        if (!user.isVerified) {
-            return res.status(403).json({
-                msg: "من فضلك وثّق بريدك الإلكتروني أولاً",
-                needsVerification: true,
-                email: user.email,
-            });
-        }
-        //generate token pair
-        const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
-        //send response 
-        res.status(200).json({
-            msg:"User logged in successfully",
-            token: accessToken,
-            refreshToken,
-            user: publicUser(user),
-        });
-    }   
-    catch(err){
-        console.log(err);
-        res.status(500).json({msg:"Server error"});
+const loginUser = async (req, res) => {
+  try {
+    //get data from request body
+    let { email, password, location } = req.body;
+    // FIX (M2): normalize before lookup so case doesn't cause a false negative.
+    email = email?.toLowerCase().trim();
+    //find user by email
+    const user = await User.findOne({ email });
+    // FIX (M1): "User not found" vs "Invalid password" let an attacker
+    // enumerate registered emails. Both cases now return the same
+    // generic message.
+    if (!user) {
+      return res.status(400).json({ msg: "Invalid email or password" });
     }
-}
+    //compare password
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(400).json({ msg: "Invalid email or password" });
+    }
+    if (user.isBanned) {
+      return res.status(403).json({
+        msg: user.banReason
+          ? `تم حظر هذا الحساب: ${user.banReason}`
+          : "تم حظر هذا الحساب. تواصل مع الدعم الفني.",
+      });
+    }
+    // FIX (M4): soft-deleted accounts can no longer log in.
+    if (user.deletedAt) {
+      return res.status(400).json({ msg: "Invalid email or password" });
+    }
+    if (!user.isVerified) {
+      return res.status(403).json({
+        msg: "من فضلك وثّق بريدك الإلكتروني أولاً",
+        needsVerification: true,
+        email: user.email,
+      });
+    }
+    //generate token pair
+    const { accessToken, refreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
+    //send response
+    res.status(200).json({
+      msg: "User logged in successfully",
+      token: accessToken,
+      refreshToken,
+      user: publicUser(user),
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ msg: "Server error" });
+  }
+};
 
 /********* refresh access token *********/
 const refreshAccessToken = async (req, res) => {
@@ -270,7 +306,9 @@ const refreshAccessToken = async (req, res) => {
     const stored = await RefreshToken.findOne({ tokenHash });
 
     if (!stored || stored.revoked || stored.expiresAt < new Date()) {
-      return res.status(401).json({ msg: "جلسة غير صالحة، من فضلك سجل الدخول مرة أخرى" });
+      return res
+        .status(401)
+        .json({ msg: "جلسة غير صالحة، من فضلك سجل الدخول مرة أخرى" });
     }
 
     const user = await User.findById(stored.userId);
@@ -284,7 +322,10 @@ const refreshAccessToken = async (req, res) => {
     stored.revoked = true;
     await stored.save();
 
-    const { accessToken, refreshToken: newRefreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
+    const { accessToken, refreshToken: newRefreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
 
     res.status(200).json({
       token: accessToken,
@@ -304,7 +345,7 @@ const logoutUser = async (req, res) => {
     if (refreshToken) {
       await RefreshToken.updateOne(
         { tokenHash: hashToken(refreshToken) },
-        { revoked: true }
+        { revoked: true },
       );
     }
     res.status(200).json({ msg: "تم تسجيل الخروج" });
@@ -315,20 +356,19 @@ const logoutUser = async (req, res) => {
 };
 
 /********* get user profile *********/
-const getMe=async(req,res)=>{   
-    try{
-        const user=req.user;
-        res.status(200).json({
-            msg:"User profile",
-            user: publicUser(user),
-        });
-    }   
-    catch(err){
-        console.log(err);
-        res.status(500).json({msg:"Server error"});
-    }   
-}
-//generate reset password 
+const getMe = async (req, res) => {
+  try {
+    const user = req.user;
+    res.status(200).json({
+      msg: "User profile",
+      user: publicUser(user),
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ msg: "Server error" });
+  }
+};
+//generate reset password
 const sendResetOtp = async (req, res) => {
   try {
     let { email } = req.body;
@@ -385,7 +425,10 @@ const resetPassword = async (req, res) => {
     await user.save();
 
     // Password changed — kill all existing sessions for this user.
-    await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
+    await RefreshToken.updateMany(
+      { userId: user._id, revoked: false },
+      { revoked: true },
+    );
 
     res.status(200).json({
       msg: "Password reset successfully",
@@ -428,7 +471,7 @@ const updateProfile = async (req, res) => {
   }
 };
 
-module.exports={
+module.exports = {
   registerUser,
   loginUser,
   getMe,
