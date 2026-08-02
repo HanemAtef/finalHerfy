@@ -74,7 +74,7 @@ function TomTomMap() {
 
     nearbyHandymen.forEach((handyman) => {
       const coords = handyman.location?.coordinates;
-      if (!coords) return;
+      if (!coords || coords.length < 2) return;
       const [longitude, latitude] = coords;
       const id = handyman.id || handyman._id;
 

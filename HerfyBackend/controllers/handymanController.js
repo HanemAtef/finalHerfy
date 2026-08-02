@@ -1,7 +1,7 @@
 const User = require("../models/User");
 const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
-const mongoose=require("mongoose")
+const mongoose = require("mongoose");
 
 // FIX (M8): distance/eta were declared on every getNearbyHandymen response
 // but hardcoded to null — no $near projection or ETA lookup ever populated
@@ -24,7 +24,7 @@ function haversineDistanceMeters([lng1, lat1], [lng2, lat2]) {
 }
 const getNearbyHandymen = async (req, res) => {
   try {
-    const { lat, lng, radius = 5000, profession, sort } = req.query;
+    const { lat, lng, radius = 8000, profession, sort } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({
@@ -48,55 +48,65 @@ const getNearbyHandymen = async (req, res) => {
       },
     }).lean();
 
-    const userIds = nearbyUsers.map(u => u._id);
-    const handymenDetails = await Handyman.find({ userId: { $in: userIds } }).lean();
+    const userIds = nearbyUsers.map((u) => u._id);
+    const handymenDetails = await Handyman.find({
+      userId: { $in: userIds },
+    }).lean();
     const detailsMap = handymenDetails.reduce((acc, curr) => {
       acc[curr.userId.toString()] = curr;
       return acc;
     }, {});
 
-    let handymenList = nearbyUsers.map((user) => {
-      const details = detailsMap[user._id.toString()];
+    let handymenList = nearbyUsers
+      .map((user) => {
+        const details = detailsMap[user._id.toString()];
 
-      if (!details) return null;
+        if (!details) return null;
 
-      if (profession && details.profession !== profession) {
-        return null;
-      }
+        if (profession && details.profession !== profession) {
+          return null;
+        }
 
-      if (!details.isAvailable) {
-        return null;
-      }
+        if (!details.isAvailable) {
+          return null;
+        }
 
-      // FIX (M8): real values instead of hardcoded null.
-      let distance = null;
-      let eta = null;
-      if (Array.isArray(user.location?.coordinates) && user.location.coordinates.length === 2) {
-        const meters = haversineDistanceMeters(
-          [longitude, latitude],
-          user.location.coordinates
-        );
-        distance = Math.round(meters); // meters
-        eta = Math.max(1, Math.round((meters / 1000 / ASSUMED_AVG_SPEED_KMH) * 60)); // minutes
-      }
+        // FIX (M8): real values instead of hardcoded null.
+        let distance = null;
+        let eta = null;
+        if (
+          Array.isArray(user.location?.coordinates) &&
+          user.location.coordinates.length === 2
+        ) {
+          const meters = haversineDistanceMeters(
+            [longitude, latitude],
+            user.location.coordinates,
+          );
+          distance = Math.round(meters); // meters
+          eta = Math.max(
+            1,
+            Math.round((meters / 1000 / ASSUMED_AVG_SPEED_KMH) * 60),
+          ); // minutes
+        }
 
-      return {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        location: user.location,
-        profession: details.profession,
-        price: details.price,
-        rating: details.rating,
-        verified: details.verified,
-        isAvailable: details.isAvailable,
-        bio: details.bio,
-        experienceYears: details.experienceYears,
-        distance,
-        eta,
-      };
-    }).filter(Boolean);
+        return {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          location: user.location,
+          profession: details.profession,
+          price: details.price,
+          rating: details.rating,
+          verified: details.verified,
+          isAvailable: details.isAvailable,
+          bio: details.bio,
+          experienceYears: details.experienceYears,
+          distance,
+          eta,
+        };
+      })
+      .filter(Boolean);
 
     if (sort === "rating") {
       handymenList.sort((a, b) => b.rating - a.rating);

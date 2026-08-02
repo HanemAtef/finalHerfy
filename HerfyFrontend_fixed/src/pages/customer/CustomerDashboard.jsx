@@ -1,18 +1,35 @@
-import { useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useDispatch, useSelector } from 'react-redux';
-import { FaWrench, FaBolt, FaChevronLeft, FaArrowRight } from 'react-icons/fa';
-import { getCustomerOrders } from '../../store/slices/orderSlice';
-import LoadingSpinner from '../../components/common/LoadingSpinner';
-import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
+import { useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { useDispatch, useSelector } from "react-redux";
+import {
+  FaWrench,
+  FaBolt,
+  FaChevronLeft,
+  FaArrowRight,
+  FaComments,
+} from "react-icons/fa";
+import { getCustomerOrders } from "../../store/slices/orderSlice";
+import LoadingSpinner from "../../components/common/LoadingSpinner";
+import {
+  formatDate,
+  formatPrice,
+  ORDER_STATUS_LABELS,
+} from "../../utils/helpers";
 
 const statusColors = {
-  completed: 'bg-tertiary/10 text-tertiary',
-  pending: 'bg-secondary/10 text-secondary',
-  cancelled: 'bg-emergency/10 text-emergency',
-  accepted: 'bg-primary/10 text-primary',
-  'in-progress': 'bg-primary/10 text-primary',
+  completed: "bg-tertiary/10 text-tertiary",
+  pending: "bg-secondary/10 text-secondary",
+  cancelled: "bg-emergency/10 text-emergency",
+  accepted: "bg-primary/10 text-primary",
+  "in-progress": "bg-primary/10 text-primary",
 };
+
+const CHAT_OPEN_STATUSES = [
+  "pending",
+  "accepted",
+  "price_confirmed",
+  "in-progress",
+];
 
 export default function CustomerDashboard() {
   const dispatch = useDispatch();
@@ -24,7 +41,7 @@ export default function CustomerDashboard() {
     if (user?._id) dispatch(getCustomerOrders(user._id));
   }, [dispatch, user?._id]);
 
-  const completed = orders.filter((o) => o.status === 'completed').length;
+  const completed = orders.filter((o) => o.status === "completed").length;
 
   return (
     <div>
@@ -64,30 +81,56 @@ export default function CustomerDashboard() {
           ) : (
             <div className="space-y-3">
               {orders.slice(0, 5).map((order) => (
-                <Link
+                <div
                   key={order._id}
-                  to={
-                    order.status === 'completed'
-                      ? `/customer/review/${order._id}`
-                      : `/customer/tracking/${order._id}`
-                  }
-                  className="flex items-center gap-4 rounded-xl border border-borderGray p-4 transition hover:shadow-sm"
+                  className="flex items-center gap-2 rounded-xl border border-borderGray p-2 transition hover:shadow-sm"
                 >
-                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                    {order.profession?.includes('كهرب') ? <FaBolt /> : <FaWrench />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-textDark truncate">{order.profession}</p>
-                    <p className="text-xs text-textGray">{formatDate(order.createdAt)}</p>
-                  </div>
-                  <div className="text-left">
-                    <p className="font-bold">{formatPrice(order.totalPrice || order.estimatedPrice)}</p>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[order.status] || ''}`}>
-                      {ORDER_STATUS_LABELS[order.status] || order.status}
-                    </span>
-                  </div>
-                  <FaChevronLeft className="text-textGray shrink-0" />
-                </Link>
+                  <Link
+                    to={
+                      order.status === "completed"
+                        ? `/customer/review/${order._id}`
+                        : `/customer/tracking/${order._id}`
+                    }
+                    className="flex min-w-0 flex-1 items-center gap-4 p-2"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      {order.profession?.includes("كهرب") ? (
+                        <FaBolt />
+                      ) : (
+                        <FaWrench />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-bold text-textDark truncate">
+                        {order.profession}
+                      </p>
+                      <p className="text-xs text-textGray">
+                        {formatDate(order.createdAt)}
+                      </p>
+                    </div>
+                    <div className="text-left">
+                      <p className="font-bold">
+                        {formatPrice(order.totalPrice || order.estimatedPrice)}
+                      </p>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded-full ${statusColors[order.status] || ""}`}
+                      >
+                        {ORDER_STATUS_LABELS[order.status] || order.status}
+                      </span>
+                    </div>
+                    <FaChevronLeft className="text-textGray shrink-0" />
+                  </Link>
+                  {CHAT_OPEN_STATUSES.includes(order.status) && (
+                    <Link
+                      to={`/chat/${order._id}`}
+                      className="rounded-lg p-3 text-primary hover:bg-primary/10"
+                      title="Chat with the handyman"
+                      aria-label="Chat with the handyman"
+                    >
+                      <FaComments />
+                    </Link>
+                  )}
+                </div>
               ))}
             </div>
           )}

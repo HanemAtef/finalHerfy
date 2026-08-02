@@ -7,16 +7,17 @@ const path = require("path");
 const { Server } = require("socket.io");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const rateLimit = require("express-rate-limit");
+const rateLimit = require("express-rate-limit")
 const mongoSanitize = require("express-mongo-sanitize");
 const hpp = require("hpp");
 
 // Global error handlers for uncaught exceptions
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION! 💥 Shutting down...");
-  console.error(err.name, err.message);
-  process.exit(1);
-});
+// process.on("uncaughtException", (err) => {
+//   console.error("UNCAUGHT EXCEPTION! 💥 Shutting down...");
+//   // console.error("UNCAUGHT EXCEPTION!  Shutting down...");
+//   console.error(err.name, err.message);
+//   process.exit(1);
+// });
 
 const app = express();
 const server = http.createServer(app);
@@ -24,6 +25,7 @@ const server = http.createServer(app);
 // ========== Security & Utility Middlewares ==========
 // Single source of truth for allowed origins, shared by REST CORS and
 // Socket.IO CORS (see H4 fix below — Socket.IO used to allow "*").
+
 const ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"];
 
 // Enable CORS (must be before rate limiters and other middlewares)
@@ -40,17 +42,22 @@ app.use(helmet());
 if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
+console.log(process.env.NODE_ENV);
+
 
 // Limit requests from same API
 const limiter = rateLimit({
-  max: 1000, // Increased for development
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  // max: 1000, // Increased for development
+  // windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, 
+  windowMs: 15 * 60 * 1000, 
   message: "Too many requests from this IP, please try again in 15 minutes!"
 });
 app.use("/api", limiter);
 
 // Body parser, reading data from body into req.body
 // Limit payload size to prevent DOS attacks
+
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 
@@ -157,7 +164,10 @@ server.listen(port, () => {
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (err) => {
+
   console.error("UNHANDLED REJECTION! 💥 Shutting down...");
+
+
   console.error(err.name, err.message);
   server.close(() => {
     process.exit(1);
