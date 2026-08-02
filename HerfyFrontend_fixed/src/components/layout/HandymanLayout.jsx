@@ -8,6 +8,7 @@ import {
   FaCalendarAlt,
   FaCog,
   FaUsers,
+  FaFlag,
   FaSignOutAlt,
 } from 'react-icons/fa';
 import { logoutUser } from '../../store/slices/authSlice';
@@ -18,6 +19,7 @@ const sidebarLinks = [
   { to: '/handyman/orders', label: 'جميع الطلبات', icon: FaClipboardList },
   { to: '/handyman/dashboard#earnings', label: 'الأرباح', icon: FaMoneyBillWave },
   { to: '/handyman/dashboard#schedule', label: 'الجدول', icon: FaCalendarAlt },
+  { to: '/handyman/reports', label: 'البلاغات', icon: FaFlag },
   { to: '/handyman/profile', label: 'الإعدادات', icon: FaCog },
 ];
 
@@ -35,7 +37,7 @@ export default function HandymanLayout() {
             <button
               type="button"
               onClick={() => navigate('/handyman/notifications')}
-              className="relative rounded-full p-2 text-primary"
+              className="relative cursor-pointer rounded-full p-2 text-primary transition-all duration-200 hover:scale-110 "
             >
               <FaBell size={18} />
               {unreadCount > 0 && (
@@ -45,7 +47,7 @@ export default function HandymanLayout() {
             <button
               type="button"
               onClick={() => navigate('/handyman/orders')}
-              className="rounded-full p-2 text-primary"
+              className="rounded-full cursor-pointer p-2 text-primary transition-all duration-200 hover:scale-110"
               title="المحادثات متاحة من داخل كل طلب"
             >
               <FaComments size={18} />
@@ -85,10 +87,9 @@ export default function HandymanLayout() {
                 key={to}
                 to={to}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'border-r-4 border-primary bg-primary/5 text-primary'
-                      : 'text-textGray hover:bg-neutral'
+                  `flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition-colors ${isActive
+                    ? 'border-r-4 border-primary bg-primary/5 text-primary'
+                    : 'text-textGray hover:bg-neutral'
                   }`
                 }
               >

@@ -40,6 +40,7 @@ import MyReportsPage from './pages/shared/MyReportsPage';
 import PaymentSuccess from './pages/payment/PaymentSuccess';
 import PaymentCancel from './pages/payment/PaymentCancel';
 
+
 function App() {
   return (
     <BrowserRouter>
@@ -72,7 +73,7 @@ function App() {
             <Route path="profile" element={<CustomerProfilePage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="reports" element={<MyReportsPage />} />
-          </Route>
+           </Route>
 
           {/* Handyman */}
           <Route

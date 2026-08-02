@@ -47,6 +47,17 @@ const createOrder = async (req, res) => {
       return res.status(404).json({ msg: "Handyman not found" });
     }
 
+
+    const handymanProfile = await Handyman.findOne({
+      userId: handymanId,
+    });
+
+    if (!handymanProfile || !handymanProfile.isAvailable) {
+      return res.status(400).json({
+        msg: "This handyman is currently unavailable.",
+      });
+    }
+
     let finalPrice = estimatedPrice || 0;
     let penaltyAmount = customer.penaltyAmount || 0;
     let totalPrice = finalPrice + penaltyAmount;
@@ -314,10 +325,43 @@ const updateOrderStatus = async (req, res) => {
       ) {
         const handyman = await Handyman.findOne({ userId: order.handymanId });
         if (handyman) {
+          const now = new Date();
+
+          if (
+            handyman.monthlyCancellationMonth !== now.getMonth() ||
+            handyman.monthlyCancellationYear !== now.getFullYear()
+          ) {
+            handyman.monthlyCancellationCount = 0;
+            handyman.monthlyCancellationMonth = now.getMonth();
+            handyman.monthlyCancellationYear = now.getFullYear();
+          }
+
+          handyman.monthlyCancellationCount++;
+
+          if (handyman.monthlyCancellationCount >= 3) {
+            handyman.penaltyAmount += 50;
+
+            const io = req.app.get("io");
+
+            await createNotification(
+              io,
+              order.handymanId,
+              "penalty_warning",
+              "Penalty Warning",
+              "You have received a 50 EGP penalty due to repeated cancellations.",
+              {
+                orderId: order._id,
+                penaltyAmount: handyman.penaltyAmount,
+              }
+            );
+          }
+
           handyman.rating = Math.max(0, handyman.rating - 0.5);
+
           await handyman.save();
         }
       }
+
 
       if (currentStatus === "in-progress" && isCustomer) {
         const customer = await User.findById(order.customerId);
