@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaEnvelopeOpenText, FaArrowRight } from 'react-icons/fa';
 import { verifyEmail, resendOtp, clearError } from '../../store/slices/authSlice';
+import AlertMessage from '../../components/common/AlertMessage';
 
 export default function VerifyEmailPage() {
   const location = useLocation();
@@ -60,8 +61,8 @@ export default function VerifyEmailPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
+    <div className="flex min-h-screen items-center justify-center bg-cover bg-center" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.6), rgba(255,255,255,0.6)), url(https://images.unsplash.com/photo-1504148455328-c376907d081c?w=1600)' }}>
+      <div className="w-full max-w-md rounded-3xl bg-white/90 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-md border border-white/20 transition-all duration-300">
         <button
           type="button"
           onClick={() => navigate(-1)}
@@ -80,12 +81,8 @@ export default function VerifyEmailPage() {
           أرسلنا رمز تحقق مكوّن من 6 أرقام إلى <span className="font-semibold">{email}</span>
         </p>
 
-        {error && (
-          <div className="mb-4 rounded-lg bg-red-50 p-3 text-center text-sm text-red-600">{error}</div>
-        )}
-        {resendMsg && (
-          <div className="mb-4 rounded-lg bg-green-50 p-3 text-center text-sm text-green-600">{resendMsg}</div>
-        )}
+        <AlertMessage type="error" message={error} className="mb-4" />
+        <AlertMessage type="success" message={resendMsg} className="mb-4" />
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
@@ -101,12 +98,12 @@ export default function VerifyEmailPage() {
           <button
             type="submit"
             disabled={isLoading || otp.length !== 6}
-            className="flex w-full items-center justify-center rounded-lg bg-primary py-3 font-semibold text-white transition hover:bg-primary/90 disabled:opacity-50"
+            className="btn-primary flex w-full items-center justify-center rounded-lg py-3 font-semibold transition hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-50"
           >
             {isLoading ? (
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
             ) : (
-              'تأكيد'
+              'تأكيد الحساب'
             )}
           </button>
         </form>

@@ -28,18 +28,18 @@ export default function AdminVerificationsPage() {
   }, []);
 
   const handleVerify = async (handymanId) => {
-    await adminService.approveHandyman(handymanId, { reason: '' });
-    setPending((prev) => prev.filter((p) => p.userId !== handymanId));
+    await adminService.approveHandyman(handymanId, { note: '' });
+    setPending((prev) => prev.filter((p) => p._id !== handymanId));
   };
 
   const handleReject = async (reason) => {
-    await adminService.rejectHandyman(modal.userId, { reason });
-    setPending((prev) => prev.filter((p) => p.userId !== modal.userId));
+    await adminService.rejectHandyman(modal.handymanId, { note: reason });
+    setPending((prev) => prev.filter((p) => p._id !== modal.handymanId));
   };
 
   const handleSuspend = async (reason) => {
     await adminService.suspendHandyman(modal.userId, { suspended: true, reason });
-    setPending((prev) => prev.filter((p) => p.userId !== modal.userId));
+    setPending((prev) => prev.filter((p) => p.userId?._id !== modal.userId));
   };
 
   const verifiedCount = craftsmen.filter((c) => c.verified).length;
@@ -101,13 +101,13 @@ export default function AdminVerificationsPage() {
               </thead>
               <tbody>
                 {pending.map((item) => (
-                  <tr key={item.userId} className="border-b border-borderGray last:border-0">
+                  <tr key={item._id} className="border-b border-borderGray last:border-0">
                     <td className="py-4">
                       <div className="flex items-center gap-3">
-                        <img src={getDefaultAvatar(item.name)} alt="" className="h-10 w-10 rounded-full" />
+                        <img src={getDefaultAvatar(item.userId?.name || '')} alt="" className="h-10 w-10 rounded-full" />
                         <div>
-                          <p className="font-bold">{item.name}</p>
-                          <p className="text-xs text-textGray">{item.email}</p>
+                          <p className="font-bold">{item.userId?.name || '—'}</p>
+                          <p className="text-xs text-textGray">{item.userId?.email || '—'}</p>
                         </div>
                       </div>
                     </td>
@@ -123,21 +123,21 @@ export default function AdminVerificationsPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleVerify(item.userId)}
+                          onClick={() => handleVerify(item._id)}
                           className="flex items-center gap-1 rounded-lg bg-tertiary px-3 py-1 text-xs text-white"
                         >
                           <FaCheck size={10} /> قبول
                         </button>
                         <button
                           type="button"
-                          onClick={() => setModal({ type: 'reject', userId: item.userId })}
+                          onClick={() => setModal({ type: 'reject', handymanId: item._id })}
                           className="flex items-center gap-1 rounded-lg bg-emergency px-3 py-1 text-xs text-white"
                         >
                           <FaTimes size={10} /> رفض
                         </button>
                         <button
                           type="button"
-                          onClick={() => setModal({ type: 'suspend', userId: item.userId })}
+                          onClick={() => setModal({ type: 'suspend', userId: item.userId?._id })}
                           className="flex items-center gap-1 rounded-lg border border-borderGray px-3 py-1 text-xs text-textGray"
                         >
                           <FaBan size={10} /> تعليق

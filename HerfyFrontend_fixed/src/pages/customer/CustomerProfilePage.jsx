@@ -6,6 +6,7 @@ import { logoutUser, updateProfile } from '../../store/slices/authSlice';
 import { getCustomerOrders } from '../../store/slices/orderSlice';
 import { uploadService } from '../../services/api';
 import { formatDate, formatPrice, ORDER_STATUS_LABELS, getDefaultAvatar } from '../../utils/helpers';
+import ChangePasswordCard from '../../components/common/ChangePasswordCard';
 
 const sidebarItems = [
   { label: 'معلومات الحساب', icon: FaUser, active: true },
@@ -194,6 +195,10 @@ export default function CustomerProfilePage() {
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="mt-6">
+          <ChangePasswordCard />
         </div>
 
         <div className="card mt-6">

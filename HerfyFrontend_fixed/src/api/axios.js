@@ -4,13 +4,15 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const api = axios.create({
   baseURL: BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 api.interceptors.request.use(
   (config) => {
+    // The browser must generate the multipart boundary for FormData uploads.
+    if (config.data instanceof FormData) {
+      config.headers.setContentType(false);
+    }
+
     const token = localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -50,6 +52,12 @@ const goToLogin = () => {
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
+    // Joi sends an array of messages. Convert it once so every Redux slice
+    // can render a useful validation error instead of an array value.
+    if (Array.isArray(error.response?.data?.msg)) {
+      error.response.data.msg = error.response.data.msg.join(', ');
+    }
+
     const originalRequest = error.config;
 
     if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url?.includes('/users/refresh')) {
