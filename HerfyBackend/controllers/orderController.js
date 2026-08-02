@@ -42,6 +42,17 @@ const createOrder = async (req, res) => {
       return res.status(404).json({ msg: "Handyman not found" });
     }
 
+
+    const handymanProfile = await Handyman.findOne({
+      userId: handymanId,
+    });
+
+    if (!handymanProfile || !handymanProfile.isAvailable) {
+      return res.status(400).json({
+        msg: "This handyman is currently unavailable.",
+      });
+    }
+
     let finalPrice = estimatedPrice || 0;
     let penaltyAmount = customer.penaltyAmount || 0;
     let totalPrice = finalPrice + penaltyAmount;
@@ -239,35 +250,50 @@ const updateOrderStatus = async (req, res) => {
         // No penalty - customer hasn't confirmed price yet
       }
 
-      if (currentStatus === "price_confirmed" && isCustomer) {
-        const customer = await User.findById(order.customerId);
-        if (customer) {
-          customer.penaltyCount = (customer.penaltyCount || 0) + 1;
-          customer.penaltyAmount = (customer.penaltyAmount || 0) + 50;
-          if (customer.penaltyCount >= 3) {
-            customer.isPenalized = true;
-          }
-          await customer.save();
-        }
-// ========== NOTIFICATION: Penalty warning ==========
-        const io = req.app.get('io');
-        await createNotification(
-          io,
-          order.customerId,
-          'penalty_warning',
-          ' Penalty Warning',
-          `You have been charged a 50 EGP penalty. Total penalties: ${customer.penaltyCount}`,
-          { orderId: order._id, penaltyCount: customer.penaltyCount }
-        );
-      }
+      if (
+        (currentStatus === "price_confirmed" || currentStatus === "in-progress") && isHandyman) {
+        const handyman = await Handyman.findOne({
+          userId: order.handymanId,
+        });
 
-      if ((currentStatus === "price_confirmed" || currentStatus === "in-progress") && isHandyman) {
-        const handyman = await Handyman.findOne({ userId: order.handymanId });
         if (handyman) {
+          const now = new Date();
+
+          if (
+            handyman.monthlyCancellationMonth !== now.getMonth() ||
+            handyman.monthlyCancellationYear !== now.getFullYear()
+          ) {
+            handyman.monthlyCancellationCount = 0;
+            handyman.monthlyCancellationMonth = now.getMonth();
+            handyman.monthlyCancellationYear = now.getFullYear();
+          }
+
+          handyman.monthlyCancellationCount++;
+
+          if (handyman.monthlyCancellationCount >= 3) {
+            handyman.penaltyAmount += 50;
+
+            const io = req.app.get("io");
+
+            await createNotification(
+              io,
+              order.handymanId,
+              "penalty_warning",
+              "Penalty Warning",
+              "You have received a 50 EGP penalty due to repeated cancellations.",
+              {
+                orderId: order._id,
+                penaltyAmount: handyman.penaltyAmount,
+              }
+            );
+          }
+
           handyman.rating = Math.max(0, handyman.rating - 0.5);
+
           await handyman.save();
         }
       }
+
 
       if (currentStatus === "in-progress" && isCustomer) {
         const customer = await User.findById(order.customerId);
@@ -279,7 +305,7 @@ const updateOrderStatus = async (req, res) => {
           }
           await customer.save();
         }
-// ========== NOTIFICATION: Penalty warning ==========
+        // ========== NOTIFICATION: Penalty warning ==========
         const io = req.app.get('io');
         await createNotification(
           io,
@@ -294,7 +320,7 @@ const updateOrderStatus = async (req, res) => {
       if (currentStatus === "completed") {
         return res.status(400).json({ msg: "Cannot cancel a completed order" });
       }
-// ========== NOTIFICATION: Order cancelled ==========
+      // ========== NOTIFICATION: Order cancelled ==========
       const io = req.app.get('io');
       const recipientId = isCustomer ? order.handymanId : order.customerId;
       await createNotification(
@@ -382,7 +408,7 @@ const updateOrderStatus = async (req, res) => {
         session.endSession();
       }
 
-// ========== NOTIFICATION: Order accepted ==========
+      // ========== NOTIFICATION: Order accepted ==========
       const io = req.app.get('io');
       await createNotification(
         io,
@@ -462,7 +488,7 @@ const updateOrderStatus = async (req, res) => {
           { isAvailable: true }
         );
       }
-// ========== NOTIFICATION: Order completed ==========
+      // ========== NOTIFICATION: Order completed ==========
       const io = req.app.get('io');
       await createNotification(
         io,
@@ -510,7 +536,7 @@ const confirmPrice = async (req, res) => {
 
     if (confirmed) {
       order.status = "price_confirmed";
-// ========== NOTIFICATION: Price confirmed ==========
+      // ========== NOTIFICATION: Price confirmed ==========
       const io = req.app.get('io');
       await createNotification(
         io,
@@ -592,7 +618,7 @@ const requestReschedule = async (req, res) => {
     };
 
     await order.save();
-// ========== NOTIFICATION: Reschedule request ==========
+    // ========== NOTIFICATION: Reschedule request ==========
     const io = req.app.get('io');
     const recipientId = req.user.role === "customer" ? order.handymanId : order.customerId;
     await createNotification(
@@ -642,10 +668,10 @@ const respondReschedule = async (req, res) => {
     }
 
     await order.save();
-// ========== NOTIFICATION: Reschedule response ==========
+    // ========== NOTIFICATION: Reschedule response ==========
     const io = req.app.get('io');
-    const recipientId = order.rescheduleRequest.requestedBy === "customer" 
-      ? order.customerId 
+    const recipientId = order.rescheduleRequest.requestedBy === "customer"
+      ? order.customerId
       : order.handymanId;
     await createNotification(
       io,

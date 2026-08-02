@@ -38,6 +38,7 @@ import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
 import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
 
+
 function App() {
   return (
     <BrowserRouter>
@@ -70,7 +71,7 @@ function App() {
             <Route path="profile" element={<CustomerProfilePage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="reports" element={<MyReportsPage />} />
-          </Route>
+           </Route>
 
           {/* Handyman */}
           <Route
