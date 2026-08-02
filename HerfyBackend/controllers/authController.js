@@ -53,15 +53,15 @@ const registerUser = async (req, res) => {
 
     // Validation
     if (role === "admin") {
-      return res.status(400).json({ msg: "Cannot register as admin" });
+      return res.status(400).json({ msg: "لا يمكن التسجيل كمدير" });
     }
     if (role === "handyman" && (!profession || !price)) {
-      return res.status(400).json({ msg: "Profession and price are required for handyman" });
+      return res.status(400).json({ msg: "المهنة والسعر مطلوبان للحرفي" });
     }
 
     const userExist = await User.findOne({ email });
     if (userExist) {
-      return res.status(400).json({ msg: "User already exist" });
+      return res.status(400).json({ msg: "البريد الإلكتروني مسجل بالفعل" });
     }
 
     // Handle location
@@ -124,6 +124,7 @@ const registerUser = async (req, res) => {
             address: address || '',
             location: coordinates ? { type: 'Point', coordinates } : undefined,
             registrationStatus: 'pending',
+
             registeredAt: new Date(),
             verified: false,
             isAvailable: true,
@@ -161,12 +162,8 @@ const registerUser = async (req, res) => {
     user.emailOtpExpire = Date.now() + 10 * 60 * 1000;
     await user.save();
 
-    // Send verification email
-    try {
-      await sendVerificationEmail(user.email, otp);
-    } catch (mailErr) {
-      console.log("Failed to send verification email:", mailErr.message);
-    }
+    // Send verification email (fire and forget to not block response)
+    sendVerificationEmail(user.email, otp);
 
     // Response
     const response = {
@@ -187,7 +184,7 @@ const registerUser = async (req, res) => {
 
   } catch (err) {
     console.log(err);
-    res.status(500).json({ msg: "Server error", error: err.message });
+    res.status(500).json({ msg: "حدث خطأ في الخادم", error: err.message });
   }
 };
 
@@ -268,7 +265,7 @@ const resendVerificationOtp = async (req, res) => {
       user.emailOtp = otp;
       user.emailOtpExpire = Date.now() + 10 * 60 * 1000;
       await user.save();
-      await sendVerificationEmail(email, otp);
+      sendVerificationEmail(email, otp);
     }
 
     res.status(200).json({ msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد" });
@@ -286,12 +283,12 @@ const loginUser = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ msg: "Invalid email or password" });
+      return res.status(400).json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(400).json({ msg: "Invalid email or password" });
+      return res.status(400).json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
     if (user.isBanned) {
@@ -301,7 +298,7 @@ const loginUser = async (req, res) => {
     }
 
     if (user.deletedAt) {
-      return res.status(400).json({ msg: "Invalid email or password" });
+      return res.status(400).json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
     if (!user.isVerified) {
@@ -347,7 +344,7 @@ const loginUser = async (req, res) => {
     const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
 
     const response = {
-      msg: "User logged in successfully",
+      msg: "تم تسجيل الدخول بنجاح",
       token: accessToken,
       refreshToken,
       user: publicUser(user),
@@ -452,7 +449,7 @@ const sendResetOtp = async (req, res) => {
       user.otp = otp;
       user.otpExpire = Date.now() + 5 * 60 * 1000;
       await user.save();
-      await sendEmail(email, otp);
+      sendEmail(email, otp);
     }
 
     res.status(200).json({

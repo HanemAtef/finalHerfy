@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { FaEnvelope, FaKey, FaLock, FaArrowRight } from 'react-icons/fa';
 import { forgotPassword, resetPassword, clearError } from '../../store/slices/authSlice';
+import AlertMessage from '../../components/common/AlertMessage';
 
 export default function ForgotPasswordPage() {
   const dispatch = useDispatch();
@@ -33,9 +34,9 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-neutral px-4 py-8">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
-        <Link to="/login" className="mb-6 flex items-center gap-2 text-sm text-textGray hover:text-primary">
+    <div className="flex min-h-screen items-center justify-center bg-cover bg-center" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.7), rgba(255,255,255,0.7)), url(https://images.unsplash.com/photo-1504148455328-c376907d081c?w=1600)' }}>
+      <div className="w-full max-w-md rounded-3xl bg-white/90 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-md border border-white/20 transition-all duration-300">
+        <Link to="/login" className="mb-6 flex w-fit items-center gap-2 rounded-full bg-neutral px-4 py-2 text-sm font-semibold text-textGray transition-colors hover:bg-borderGray hover:text-primary">
           <FaArrowRight /> العودة لتسجيل الدخول
         </Link>
 
@@ -48,9 +49,7 @@ export default function ForgotPasswordPage() {
           {step === 'done' && 'يمكنك الآن تسجيل الدخول بكلمة المرور الجديدة'}
         </p>
 
-        {error && (
-          <div className="mb-4 rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">{error}</div>
-        )}
+        <AlertMessage type="error" message={error} className="mb-6" />
 
         {step === 'request' && (
           <form onSubmit={handleRequestOtp} className="space-y-5">
@@ -68,8 +67,15 @@ export default function ForgotPasswordPage() {
                 />
               </div>
             </div>
-            <button type="submit" disabled={isLoading} className="btn-primary w-full">
-              {isLoading ? 'جاري الإرسال...' : 'إرسال رمز التحقق'}
+            <button type="submit" disabled={isLoading} className="btn-primary flex w-full items-center justify-center gap-2 py-3 transition-all hover:-translate-y-0.5 hover:shadow-lg">
+              {isLoading ? (
+                <>
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  جاري الإرسال...
+                </>
+              ) : (
+                'إرسال رمز التحقق'
+              )}
             </button>
           </form>
         )}
@@ -104,8 +110,15 @@ export default function ForgotPasswordPage() {
                 />
               </div>
             </div>
-            <button type="submit" disabled={isLoading} className="btn-primary w-full">
-              {isLoading ? 'جاري الحفظ...' : 'إعادة تعيين كلمة المرور'}
+            <button type="submit" disabled={isLoading} className="btn-primary flex w-full items-center justify-center gap-2 py-3 transition-all hover:-translate-y-0.5 hover:shadow-lg">
+              {isLoading ? (
+                <>
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  جاري الحفظ...
+                </>
+              ) : (
+                'إعادة تعيين كلمة المرور'
+              )}
             </button>
             <button
               type="button"

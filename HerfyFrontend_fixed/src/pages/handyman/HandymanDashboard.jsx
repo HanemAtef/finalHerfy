@@ -239,8 +239,11 @@ export default function HandymanDashboard() {
   return (
     <div>
       {/* Header */}
-      <div className="card mb-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="mb-6 overflow-hidden rounded-3xl bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral p-6 transition-all duration-300 hover:shadow-lg relative">
+        {/* Subtle decorative background gradient */}
+        <div className="absolute top-0 right-0 w-64 h-full bg-gradient-to-l from-primary/5 to-transparent pointer-events-none" />
+        
+        <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-textDark">{greeting()}، {user?.name?.split(' ')[0]}</h1>
             <p className="text-sm text-textGray">
@@ -261,7 +264,7 @@ export default function HandymanDashboard() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <div className="flex rounded-xl overflow-hidden border border-borderGray">
+            <div className="flex rounded-xl overflow-hidden border-2 border-neutral shadow-sm bg-neutral/50 p-1">
               <button
                 type="button"
                 onClick={() => handleAvailability(true)}
@@ -284,7 +287,7 @@ export default function HandymanDashboard() {
             <button
               type="button"
               onClick={() => navigate('/handyman/profile')}
-              className="btn-outline flex items-center gap-2 text-sm py-2"
+              className="btn-outline flex items-center gap-2 text-sm py-2 bg-white hover:-translate-y-0.5 shadow-sm"
             >
               <FaEdit /> تعديل الملف الشخصي
             </button>
@@ -340,11 +343,19 @@ export default function HandymanDashboard() {
             sub: `${analytics?.totalOrders ?? 0} إجمالي الطلبات`,
           },
         ].map(({ icon: Icon, color, title, value, sub }) => (
-          <div key={title} className={`card border-r-4 ${color}`}>
-            <Icon className="mb-2 text-textGray" size={20} />
-            <p className="text-sm text-textGray">{title}</p>
-            <p className="text-2xl font-bold text-textDark">{value}</p>
-            <p className="text-xs text-tertiary">{sub}</p>
+          <div key={title} className={`overflow-hidden rounded-2xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral transition-all duration-300 hover:-translate-y-1 hover:shadow-lg relative`}>
+            {/* Top border colored accent */}
+            <div className={`absolute top-0 right-0 left-0 h-1 bg-gradient-to-l ${color.replace('border-', 'from-').replace('text-', 'from-')} to-transparent opacity-50`} />
+            
+            <div className="flex items-center gap-4 mb-4">
+              <div className={`p-3 rounded-xl bg-neutral text-primary`}>
+                <Icon size={24} />
+              </div>
+              <p className="text-sm font-semibold text-textGray">{title}</p>
+            </div>
+            
+            <p className="text-3xl font-bold text-textDark mb-1">{value}</p>
+            <p className="text-xs text-textGray bg-neutral inline-block px-2 py-1 rounded-md">{sub}</p>
           </div>
         ))}
       </div>
@@ -368,30 +379,35 @@ export default function HandymanDashboard() {
         ) : (
           <div className="space-y-3">
             {orders.slice(0, 5).map((order) => (
-              <div key={order._id} className="card flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <img
-                    src={getDefaultAvatar(order.customerId?.name || 'عميل')}
-                    alt=""
-                    className="h-12 w-12 rounded-full"
-                  />
+              <div key={order._id} className="rounded-2xl bg-white p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-neutral flex flex-wrap items-center justify-between gap-4 transition-all hover:shadow-md">
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <img
+                      src={getDefaultAvatar(order.customerId?.name || 'عميل')}
+                      alt=""
+                      className="h-14 w-14 rounded-full border-2 border-white shadow-sm"
+                    />
+                    <div className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-green-500 border-2 border-white" />
+                  </div>
                   <div>
-                    <p className="font-bold text-textDark">{order.customerId?.name || 'عميل'}</p>
-                    <p className="text-sm text-textGray">{order.profession}</p>
-                    <p className="text-xs text-textGray">2 كم بعيد</p>
+                    <p className="font-bold text-textDark text-lg">{order.customerId?.name || 'عميل'}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-md">{order.profession}</span>
+                      <span className="text-xs text-textGray">• 2 كم بعيد</span>
+                    </div>
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full sm:w-auto">
                   <Link
                     to={`/handyman/orders/${order._id}`}
-                    className="flex items-center gap-2 rounded-lg bg-tertiary px-4 py-2 text-sm font-bold text-white"
+                    className="flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-tertiary px-5 py-2.5 text-sm font-bold text-white transition-all hover:bg-tertiary/90 hover:-translate-y-0.5 shadow-sm"
                   >
-                    <FaCheck /> مراجعة وقبول
+                    <FaCheck /> قبول
                   </Link>
                   <button
                     type="button"
                     onClick={() => handleReject(order._id)}
-                    className="flex items-center gap-2 rounded-lg border-2 border-emergency px-4 py-2 text-sm font-bold text-emergency"
+                    className="flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-red-50 text-emergency px-5 py-2.5 text-sm font-bold transition-all hover:bg-red-100"
                   >
                     <FaTimes /> رفض
                   </button>

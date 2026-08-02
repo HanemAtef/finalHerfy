@@ -8,6 +8,7 @@ import { uploadService } from '../../services/api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { getDefaultAvatar } from '../../utils/helpers';
 import ChangePasswordCard from '../../components/common/ChangePasswordCard';
+import AlertMessage from '../../components/common/AlertMessage';
 
 export default function HandymanSettingsPage() {
   const dispatch = useDispatch();
@@ -106,7 +107,7 @@ export default function HandymanSettingsPage() {
           <button
             type="button"
             onClick={() => navigate(-1)}
-            className="rounded-full p-2 text-primary hover:bg-primary/5"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-primary shadow-sm hover:bg-neutral transition-all"
             aria-label="رجوع"
           >
             <FaArrowRight />
@@ -116,21 +117,15 @@ export default function HandymanSettingsPage() {
             <p className="text-sm text-textGray">إدارة ملفك الشخصي كحرفي</p>
           </div>
         </div>
-        <button type="submit" disabled={authLoading || handymanLoading} className="btn-primary text-sm">
+        <button type="submit" disabled={authLoading || handymanLoading} className="btn-primary text-sm px-6 py-2 shadow-sm hover:shadow-md hover:-translate-y-0.5">
           {authLoading || handymanLoading ? 'جاري الحفظ...' : 'حفظ التغييرات'}
         </button>
       </div>
 
-      {savedMsg && (
-        <div className="rounded-lg bg-tertiary/10 px-4 py-3 text-sm text-tertiary">{savedMsg}</div>
-      )}
-      {(authError || handymanError) && (
-        <div className="rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">
-          {authError || handymanError}
-        </div>
-      )}
+      <AlertMessage type="success" message={savedMsg} className="mb-4" />
+      <AlertMessage type="error" message={authError || handymanError} className="mb-4" />
 
-      <div className="card flex items-center gap-4">
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral flex flex-wrap items-center gap-6 transition-all hover:shadow-lg">
         <div className="relative h-20 w-20 shrink-0">
           <img
             src={user?.profileImage || getDefaultAvatar(user?.name)}
@@ -159,7 +154,7 @@ export default function HandymanSettingsPage() {
         </div>
       </div>
 
-      <div className="card space-y-4">
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral space-y-5">
         <h3 className="font-bold text-textDark">بيانات الحساب</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -185,7 +180,7 @@ export default function HandymanSettingsPage() {
         <ChangePasswordCard />
       </div>
 
-      <div className="card space-y-4">
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral space-y-5">
         <h3 className="font-bold text-textDark">بيانات الحرفة</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -227,7 +222,7 @@ export default function HandymanSettingsPage() {
         </div>
       </div>
 
-      <div className="card space-y-4">
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral space-y-5">
         <div className="flex items-center justify-between">
           <h3 className="font-bold text-textDark">معرض الأعمال</h3>
           <button
@@ -267,7 +262,7 @@ export default function HandymanSettingsPage() {
         )}
       </div>
 
-      <div className="card">
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral">
         <button
           type="button"
           onClick={() => navigate('/handyman/reports')}
@@ -277,7 +272,7 @@ export default function HandymanSettingsPage() {
         </button>
       </div>
 
-      <div className="card">
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral">
         <button
           type="button"
           onClick={() => dispatch(logoutUser())}

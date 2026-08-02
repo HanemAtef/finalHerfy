@@ -23,6 +23,7 @@ import { PROFESSIONS } from '../../utlis/constants';
 import { referenceService } from '../../services/api';
 import useCurrentLocation from '../../hooks/useCurrentLocation';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
+import AlertMessage from '../../components/common/AlertMessage';
 
 export default function RegisterPage() {
   const [searchParams] = useSearchParams();
@@ -215,8 +216,8 @@ export default function RegisterPage() {
 
   return (
     <div className="flex min-h-screen">
-      <div className="flex flex-1 flex-col justify-center bg-neutral px-6 py-12 lg:px-16">
-        <div className="mx-auto w-full max-w-md">
+      <div className="flex flex-1 flex-col justify-center bg-neutral/30 px-6 py-12 lg:px-16 backdrop-blur-sm">
+        <div className="mx-auto w-full max-w-xl rounded-3xl bg-white/95 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.08)]">
           <Link to="/" className="mb-4 flex items-center gap-2 text-sm text-textGray hover:text-primary">
             <FaArrowRight /> رجوع
           </Link>
@@ -244,14 +245,10 @@ export default function RegisterPage() {
             </button>
           </div>
 
-          {error && (
-            <div className="mb-4 rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">
-              {error}
-            </div>
-          )}
+          <AlertMessage type="error" message={error} className="mb-6" />
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Basic Info */}
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             <div>
               <label className="mb-1 block text-sm font-bold">الاسم الكامل</label>
               <div className="relative">
@@ -325,6 +322,7 @@ export default function RegisterPage() {
                   ))}
                 </select>
               </div>
+            </div>
             </div>
 
             {/* Handyman Specific Fields */}
@@ -561,10 +559,17 @@ export default function RegisterPage() {
             {/* Submit Button */}
             <button 
               type="submit" 
-              disabled={isLoading || !agreed || (role === 'handyman' && !isHandymanFormValid())} 
-              className="btn-secondary w-full"
+              disabled={isLoading || uploading || !agreed || (role === 'handyman' && !isHandymanFormValid())} 
+              className="btn-secondary flex w-full items-center justify-center gap-2 py-4 text-base shadow-lg transition-all hover:-translate-y-1 hover:shadow-xl"
             >
-              {isLoading || uploading ? 'جاري التسجيل...' : 'تسجيل'}
+              {(isLoading || uploading) ? (
+                <>
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  جاري التسجيل...
+                </>
+              ) : (
+                'إنشاء الحساب'
+              )}
             </button>
 
             {role === 'handyman' && !isHandymanFormValid() && (
