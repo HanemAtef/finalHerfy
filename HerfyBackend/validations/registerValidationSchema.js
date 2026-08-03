@@ -61,7 +61,7 @@ const registerSchema = Joi.object({
   
   gallery: Joi.array().items(Joi.string()).optional(),
   
-  address: Joi.string().optional()
+  address: Joi.any().strip()
 });
 
 module.exports = registerSchema;

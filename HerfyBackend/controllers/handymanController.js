@@ -111,12 +111,26 @@ const getNearbyHandymen = async (req, res) => {
           distance,
           eta,
           completedOrders: details.completedOrders,
+          acceptanceRate: details.acceptanceRate || 1.0,
         };
       })
       .filter(Boolean);
 
     // Apply sorting
-    if (sort === "rating") {
+    if (sort === "smart" || !sort) {
+      const DIST_WEIGHT = parseFloat(process.env.MATCHING_DISTANCE_WEIGHT) || 0.4;
+      const RATING_WEIGHT = parseFloat(process.env.MATCHING_RATING_WEIGHT) || 0.4;
+      const ACCEPT_WEIGHT = parseFloat(process.env.MATCHING_ACCEPTANCE_WEIGHT) || 0.2;
+      const maxDistance = Number(radius);
+      
+      handymenList.forEach(h => {
+         const normDist = h.distance ? Math.max(0, (maxDistance - h.distance) / maxDistance) : 0;
+         const normRating = (h.rating || 0) / 5.0;
+         const normAccept = h.acceptanceRate;
+         h.smartScore = (normDist * DIST_WEIGHT) + (normRating * RATING_WEIGHT) + (normAccept * ACCEPT_WEIGHT);
+      });
+      handymenList.sort((a, b) => b.smartScore - a.smartScore);
+    } else if (sort === "rating") {
       handymenList.sort((a, b) => b.rating - a.rating);
     } else if (sort === "price") {
       handymenList.sort((a, b) => a.price - b.price);

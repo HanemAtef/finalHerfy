@@ -40,6 +40,21 @@ const handymanSchema = new mongoose.Schema(
       default: 0,
     },
 
+    totalOffers: {
+      type: Number,
+      default: 0,
+    },
+
+    acceptedOffers: {
+      type: Number,
+      default: 0,
+    },
+
+    acceptanceRate: {
+      type: Number,
+      default: 1.0, // defaults to 100%
+    },
+
     verified: {
       type: Boolean,
       default: false,
@@ -136,8 +151,7 @@ const handymanSchema = new mongoose.Schema(
     location: {
       type: {
         type: String,
-        enum: ['Point'],
-        default: 'Point'
+        enum: ['Point']
       },
       coordinates: {
         type: [Number],

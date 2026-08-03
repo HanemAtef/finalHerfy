@@ -41,15 +41,7 @@ if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
-// Limit requests from same API
-const limiter = rateLimit({
-  max: 1000, 
-  windowMs: 15 * 60 * 1000, 
-  message: "Too many requests from this IP, please try again in 15 minutes!"
-});
-app.use("/api", limiter);
-
-
+// Body parsers MUST come before rate limiters and validation middleware
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 
@@ -64,6 +56,23 @@ app.use((req, res, next) => {
 
 // Prevent parameter pollution
 app.use(hpp());
+
+// Moderate rate limiter for all write endpoints
+const globalWriteLimiter = rateLimit({
+  windowMs: (parseInt(process.env.RATE_LIMIT_GLOBAL_WINDOW) || 15) * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_GLOBAL_MAX) || 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: 'error', msg: 'Too many requests, please try again later.' },
+});
+
+// Apply write limiter to all POST, PUT, PATCH, DELETE requests
+app.use((req, res, next) => {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    return globalWriteLimiter(req, res, next);
+  }
+  next();
+});
 
 // Serve uploaded images statically (e.g. http://localhost:3000/uploads/xxx.jpg)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -119,6 +128,12 @@ app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
 
+// Start dispute escalation cron job
+if (process.env.NODE_ENV !== 'test') {
+  const startDisputeEscalationJob = require('./jobs/disputeEscalation');
+  startDisputeEscalationJob(io);
+}
+
 // Seed the ServiceType collection from the old hardcoded profession list
 // on first boot, so existing handyman records keep working before an
 // admin has touched the new reference-data UI.
@@ -150,15 +165,21 @@ app.use((err, req, res, next) => {
 
 const port = process.env.PORT || 3000;
 
-server.listen(port, () => {
-  console.log(` Server is running on port ${port}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(port, () => {
+    console.log(` Server is running on port ${port}`);
+  });
+}
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (err) => {
   console.error("UNHANDLED REJECTION!  Shutting down...");
   console.error(err.name, err.message);
-  server.close(() => {
-    process.exit(1);
-  });
+  if (process.env.NODE_ENV !== 'test') {
+    server.close(() => {
+      process.exit(1);
+    });
+  }
 });
+
+module.exports = server;

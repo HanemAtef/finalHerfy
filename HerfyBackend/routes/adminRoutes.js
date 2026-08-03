@@ -27,7 +27,7 @@ const {
   listCities, createCity, updateCity, deleteCity,
   listServiceTypes, createServiceType, updateServiceType, deleteServiceType,
 } = require("../controllers/referenceDataController");
-const { getReports, resolveReport } = require("../controllers/reportController");
+const { getReports, resolveReport, getDisputeDetail } = require("../controllers/reportController");
 const {
   getOverviewAnalytics, getCraftsmenAnalytics, getJobsAnalytics, getReviewsAnalytics, exportCSV,
 } = require("../controllers/analyticsController");
@@ -117,6 +117,7 @@ router.delete("/service-types/:id", deleteServiceType);
 // ========== REPORTS & DISPUTES ==========
 // =====================================================
 router.get("/reports", getReports);
+router.get("/reports/:id/detail", getDisputeDetail);
 router.patch("/reports/:id/resolve", resolveReport);
 
 // =====================================================

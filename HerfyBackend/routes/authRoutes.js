@@ -1,4 +1,4 @@
-// HerfyBackend/routes/authRoutes.js
+﻿// HerfyBackend/routes/authRoutes.js
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
@@ -31,7 +31,7 @@ const changePasswordSchema = require("../validations/changePasswordSchema");
 // ========== MULTER SETUP FOR FILE UPLOADS ==========
 // =====================================================
 
-// إعداد تخزين الملفات
+// Ø¥Ø¹Ø¯Ø§Ø¯ ØªØ®Ø²ÙŠÙ† Ø§Ù„Ù…Ù„ÙØ§Øª
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, 'uploads/');
@@ -42,7 +42,7 @@ const storage = multer.diskStorage({
   }
 });
 
-// فلترة الملفات المسموحة
+// ÙÙ„ØªØ±Ø© Ø§Ù„Ù…Ù„ÙØ§Øª Ø§Ù„Ù…Ø³Ù…ÙˆØ­Ø©
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif|pdf/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -55,7 +55,7 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// إعداد multer
+// Ø¥Ø¹Ø¯Ø§Ø¯ multer
 const upload = multer({
   storage: storage,
   limits: {
@@ -93,11 +93,28 @@ const normalizeRegistrationLocation = (req, res, next) => {
 // =====================================================
 
 const rateLimit = require("express-rate-limit");
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
+const authLimiter = rateLimit({
+  windowMs: (parseInt(process.env.RATE_LIMIT_AUTH_WINDOW) || 15) * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_AUTH_MAX) || 10,
   message: "Too many login attempts, please try again after 15 minutes."
 });
+
+// =====================================================
+// ========== AUTH ROUTES ==========
+// =====================================================
+
+/********* REGISTER - Ù…Ø¹ Ø¯Ø¹Ù… Ø±ÙØ¹ Ø§Ù„Ù…Ù„ÙØ§Øª Ù„Ù„Ø­Ø±ÙÙŠ *********/
+router.post(
+  "/register",
+  upload.fields([
+    { name: 'nationalId', maxCount: 1 },
+    { name: 'certificate', maxCount: 1 },
+    { name: 'profileImage', maxCount: 1 }
+  ]),
+  normalizeRegistrationLocation,
+  validate(registerSchema),
+  registerUser
+);
 
 // =====================================================
 // ========== AUTH ROUTES ==========
@@ -117,15 +134,15 @@ router.post(
 );
 
 /********* EMAIL VERIFICATION FLOW *********/
-router.post("/verify-email", verifyEmail);
-router.post("/resend-otp", resendVerificationOtp);
+router.post("/verify-email", authLimiter, verifyEmail);
+router.post("/resend-otp", authLimiter, resendVerificationOtp);
 
 /********* SESSION FLOW *********/
 router.post("/refresh", refreshAccessToken);
 router.post("/logout", logoutUser);
 
 /********* LOGIN *********/
-router.post("/login", loginLimiter, validate(loginSchema), loginUser);
+router.post("/login", authLimiter, validate(loginSchema), loginUser);
 
 /********* PROFILE *********/
 router.get("/me", authMiddleware, getMe);
@@ -133,7 +150,7 @@ router.put("/me", authMiddleware, validate(updateProfileSchema), updateProfile);
 router.put("/change-password", authMiddleware, validate(changePasswordSchema), changePassword);
 
 /********* RESET PASSWORD FLOW *********/
-router.post("/forgot-password", sendResetOtp);
-router.post("/reset-password", validate(resetPasswordSchema), resetPassword);
+router.post("/forgot-password", authLimiter, sendResetOtp);
+router.post("/reset-password", authLimiter, validate(resetPasswordSchema), resetPassword);
 
 module.exports = router;

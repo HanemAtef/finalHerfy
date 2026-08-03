@@ -43,6 +43,17 @@ const reportSchema = new mongoose.Schema(
       default: null,
     },
     resolvedAt: Date,
+
+    // Escalation
+    slaDeadline: {
+      type: Date,
+      default: null,
+    },
+    isEscalated: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
   },
   { timestamps: true }
 );

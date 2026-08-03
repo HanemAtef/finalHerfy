@@ -184,6 +184,11 @@ const registerUser = async (req, res) => {
 
   } catch (err) {
     console.log(err);
+    if (err.code === 11000) {
+      const field = Object.keys(err.keyPattern)[0];
+      const messages = { email: 'البريد الإلكتروني مسجل بالفعل', phone: 'رقم الهاتف مسجل بالفعل' };
+      return res.status(400).json({ msg: messages[field] || 'البيانات مسجلة بالفعل' });
+    }
     res.status(500).json({ msg: "حدث خطأ في الخادم", error: err.message });
   }
 };

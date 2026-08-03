@@ -79,6 +79,10 @@ const createOrder = async (req, res) => {
       isEmergency: isEmergencyBool,
     });
 
+    // Update handyman totalOffers
+    handymanProfile.totalOffers += 1;
+    handymanProfile.acceptanceRate = handymanProfile.acceptedOffers / handymanProfile.totalOffers;
+    await handymanProfile.save();
     // BUG FIX (C8): the customer's owed penalty used to be zeroed out here,
     // immediately on order creation, even though it was never actually
     // charged anywhere collectible (the fields that carried it were being
@@ -428,6 +432,14 @@ const updateOrderStatus = async (req, res) => {
         console.log(`Tracking started event sent for order ${id}`);
       } catch (error) {
         console.log('Socket.io error:', error.message);
+      }
+
+      if (isHandyman && typeof handymanProfile !== 'undefined' && handymanProfile) {
+        handymanProfile.acceptedOffers += 1;
+        if (handymanProfile.totalOffers > 0) {
+          handymanProfile.acceptanceRate = handymanProfile.acceptedOffers / handymanProfile.totalOffers;
+        }
+        await handymanProfile.save();
       }
     }
 
