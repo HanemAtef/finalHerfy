@@ -67,12 +67,12 @@ const globalWriteLimiter = rateLimit({
 });
 
 // Apply write limiter to all POST, PUT, PATCH, DELETE requests
-app.use((req, res, next) => {
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-    return globalWriteLimiter(req, res, next);
-  }
-  next();
-});
+// app.use((req, res, next) => {
+//   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+//     return globalWriteLimiter(req, res, next);
+//   }
+//   next();
+// });
 
 // Serve uploaded images statically (e.g. http://localhost:3000/uploads/xxx.jpg)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
