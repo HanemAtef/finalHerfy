@@ -1,4 +1,6 @@
+
 import { useEffect, useState, useCallback, useRef } from 'react';
+
 
 export default function useCurrentLocation() {
   const [location, setLocation] = useState(null);
@@ -11,7 +13,7 @@ export default function useCurrentLocation() {
   // يفضل يتحدث تلقائيًا كل ما المستخدم (الحرفي مثلاً) يتحرك.
   const requestLocation = useCallback(() => {
     if (!navigator.geolocation) {
-      setError('المتصفح لا يدعم تحديد الموقع');
+      setError("المتصفح لا يدعم تحديد الموقع");
       return;
     }
 

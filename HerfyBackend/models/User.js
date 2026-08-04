@@ -127,6 +127,10 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    stripeCustomerId: {
+      type: String,
+      default: null,
+    },
     // References ServiceType/City by their stable `key`/name so the admin
     // can manage the list without touching user records.
     city: {

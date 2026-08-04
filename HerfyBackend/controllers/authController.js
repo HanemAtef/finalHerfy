@@ -7,7 +7,8 @@ const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const generateToken = require("../utils/generateToken");
-const { generateAccessToken, generateRefreshTokenValue, hashToken } = generateToken;
+const { generateAccessToken, generateRefreshTokenValue, hashToken } =
+  generateToken;
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -36,14 +37,32 @@ const publicUser = (user) => ({
   phone: user.phone,
   location: user.location,
   city: user.city,
+  penaltyCount: user.penaltyCount,
+  penaltyAmount: user.penaltyAmount,
   profileImage: user.profileImage,
   isVerified: user.isVerified,
 });
+// console.log({
+//   penaltyCount: user.penaltyCount,
+//   penaltyAmount: user.penaltyAmount,
+// });
 
 /********* register user - مع دعم الملفات وحالة pending *********/
 const registerUser = async (req, res) => {
   try {
     let {
+      email,
+      name,
+      password,
+      role,
+      phone,
+      location,
+      city,
+      profession,
+      price,
+      experienceYears,
+      bio,
+      gallery,
       email, name, password, role, phone, location, city,
       profession, price, experienceYears, bio, gallery, address
     } = req.body;
@@ -66,7 +85,11 @@ const registerUser = async (req, res) => {
 
     // Handle location
     let coordinates = null;
-    if (location && location.coordinates && Array.isArray(location.coordinates)) {
+    if (
+      location &&
+      location.coordinates &&
+      Array.isArray(location.coordinates)
+    ) {
       coordinates = location.coordinates;
     } else if (Array.isArray(location)) {
       coordinates = location;
@@ -204,7 +227,12 @@ const verifyEmail = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
+      // FIX (M1): "User not found" here previously let an attacker confirm
+      // whether an email is registered. Same generic message as an invalid
+      // OTP — the two cases are indistinguishable from the outside.
+      return res
+        .status(400)
+        .json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
     }
 
     if (user.isVerified) {
@@ -273,7 +301,9 @@ const resendVerificationOtp = async (req, res) => {
       sendVerificationEmail(email, otp);
     }
 
-    res.status(200).json({ msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد" });
+    res.status(200).json({
+      msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد",
+    });
   } catch (err) {
     console.log(err);
     res.status(500).json({ msg: "Server error" });
@@ -378,7 +408,9 @@ const refreshAccessToken = async (req, res) => {
     const stored = await RefreshToken.findOne({ tokenHash });
 
     if (!stored || stored.revoked || stored.expiresAt < new Date()) {
-      return res.status(401).json({ msg: "جلسة غير صالحة، من فضلك سجل الدخول مرة أخرى" });
+      return res
+        .status(401)
+        .json({ msg: "جلسة غير صالحة، من فضلك سجل الدخول مرة أخرى" });
     }
 
     const user = await User.findById(stored.userId);
@@ -389,7 +421,10 @@ const refreshAccessToken = async (req, res) => {
     stored.revoked = true;
     await stored.save();
 
-    const { accessToken, refreshToken: newRefreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
+    const { accessToken, refreshToken: newRefreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
 
     res.status(200).json({
       token: accessToken,
@@ -409,7 +444,7 @@ const logoutUser = async (req, res) => {
     if (refreshToken) {
       await RefreshToken.updateOne(
         { tokenHash: hashToken(refreshToken) },
-        { revoked: true }
+        { revoked: true },
       );
     }
     res.status(200).json({ msg: "تم تسجيل الخروج" });
@@ -490,7 +525,11 @@ const resetPassword = async (req, res) => {
     user.otpExpire = null;
     await user.save();
 
-    await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
+    // Password changed — kill all existing sessions for this user.
+    await RefreshToken.updateMany(
+      { userId: user._id, revoked: false },
+      { revoked: true },
+    );
 
     res.status(200).json({
       msg: "Password reset successfully",
@@ -529,30 +568,6 @@ const updateProfile = async (req, res) => {
   } catch (err) {
     console.log(err);
     res.status(500).json({ msg: "Server error" });
-  }
-};
-
-const changePassword = async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    const user = await User.findById(req.user.id);
-
-    if (!user) return res.status(404).json({ msg: 'User not found' });
-
-    const matches = await user.matchPassword(currentPassword);
-    if (!matches) return res.status(400).json({ msg: 'Current password is incorrect' });
-    if (currentPassword === newPassword) {
-      return res.status(400).json({ msg: 'New password must be different' });
-    }
-
-    user.password = newPassword;
-    await user.save();
-    await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
-
-    res.status(200).json({ msg: 'Password changed successfully' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ msg: 'Server error' });
   }
 };
 

@@ -96,6 +96,26 @@ const handymanSchema = new mongoose.Schema(
       default: new Date().getFullYear(),
     },
 
+    penaltyAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyCancellationCount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyCancellationMonth: {
+      type: Number,
+      default: new Date().getMonth(),
+    },
+
+    monthlyCancellationYear: {
+      type: Number,
+      default: new Date().getFullYear(),
+    },
+
     isSuspended: {
       type: Boolean,
       default: false,

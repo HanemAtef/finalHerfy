@@ -8,7 +8,6 @@ const liveTrackingSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(' New client connected:', socket.id);
 
-
     socket.on('joinOrderRoom', async (orderId) => {
       const order = await Order.findById(orderId);
       if (!order) return;

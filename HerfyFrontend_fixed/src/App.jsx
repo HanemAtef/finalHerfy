@@ -37,6 +37,9 @@ import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
 
 import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
+import PaymentSuccess from './pages/payment/PaymentSuccess';
+import PaymentCancel from './pages/payment/PaymentCancel';
+
 
 
 function App() {
@@ -120,6 +123,10 @@ function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* Payment result pages */}
+          <Route path="/payment/success" element={<PaymentSuccess />} />
+          <Route path="/payment/cancel" element={<PaymentCancel />} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
