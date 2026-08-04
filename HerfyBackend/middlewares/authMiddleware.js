@@ -57,11 +57,12 @@ const authMiddleware = async (req, res, next) => {
     // =====================================================
     // ========== HANDYMAN SPECIFIC CHECKS ==========
     // =====================================================
-    
-    // If user is handyman, check registration status
+
+    // If user is handyman, attach the handyman record so route-specific
+    // middleware can decide whether the action is allowed.
     if (user.role === 'handyman') {
       const handyman = await Handyman.findOne({ userId: user._id });
-      
+
       if (!handyman) {
         return res.status(403).json({
           success: false,
@@ -69,37 +70,6 @@ const authMiddleware = async (req, res, next) => {
         });
       }
 
-      // Check if registration is pending
-      if (handyman.registrationStatus === 'pending') {
-        return res.status(403).json({
-          success: false,
-          msg: "حسابك في انتظار موافقة الأدمن. يرجى التحقق من بريدك الإلكتروني للإشعارات.",
-          status: 'pending'
-        });
-      }
-
-      // Check if registration is rejected
-      if (handyman.registrationStatus === 'rejected') {
-        const reason = handyman.adminNote || handyman.rejectedReason || 'غير محدد';
-        return res.status(403).json({
-          success: false,
-          msg: `تم رفض طلب التسجيل الخاص بك. السبب: ${reason}`,
-          status: 'rejected',
-          reason: reason
-        });
-      }
-
-      // Check if handyman is suspended
-      if (handyman.isSuspended) {
-        return res.status(403).json({
-          success: false,
-          msg: handyman.suspendedReason ? `حسابك معلق مؤقتاً: ${handyman.suspendedReason}` : "حسابك معلق مؤقتاً",
-          status: 'suspended',
-          reason: handyman.suspendedReason
-        });
-      }
-
-      // Attach handyman data to request for easy access
       req.handyman = handyman;
     }
 

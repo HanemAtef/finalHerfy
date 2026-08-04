@@ -128,10 +128,14 @@ app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
 
-// Start dispute escalation cron job
+// Start cron jobs
 if (process.env.NODE_ENV !== 'test') {
   const startDisputeEscalationJob = require('./jobs/disputeEscalation');
   startDisputeEscalationJob(io);
+  const startEtaRecalculationJob = require('./jobs/etaRecalculation');
+  startEtaRecalculationJob(io);
+  const startMonthlyCancellationResetJob = require('./jobs/monthlyCancellationReset');
+  startMonthlyCancellationResetJob(io);
 }
 
 // Seed the ServiceType collection from the old hardcoded profession list

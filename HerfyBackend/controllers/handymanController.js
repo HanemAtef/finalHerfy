@@ -3,6 +3,46 @@ const User = require("../models/User");
 const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
 const mongoose = require("mongoose");
+const { createNotification } = require("./notificationController");
+
+// =====================================================
+// ========== AUTO-VERIFY HELPER ==========
+// =====================================================
+// Called after every order completion and every rating update.
+// Flips verified=true ONLY when all 3 lifetime criteria are met.
+// This is the ONLY path that sets verified=true — admin approval does NOT.
+const VERIFY_MIN_COMPLETED = 10;
+const VERIFY_MIN_RATING = 4.5;
+const VERIFY_MAX_CANCEL_RATE = 10; // percent
+
+const checkAutoVerify = async (handymanUserId, io) => {
+  const handyman = await Handyman.findOne({ userId: handymanUserId });
+  if (!handyman || handyman.verified || handyman.registrationStatus !== 'approved') return;
+
+  const [completed, cancelled] = await Promise.all([
+    Order.countDocuments({ handymanId: handymanUserId, status: 'completed' }),
+    Order.countDocuments({ handymanId: handymanUserId, status: 'cancelled' }),
+  ]);
+  const total = completed + cancelled;
+  const cancelRate = total > 0 ? (cancelled / total) * 100 : 0;
+
+  if (completed >= VERIFY_MIN_COMPLETED && handyman.rating >= VERIFY_MIN_RATING && cancelRate < VERIFY_MAX_CANCEL_RATE) {
+    handyman.verified = true;
+    await handyman.save();
+    if (io) {
+      await createNotification(
+        io, handymanUserId, 'handyman_verified',
+        '✅ تم توثيق حسابك',
+        'تهانينا! لقد استوفيت معايير التوثيق وتم تفعيل شارة الحرفي الموثوق على حسابك.',
+        { handymanId: handymanUserId }
+      );
+    }
+    console.log(`✅ Auto-verified handyman ${handymanUserId}`);
+  }
+};
+
+// Monthly target constant (motivational only — no effect on status)
+const MONTHLY_ORDER_TARGET = 10;
 
 // =====================================================
 // ========== HELPER FUNCTIONS ==========
@@ -124,7 +164,7 @@ const getNearbyHandymen = async (req, res) => {
       const maxDistance = Number(radius);
       
       handymenList.forEach(h => {
-         const normDist = h.distance ? Math.max(0, (maxDistance - h.distance) / maxDistance) : 0;
+         const normDist = h.distance != null ? Math.max(0, (maxDistance - h.distance) / maxDistance) : 0;
          const normRating = (h.rating || 0) / 5.0;
          const normAccept = h.acceptanceRate;
          h.smartScore = (normDist * DIST_WEIGHT) + (normRating * RATING_WEIGHT) + (normAccept * ACCEPT_WEIGHT);
@@ -248,7 +288,9 @@ const getHandymanStatus = async (req, res) => {
         isAvailable: handyman.isAvailable,
         registeredAt: handyman.registeredAt,
         approvedAt: handyman.approvedAt,
-        rejectedAt: handyman.rejectedAt
+        rejectedAt: handyman.rejectedAt,
+        city: handyman.userId?.city || null,
+        address: handyman.address || null,
       }
     });
 
@@ -281,34 +323,33 @@ const getHandymanFullProfile = async (req, res) => {
       });
     }
 
-    // Check if handyman is active
-    if (handyman.registrationStatus === 'pending') {
-      return res.status(403).json({
-        success: false,
-        msg: 'حسابك في انتظار موافقة الأدمن',
-        status: 'pending'
-      });
-    }
-
-    if (handyman.registrationStatus === 'rejected') {
-      return res.status(403).json({
-        success: false,
-        msg: `تم رفض حسابك: ${handyman.adminNote || handyman.rejectedReason || 'غير محدد'}`,
-        status: 'rejected'
-      });
-    }
-
-    if (handyman.isSuspended) {
-      return res.status(403).json({
-        success: false,
-        msg: handyman.suspendedReason ? `حسابك معلق: ${handyman.suspendedReason}` : 'حسابك معلق مؤقتاً',
-        status: 'suspended'
-      });
-    }
+    const isActive = handyman.registrationStatus === 'approved' &&
+      !handyman.isSuspended &&
+      !handyman.deletedAt;
 
     res.status(200).json({
       success: true,
-      data: handyman
+      status: handyman.registrationStatus,
+      note: handyman.adminNote || handyman.rejectedReason || '',
+      isActive,
+      isSuspended: handyman.isSuspended,
+      suspendedReason: handyman.suspendedReason || '',
+      handyman: {
+        _id: handyman._id,
+        userId: handyman.userId,
+        profession: handyman.profession,
+        price: handyman.price,
+        experienceYears: handyman.experienceYears,
+        rating: handyman.rating,
+        verified: handyman.verified,
+        isAvailable: handyman.isAvailable,
+        bio: handyman.bio,
+        gallery: handyman.gallery || [],
+        completedOrders: handyman.completedOrders,
+        registrationStatus: handyman.registrationStatus,
+        city: handyman.userId?.city || handyman.city || null,
+        address: handyman.address || null,
+      }
     });
 
   } catch (error) {
@@ -555,6 +596,40 @@ const getHandymanAnalytics = async (req, res) => {
 };
 
 // =====================================================
+// ========== MONTHLY STATS ENDPOINT ==========
+// =====================================================
+
+/**
+ * @desc    Get current month's completed order count for the logged-in handyman
+ * @route   GET /api/handymen/monthly-stats
+ * @access  Private (Handyman only)
+ */
+const getMonthlyStats = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+    const monthlyCompleted = await Order.countDocuments({
+      handymanId: userId,
+      status: 'completed',
+      updatedAt: { $gte: startOfMonth, $lte: endOfMonth },
+    });
+
+    res.status(200).json({
+      monthlyCompleted,
+      target: MONTHLY_ORDER_TARGET,
+      month: now.getMonth() + 1,
+      year: now.getFullYear(),
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// =====================================================
 // ========== EXPORTS ==========
 // =====================================================
 
@@ -567,4 +642,6 @@ module.exports = {
   getHandymanStatus,
   getHandymanFullProfile,
   updateAvailability,
+  getMonthlyStats,
+  checkAutoVerify,
 };

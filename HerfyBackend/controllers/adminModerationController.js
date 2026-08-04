@@ -212,6 +212,50 @@ const getAuditLogs = async (req, res) => {
   }
 };
 
+// ========== Lift a pending-review suspension early (admin action) ==========
+const liftPendingReviewSuspension = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reason = '' } = req.body;
+
+    const user = await User.findById(userId);
+    const handyman = await Handyman.findOne({ userId });
+
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+
+    let lifted = false;
+    if (user.isSuspendedPendingReview) {
+      user.isSuspendedPendingReview = false;
+      user.suspendedPendingReviewReason = null;
+      await user.save();
+      lifted = true;
+    }
+    if (handyman?.isSuspendedPendingReview) {
+      handyman.isSuspendedPendingReview = false;
+      handyman.suspendedPendingReviewReason = null;
+      await handyman.save();
+      lifted = true;
+    }
+
+    if (!lifted) return res.status(400).json({ msg: 'User is not suspended pending review' });
+
+    await logAction(req.user._id, 'user.liftSuspension', 'User', userId, reason);
+
+    const io = req.app.get('io');
+    await createNotification(
+      io, userId, 'system_alert',
+      '✅ تم رفع التعليق المؤقت',
+      'تم رفع التعليق المؤقت عن حسابك بعد مراجعة الأدمن. يمكنك الآن استخدام المنصة بشكل طبيعي.',
+      { reason }
+    );
+
+    res.status(200).json({ msg: 'Suspension lifted successfully' });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
 module.exports = {
   approveHandyman,
   rejectHandyman,
@@ -219,4 +263,5 @@ module.exports = {
   deleteUserAccount,
   banUserWithReason,
   getAuditLogs,
+  liftPendingReviewSuspension,
 };

@@ -5,6 +5,7 @@ const Handyman = require("../models/Handyman");
 const axios = require("axios");
 const mongoose = require("mongoose");
 const { createNotification } = require("./notificationController");
+const { checkAutoVerify } = require("./handymanController");
 
 // ========== 1. create order ==========
 const createOrder = async (req, res) => {
@@ -29,6 +30,13 @@ const createOrder = async (req, res) => {
     const customer = await User.findById(req.user.id);
     if (!customer) {
       return res.status(404).json({ msg: "Customer not found" });
+    }
+
+    if (customer.isSuspendedPendingReview) {
+      return res.status(403).json({
+        msg: customer.suspendedPendingReviewReason || "حسابك معلق مؤقتاً بسبب تجاوز حد الإلغاء الشهري. سيُرفع التعليق تلقائياً في بداية الشهر القادم.",
+        suspendedPendingReview: true,
+      });
     }
 
     if (customer.penaltyCount && customer.penaltyCount >= 3) {
@@ -246,23 +254,16 @@ const updateOrderStatus = async (req, res) => {
         return res.status(403).json({ msg: "Only customer or handyman can cancel pending order" });
       }
 
-      if (currentStatus === "accepted" && isCustomer) {
-        // No penalty - customer hasn't confirmed price yet
-      }
+      // Post-price-confirmation cancellations count toward the monthly limit.
+      // Cancellations before price_confirmed are free (negotiation flow).
+      const isPostConfirmation = ["price_confirmed", "in-progress"].includes(currentStatus);
+      const MONTHLY_CANCEL_LIMIT = 3;
+      const now = new Date();
 
-      if (currentStatus === "accepted" && isHandyman) {
-        // No penalty - customer hasn't confirmed price yet
-      }
-
-      if (
-        (currentStatus === "price_confirmed" || currentStatus === "in-progress") && isHandyman) {
-        const handyman = await Handyman.findOne({
-          userId: order.handymanId,
-        });
-
+      if (isPostConfirmation && isHandyman) {
+        const handyman = await Handyman.findOne({ userId: order.handymanId });
         if (handyman) {
-          const now = new Date();
-
+          // Reset counter if new calendar month
           if (
             handyman.monthlyCancellationMonth !== now.getMonth() ||
             handyman.monthlyCancellationYear !== now.getFullYear()
@@ -270,55 +271,106 @@ const updateOrderStatus = async (req, res) => {
             handyman.monthlyCancellationCount = 0;
             handyman.monthlyCancellationMonth = now.getMonth();
             handyman.monthlyCancellationYear = now.getFullYear();
+            // Also lift any pending-review suspension from last month
+            if (handyman.isSuspendedPendingReview) {
+              handyman.isSuspendedPendingReview = false;
+              handyman.suspendedPendingReviewReason = null;
+            }
           }
 
           handyman.monthlyCancellationCount++;
-
-          if (handyman.monthlyCancellationCount >= 3) {
-            handyman.penaltyAmount += 50;
-
-            const io = req.app.get("io");
-
-            await createNotification(
-              io,
-              order.handymanId,
-              "penalty_warning",
-              "Penalty Warning",
-              "You have received a 50 EGP penalty due to repeated cancellations.",
-              {
-                orderId: order._id,
-                penaltyAmount: handyman.penaltyAmount,
-              }
-            );
-          }
-
           handyman.rating = Math.max(0, handyman.rating - 0.5);
 
+          const io = req.app.get("io");
+          if (handyman.monthlyCancellationCount > MONTHLY_CANCEL_LIMIT) {
+            // 4th+ cancellation this month → temporary suspension
+            handyman.isSuspendedPendingReview = true;
+            const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+            handyman.suspendedPendingReviewReason = `تجاوزت الحد الشهري للإلغاء (${MONTHLY_CANCEL_LIMIT} إلغاءات). سيُرفع التعليق تلقائياً في ${nextMonth.toLocaleDateString('ar-EG')} أو بعد مراجعة الأدمن.`;
+            await createNotification(
+              io, order.handymanId, 'account_blocked',
+              '⚠️ تعليق مؤقت',
+              `تم تعليق حسابك مؤقتاً لتجاوز حد الإلغاء الشهري (${MONTHLY_CANCEL_LIMIT}). سيُرفع التعليق تلقائياً في بداية الشهر القادم.`,
+              { orderId: order._id, cancelCount: handyman.monthlyCancellationCount }
+            );
+            // Notify admins
+            const admins = await require('../models/User').find({ isAdmin: true }).select('_id').lean();
+            for (const admin of admins) {
+              await createNotification(io, admin._id, 'system_alert', '🚨 حرفي تجاوز حد الإلغاء',
+                `الحرفي ${req.user.name} تجاوز ${MONTHLY_CANCEL_LIMIT} إلغاءات هذا الشهر وتم تعليقه مؤقتاً.`,
+                { handymanId: order.handymanId, orderId: order._id }
+              );
+            }
+          } else if (handyman.monthlyCancellationCount === MONTHLY_CANCEL_LIMIT) {
+            // Exactly at limit — warn
+            await createNotification(
+              io, order.handymanId, 'penalty_warning',
+              '⚠️ تحذير: آخر إلغاء مسموح',
+              `لقد استخدمت ${MONTHLY_CANCEL_LIMIT} إلغاءات هذا الشهر. أي إلغاء إضافي سيؤدي إلى تعليق مؤقت.`,
+              { orderId: order._id }
+            );
+          }
           await handyman.save();
         }
       }
 
-
-      if (currentStatus === "in-progress" && isCustomer) {
-        const customer = await User.findById(order.customerId);
+      if (isPostConfirmation && isCustomer) {
+        const customer = await require('../models/User').findById(order.customerId);
         if (customer) {
+          // Reset counter if new calendar month
+          if (
+            customer.monthlyCancellationMonth !== now.getMonth() ||
+            customer.monthlyCancellationYear !== now.getFullYear()
+          ) {
+            customer.monthlyCancellationCount = 0;
+            customer.monthlyCancellationMonth = now.getMonth();
+            customer.monthlyCancellationYear = now.getFullYear();
+            if (customer.isSuspendedPendingReview) {
+              customer.isSuspendedPendingReview = false;
+              customer.suspendedPendingReviewReason = null;
+            }
+          }
+
+          customer.monthlyCancellationCount++;
+          // Existing per-cancellation penalty stays
           customer.penaltyCount = (customer.penaltyCount || 0) + 1;
           customer.penaltyAmount = (customer.penaltyAmount || 0) + 50;
-          if (customer.penaltyCount >= 3) {
-            customer.isPenalized = true;
+
+          const io = req.app.get('io');
+          if (customer.monthlyCancellationCount > MONTHLY_CANCEL_LIMIT) {
+            customer.isSuspendedPendingReview = true;
+            const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+            customer.suspendedPendingReviewReason = `تجاوزت الحد الشهري للإلغاء (${MONTHLY_CANCEL_LIMIT} إلغاءات). سيُرفع التعليق تلقائياً في ${nextMonth.toLocaleDateString('ar-EG')} أو بعد مراجعة الأدمن.`;
+            await createNotification(
+              io, order.customerId, 'account_blocked',
+              '⚠️ تعليق مؤقت',
+              `تم تعليق حسابك مؤقتاً لتجاوز حد الإلغاء الشهري (${MONTHLY_CANCEL_LIMIT}). سيُرفع التعليق تلقائياً في بداية الشهر القادم.`,
+              { orderId: order._id, cancelCount: customer.monthlyCancellationCount }
+            );
+            const admins = await require('../models/User').find({ isAdmin: true }).select('_id').lean();
+            for (const admin of admins) {
+              await createNotification(io, admin._id, 'system_alert', '🚨 عميل تجاوز حد الإلغاء',
+                `العميل ${req.user.name} تجاوز ${MONTHLY_CANCEL_LIMIT} إلغاءات هذا الشهر وتم تعليقه مؤقتاً.`,
+                { customerId: order.customerId, orderId: order._id }
+              );
+            }
+          } else if (customer.monthlyCancellationCount === MONTHLY_CANCEL_LIMIT) {
+            await createNotification(
+              io, order.customerId, 'penalty_warning',
+              '⚠️ تحذير: آخر إلغاء مسموح',
+              `لقد استخدمت ${MONTHLY_CANCEL_LIMIT} إلغاءات هذا الشهر. أي إلغاء إضافي سيؤدي إلى تعليق مؤقت.`,
+              { orderId: order._id }
+            );
+          } else {
+            await createNotification(
+              io, order.customerId, 'penalty_warning',
+              '⚠️ غرامة إلغاء',
+              `تم خصم 50 ج.م غرامة إلغاء. إلغاءاتك هذا الشهر: ${customer.monthlyCancellationCount} من ${MONTHLY_CANCEL_LIMIT}.`,
+              { orderId: order._id, penaltyCount: customer.penaltyCount }
+            );
           }
           await customer.save();
         }
-        // ========== NOTIFICATION: Penalty warning ==========
-        const io = req.app.get('io');
-        await createNotification(
-          io,
-          order.customerId,
-          'penalty_warning',
-          ' Penalty Warning',
-          `You have been charged a 50 EGP penalty. Total penalties: ${customer.penaltyCount}`,
-          { orderId: order._id, penaltyCount: customer.penaltyCount }
-        );
       }
 
       if (currentStatus === "completed") {
@@ -355,6 +407,12 @@ const updateOrderStatus = async (req, res) => {
         if (handymanProfile?.isSuspended) {
           return res.status(403).json({
             msg: `حسابك موقوف مؤقتاً (${handymanProfile.suspendedReason || 'رصيد عمولة مستحق'}). تواصل مع الدعم للتسوية.`,
+          });
+        }
+        if (handymanProfile?.isSuspendedPendingReview) {
+          return res.status(403).json({
+            msg: handymanProfile.suspendedPendingReviewReason || 'حسابك معلق مؤقتاً بسبب تجاوز حد الإلغاء الشهري.',
+            suspendedPendingReview: true,
           });
         }
       }
@@ -510,6 +568,8 @@ const updateOrderStatus = async (req, res) => {
         `${req.user.name} completed your order`,
         { orderId: order._id }
       );
+      // Trigger auto-verify check after every completion
+      checkAutoVerify(order.handymanId, io).catch(() => {});
     }
 
     if (!orderAlreadySaved) {

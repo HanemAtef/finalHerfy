@@ -650,11 +650,11 @@ const approveRegistrationRequest = async (req, res) => {
       });
     }
 
-    // Update handyman status
+    // Update handyman status — verified stays false until earned criteria met
     handyman.registrationStatus = 'approved';
     handyman.approvedAt = new Date();
     handyman.adminNote = note || 'تم الموافقة على حسابك';
-    handyman.verified = true;
+    handyman.verified = false;
     handyman.rejected = false;
     handyman.rejectedReason = null;
     await handyman.save();

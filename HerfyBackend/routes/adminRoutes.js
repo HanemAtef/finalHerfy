@@ -22,6 +22,7 @@ const {
   deleteUserAccount,
   banUserWithReason,
   getAuditLogs,
+  liftPendingReviewSuspension,
 } = require("../controllers/adminModerationController");
 const {
   listCities, createCity, updateCity, deleteCity,
@@ -54,8 +55,9 @@ router.get("/dashboard/chart", getDashboardChart);
 // ========== USER MANAGEMENT ==========
 // =====================================================
 router.get("/users", getAllUsers);
-router.patch("/users/:userId/ban", toggleUserBan); // legacy, kept for compatibility
+router.patch("/users/:userId/ban", toggleUserBan);
 router.patch("/users/:userId/ban-with-reason", banUserWithReason);
+router.patch("/users/:userId/lift-suspension", liftPendingReviewSuspension);
 router.delete("/users/:userId", deleteUserAccount);
 
 // =====================================================

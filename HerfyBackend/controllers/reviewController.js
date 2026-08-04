@@ -1,7 +1,8 @@
 const Review=require("../models/Review");
 const Handyman=require("../models/Handyman");
 const User=require("../models/User");
-const Order=require("../models/Order")
+const Order=require("../models/Order");
+const { checkAutoVerify } = require("./handymanController");
 
 //add review
 const addReview =async(req,res)=>{
@@ -43,6 +44,10 @@ const review = await Review.create({
       { userId: order.handymanId },
       { rating: avgRating }
     );
+
+    // Trigger auto-verify check after every rating update
+    const io = req.app?.get('io');
+    checkAutoVerify(order.handymanId, io).catch(() => {});
 
     res.status(201).json({
       msg: "Review added successfully",

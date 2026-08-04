@@ -12,42 +12,23 @@ const {
   updateHandymanProfile,
   getHandymanAnalytics,
   toggleAvailability,
-  getHandymanStatus,        // ✅ تأكد من استيرادها
-  getHandymanFullProfile,   // ✅ تأكد من استيرادها
-  updateAvailability,       // ✅ تأكد من استيرادها
+  getHandymanStatus,
+  getHandymanFullProfile,
+  updateAvailability,
+  getMonthlyStats,
 } = require("../controllers/handymanController");
-
-// =====================================================
-// ========== PUBLIC ROUTES (No auth required) ==========
-// =====================================================
 
 console.log("✅ Handyman Routes loaded");
 
+// Public
 router.get("/nearby", getNearbyHandymen);
 
-// =====================================================
-// ========== PROTECTED ROUTES (Auth required) ==========
-// =====================================================
+// Fixed paths MUST come before /:id
+router.get("/status", authMiddleware, allowedToMiddleware("handyman"), getHandymanStatus);
+router.get("/profile", authMiddleware, allowedToMiddleware("handyman"), getHandymanFullProfile);
+router.get("/monthly-stats", authMiddleware, allowedToMiddleware("handyman"), getMonthlyStats);
 
-// ✅ IMPORTANT: Add status route BEFORE the /:id route
-// because Express matches routes in order
-router.get(
-  "/status",
-  authMiddleware,
-  allowedToMiddleware("handyman"),
-  getHandymanStatus
-);
-
-router.get(
-  "/profile",
-  authMiddleware,
-  allowedToMiddleware("handyman"),
-  checkHandymanActive,
-  getHandymanFullProfile
-);
-
-// Keep parameterized routes after fixed paths; otherwise `/status` is
-// interpreted as an id and never reaches the status controller.
+// Parameterized
 router.get("/:id", getHandymanDetails);
 
 router.put(

@@ -117,6 +117,26 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // Temporary suspension from exceeding monthly cancellation limit.
+    // Lifts automatically at start of next calendar month or by admin.
+    isSuspendedPendingReview: {
+      type: Boolean,
+      default: false,
+    },
+    suspendedPendingReviewReason: {
+      type: String,
+      default: null,
+    },
+    // Temporary suspension from exceeding monthly cancellation limit.
+    // Lifts automatically at start of next calendar month or by admin.
+    isSuspendedPendingReview: {
+      type: Boolean,
+      default: false,
+    },
+    suspendedPendingReviewReason: {
+      type: String,
+      default: null,
+    },
     // FIX (M4): admin account deletion used to hard-delete the User row,
     // leaving Order/Message/Review/Notification documents pointing at a
     // now-nonexistent user (populate() silently returns null for that

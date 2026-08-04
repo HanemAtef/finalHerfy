@@ -106,6 +106,17 @@ const handymanSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Temporary suspension from exceeding monthly cancellation limit.
+    isSuspendedPendingReview: {
+      type: Boolean,
+      default: false,
+    },
+
+    suspendedPendingReviewReason: {
+      type: String,
+      default: null,
+    },
+
     // ** إضافة حقول التسجيل والموافقة **
     registrationStatus: {
       type: String,

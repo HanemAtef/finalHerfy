@@ -321,7 +321,7 @@ const loginUser = async (req, res) => {
       if (handyman) {
         handymanStatus = handyman.registrationStatus;
         
-        // If handyman registration is rejected
+        // Rejected handymen cannot log in
         if (handymanStatus === 'rejected') {
           return res.status(403).json({
             msg: `تم رفض طلب التسجيل الخاص بك. السبب: ${handyman.adminNote || handyman.rejectedReason || 'غير محدد'}`,
@@ -329,15 +329,7 @@ const loginUser = async (req, res) => {
             note: handyman.adminNote || handyman.rejectedReason
           });
         }
-        
-        // If handyman registration is pending
-        if (handymanStatus === 'pending') {
-          return res.status(403).json({
-            msg: "حسابك في انتظار موافقة الأدمن. يرجى التحقق من بريدك الإلكتروني للإشعارات.",
-            status: 'pending',
-            email: user.email
-          });
-        }
+        // Pending handymen CAN log in — they see the pending card in the dashboard
       } else {
         // User is handyman but no profile exists (shouldn't happen)
         return res.status(403).json({
@@ -357,6 +349,9 @@ const loginUser = async (req, res) => {
 
     if (handymanStatus) {
       response.handymanStatus = handymanStatus;
+      if (handymanStatus === 'pending') {
+        response.msg = "حسابك في انتظار موافقة الأدمن.";
+      }
     }
 
     res.status(200).json(response);
