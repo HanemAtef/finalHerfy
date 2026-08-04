@@ -82,21 +82,16 @@ export default function TrackingPage() {
       ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime }) => {
         setHandymanLoc({ latitude: lat, longitude: lng });
 
-        if (distanceRemaining !== undefined) setDistance(distanceRemaining);
-        if (eta !== undefined) setEta(eta);
-        if (trafficDelay !== undefined) setTrafficDelay(trafficDelay);
-        if (arrivalTime !== undefined) setArrivalTime(arrivalTime);
-      },
-    );
-
-    socket.on("tracking-started", () => {
+    // FIX: الباك اند بيعمل emit باسم 'trackingStarted' (camelCase) مش
+    // 'tracking-started'، فكان الحدث ده مبيتستقبلش أبدًا.
+    socket.on('trackingStarted', () => {
       dispatch(fetchOrderById(orderId));
     });
 
     return () => {
-      socket.emit("leaveOrderRoom", orderId);
-      socket.off("locationUpdate");
-      socket.off("tracking-started");
+      socket.emit('leaveOrderRoom', orderId);
+      socket.off('locationUpdate');
+      socket.off('trackingStarted');
     };
   }, [orderId, dispatch, token]);
 

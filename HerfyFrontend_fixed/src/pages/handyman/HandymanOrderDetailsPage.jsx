@@ -11,23 +11,15 @@ import {
   FaCamera,
   FaFlag,
   FaBan,
-} from "react-icons/fa";
-import {
-  fetchOrderById,
-  updateOrderStatus,
-  confirmOrderPayment,
-  markOrderOnTheWay,
-} from "../../store/slices/orderSlice";
-import { uploadService, reportService } from "../../services/api";
-import { connectSocket } from "../../socket/socket";
-import LoadingSpinner from "../../components/common/LoadingSpinner";
-import LocationLabel from "../../components/common/LocationLabel";
-import ReasonModal from "../../components/common/ReasonModal";
-import {
-  formatDate,
-  formatPrice,
-  ORDER_STATUS_LABELS,
-} from "../../utils/helpers";
+} from 'react-icons/fa';
+import { fetchOrderById, updateOrderStatus, confirmOrderPayment, markOrderOnTheWay } from '../../store/slices/orderSlice';
+import { uploadService, reportService } from '../../services/api';
+import { connectSocket } from '../../socket/socket';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
+import LocationLabel from '../../components/common/LocationLabel';
+import ReasonModal from '../../components/common/ReasonModal';
+import AlertMessage from '../../components/common/AlertMessage';
+import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
 
 export default function HandymanOrderDetailsPage() {
   const { id } = useParams();
@@ -160,7 +152,7 @@ export default function HandymanOrderDetailsPage() {
         >
           <FaArrowRight size={20} />
         </button>
-        <h1 className="text-xl font-bold text-primary">تفاصيل الطلب</h1>
+        <h1 className="text-2xl font-bold text-textDark">تفاصيل الطلب</h1>
       </div>
 
       {error && (
@@ -187,12 +179,12 @@ export default function HandymanOrderDetailsPage() {
         </div>
       )}
 
-      <div className="card mb-4">
-        <div className="mb-4 flex items-center justify-between">
-          <span className="rounded-lg bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
+      <div className="overflow-hidden rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6 transition-all hover:shadow-lg">
+        <div className="mb-5 flex items-center justify-between border-b border-gray-50 pb-4">
+          <span className="rounded-xl bg-primary/10 px-4 py-1.5 text-sm font-bold text-primary">
             #{String(id).slice(-5)}
           </span>
-          <span className="text-sm font-medium text-secondary">
+          <span className="text-sm font-semibold text-secondary bg-secondary/10 px-3 py-1.5 rounded-xl">
             {ORDER_STATUS_LABELS[currentOrder.status]}
           </span>
         </div>
@@ -249,10 +241,10 @@ export default function HandymanOrderDetailsPage() {
         </div>
       </div>
 
-      <div className="card mb-4">
-        <div className="flex items-center gap-2 text-primary mb-2">
-          <FaMapMarkerAlt />
-          <span className="font-bold">موقع العميل</span>
+      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
+        <div className="flex items-center gap-2 text-primary mb-3">
+          <FaMapMarkerAlt size={18} />
+          <span className="font-bold text-lg">موقع العميل</span>
         </div>
         <p className="text-sm text-textGray">
           {currentOrder.customerLocation?.coordinates ? (
@@ -269,8 +261,8 @@ export default function HandymanOrderDetailsPage() {
 
       {/* Accepting requires setting a price first — this is what the customer
           will be asked to confirm on the next step, so it can't be skipped. */}
-      {currentOrder.status === "pending" && (
-        <div className="card mb-4">
+      {currentOrder.status === 'pending' && (
+        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
           <label className="mb-2 block text-sm font-bold text-textDark">
             حدد السعر الذي تعرضه على العميل (ج.م)
           </label>
@@ -302,15 +294,15 @@ export default function HandymanOrderDetailsPage() {
         </div>
       )}
 
-      {currentOrder.status === "accepted" && (
-        <div className="card mb-4 text-center text-sm text-textGray">
+      {currentOrder.status === 'accepted' && (
+        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6 text-center text-sm font-medium text-textGray">
           بانتظار موافقة العميل على السعر ({formatPrice(currentOrder.price)})
         </div>
       )}
 
-      {currentOrder.status === "price_confirmed" && (
-        <div className="card mb-4">
-          {currentOrder.requestType === "scheduled" && (
+      {currentOrder.status === 'price_confirmed' && (
+        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
+          {currentOrder.requestType === 'scheduled' && (
             <p className="mb-3 text-sm text-textGray">
               موعد الطلب: {formatDate(currentOrder.scheduledDate)}
             </p>
@@ -342,8 +334,8 @@ export default function HandymanOrderDetailsPage() {
 
       {/* Completing requires a proof-of-completion photo — the backend now
           rejects a "completed" transition without one. */}
-      {currentOrder.status === "in-progress" && (
-        <div className="card mb-4">
+      {currentOrder.status === 'in-progress' && (
+        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
           <label className="mb-2 block text-sm font-bold text-textDark">
             صورة إثبات إتمام العمل (مطلوبة)
           </label>
@@ -396,8 +388,8 @@ export default function HandymanOrderDetailsPage() {
 
       {/* Cash payment: after finishing the job the handyman collects cash
           from the customer, then confirms it in the app. */}
-      {currentOrder.status === "completed" && (
-        <div className="card mt-4">
+      {currentOrder.status === 'completed' && (
+        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mt-6 mb-6">
           {currentOrder.completionImage && (
             <div className="mb-4">
               <p className="mb-2 text-sm font-bold text-textDark">
