@@ -9,14 +9,13 @@ import {
   FaCheck,
   FaTimes,
   FaEdit,
-  FaHourglassHalf,
-  FaExclamationCircle,
   FaBan,
-  FaArrowRight,
 } from 'react-icons/fa';
 import { getPendingOrders, updateOrderStatus } from '../../store/slices/orderSlice';
 import { handymanService } from '../../services/api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
+import PendingReviewCard from '../../components/handyman/PendingReviewCard';
+import MonthlyTargetBar from '../../components/handyman/MonthlyTargetBar';
 import { formatPrice, getDefaultAvatar } from '../../utils/helpers';
 
 const greeting = () => {
@@ -32,34 +31,161 @@ export default function HandymanDashboard() {
   const [available, setAvailable] = useState(true);
   const [analytics, setAnalytics] = useState(null);
   const [registrationStatus, setRegistrationStatus] = useState(null);
+  const [handymanData, setHandymanData] = useState(null);
   const [statusNote, setStatusNote] = useState(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
+  const [monthlyStats, setMonthlyStats] = useState(null);
 
   useEffect(() => {
-    // Check handyman registration status
     const checkStatus = async () => {
       try {
         const res = await handymanService.getStatus();
-        setRegistrationStatus(res.data.status);
-        setStatusNote(res.data.note);
+        // console.log('[HandymanDashboard] status response:', res.data);
+        
+        if (res.data) {
+          const status = res.data.status || res.data.data?.status || res.data.user?.registrationStatus;
+          setRegistrationStatus(status);
+          setStatusNote(res.data.msg || res.data.note || null);
+          
+          let handymanInfo = null;
+          if (res.data.data) {
+            handymanInfo = res.data.data;
+          } else if (res.data.handyman) {
+            handymanInfo = res.data.handyman;
+          } else if (res.data.user) {
+            handymanInfo = res.data.user;
+          } else if (res.data.profession || res.data.specialization) {
+            handymanInfo = res.data;
+          }
+          
+          // ✅ إذا لم تكن هناك بيانات، استخدم بيانات المستخدم
+          if (!handymanInfo) {
+            handymanInfo = {
+              ...user,
+              profession: user?.profession || user?.specialization ,
+              city: user?.city || user?.address?.city ,
+              experienceYears: user?.experienceYears ,
+              price: user?.price || user?.hourlyRate,
+            };
+          }
+          
+          setHandymanData(handymanInfo);
+          
+          // ✅ محاولة جلب البيانات من التخزين المحلي
+          const savedHandymanData = localStorage.getItem('handymanRegistrationData');
+          if (savedHandymanData) {
+            try {
+              const parsedData = JSON.parse(savedHandymanData);
+              // console.log('[HandymanDashboard] Found saved registration data:', parsedData);
+              // دمج البيانات المحفوظة مع البيانات الحالية
+              setHandymanData(prev => ({
+                ...prev,
+                ...parsedData,
+                // التأكد من أن البيانات الأساسية تبقى
+                name: prev?.name || parsedData.name,
+                email: prev?.email || parsedData.email,
+              }));
+            } catch (e) {
+              console.error('Error parsing saved handyman data:', e);
+            }
+          }
+          
+          if (status === 'pending' || res.data.status === 'pending') {
+            await fetchHandymanFullData();
+          }
+        }
       } catch (error) {
-        console.error('Error fetching status:', error);
-        // If error, try to get from user data
-        if (user?.registrationStatus) {
+        console.error('[HandymanDashboard] status error:', error?.response?.data || error.message);
+        
+        const errorData = error?.response?.data;
+        if (errorData) {
+          if (errorData.status) {
+            setRegistrationStatus(errorData.status);
+            setStatusNote(errorData.msg || errorData.note || null);
+          }
+          if (errorData.data) {
+            setHandymanData(errorData.data);
+          } else if (errorData.user) {
+            setHandymanData(errorData.user);
+          }
+        }
+        
+        if (user?.registrationStatus && !registrationStatus) {
           setRegistrationStatus(user.registrationStatus);
+        }
+        
+        // ✅ بناء بيانات الحرفي من user
+        if (user && !handymanData) {
+          const userData = {
+            ...user,
+            profession: user?.profession || user?.specialization || 'قيد التحديد',
+            city: user?.city || user?.address?.city || 'قيد التحديد',
+            experienceYears: user?.experienceYears || user?.experience || 0,
+            price: user?.price || user?.hourlyRate || 0,
+          };
+          setHandymanData(userData);
+        }
+
+        // ✅ محاولة جلب البيانات من التخزين المحلي
+        const savedHandymanData = localStorage.getItem('handymanRegistrationData');
+        if (savedHandymanData && !handymanData) {
+          try {
+            const parsedData = JSON.parse(savedHandymanData);
+            // console.log('[HandymanDashboard] Found saved registration data in error:', parsedData);
+            setHandymanData(prev => ({
+              ...prev,
+              ...parsedData,
+            }));
+          } catch (e) {
+            console.error('Error parsing saved handyman data:', e);
+          }
+        }
+
+        if (user?.registrationStatus === 'pending' || errorData?.status === 'pending') {
+          await fetchHandymanFullData();
         }
       } finally {
         setLoadingStatus(false);
       }
     };
 
+    const fetchHandymanFullData = async () => {
+      try {
+        // console.log('[HandymanDashboard] Fetching full handyman data...');
+        const profileRes = await handymanService.getHandymanProfile();
+        console.log('[HandymanDashboard] Full handyman data:', profileRes.data);
+        if (profileRes.data) {
+          const nextData = profileRes.data.handyman || profileRes.data.data || profileRes.data;
+          setHandymanData(nextData);
+        }
+      } catch (error) {
+        // console.log('[HandymanDashboard] Could not fetch full handyman data (pending status expected)');
+        // ✅ محاولة استخدام البيانات المحفوظة في localStorage
+        const savedData = localStorage.getItem('handymanRegistrationData');
+        if (savedData) {
+          try {
+            const parsed = JSON.parse(savedData);
+            // console.log('[HandymanDashboard] Using saved registration data:', parsed);
+            setHandymanData(prev => ({
+              ...prev,
+              ...parsed,
+            }));
+          } catch (e) {
+            console.error('Error parsing saved data:', e);
+          }
+        }
+      }
+    };
+
     checkStatus();
   }, [user]);
 
+  // تأثير منفصل لتحميل البيانات بعد تأكيد الحالة
   useEffect(() => {
     if (user?._id && registrationStatus === 'approved') {
       dispatch(getPendingOrders(user._id));
       handymanService.getAnalytics(user._id).then((res) => setAnalytics(res.data)).catch(() => {});
+      handymanService.getMonthlyStats().then((res) => setMonthlyStats(res.data)).catch(() => {});
       handymanService
         .getById(user._id)
         .then((res) => {
@@ -87,7 +213,6 @@ export default function HandymanDashboard() {
   // ========== RENDER BASED ON REGISTRATION STATUS ==========
   // =====================================================
 
-  // Show loading while checking status
   if (loadingStatus) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
@@ -97,54 +222,27 @@ export default function HandymanDashboard() {
     );
   }
 
-  // Case 1: Registration is pending
-  if (registrationStatus === 'pending') {
-    return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
-        <div className="text-center">
-          <div className="mb-6 text-6xl">⏳</div>
-          <h2 className="mb-3 text-2xl font-bold text-warning">في انتظار موافقة الأدمن</h2>
-          <div className="mx-auto max-w-md">
-            <p className="mb-4 text-textGray">
-              تم استلام طلب التسجيل الخاص بك بنجاح. سيتم مراجعته من قبل فريق الأدمن وسيتم إعلامك عند الموافقة.
-            </p>
-            {statusNote && (
-              <div className="mb-4 rounded-lg bg-warning/10 p-4 text-sm text-warning">
-                <FaHourglassHalf className="inline mr-2" />
-                {statusNote}
-              </div>
-            )}
-            <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-600">
-              <p className="flex items-center gap-2">
-                <FaExclamationCircle />
-                يرجى التحقق من بريدك الإلكتروني بشكل دوري للإشعارات
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigate('/')}
-            className="mt-6 btn-outline flex items-center gap-2"
-          >
-            <FaArrowRight /> العودة للرئيسية
-          </button>
-        </div>
-      </div>
-    );
+  const isPending = registrationStatus === 'pending' || 
+                    user?.registrationStatus === 'pending' ||
+                    (user && !registrationStatus);
+
+  if (isPending) {
+    // console.log('[HandymanDashboard] Showing PendingReviewCard with data:', handymanData);
+    return <PendingReviewCard handymanData={handymanData} />;
   }
 
-  // Case 2: Registration is rejected
   if (registrationStatus === 'rejected') {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
         <div className="text-center">
           <div className="mb-6 text-6xl">❌</div>
-          <h2 className="mb-3 text-2xl font-bold text-danger">تم رفض طلب التسجيل</h2>
+          <h2 className="mb-3 text-2xl font-bold text-emergency">تم رفض طلب التسجيل</h2>
           <div className="mx-auto max-w-md">
             <p className="mb-4 text-textGray">
               نأسف لإبلاغك بأن طلب التسجيل الخاص بك كحرفي في منصة حرفي لم يتم الموافقة عليه.
             </p>
             {statusNote && (
-              <div className="mb-4 rounded-lg bg-danger/10 p-4 text-sm text-danger">
+              <div className="mb-4 rounded-lg bg-emergency/10 p-4 text-sm text-emergency">
                 <FaBan className="inline mr-2" />
                 <strong>سبب الرفض:</strong> {statusNote}
               </div>
@@ -154,12 +252,6 @@ export default function HandymanDashboard() {
             </div>
           </div>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-            <button
-              onClick={() => navigate('/handyman/register')}
-              className="btn-secondary flex items-center gap-2"
-            >
-              إعادة التقديم
-            </button>
             <button
               onClick={() => navigate('/')}
               className="btn-outline flex items-center gap-2"
@@ -172,7 +264,6 @@ export default function HandymanDashboard() {
     );
   }
 
-  // Case 3: Handyman is suspended
   if (analytics?.isSuspended) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
@@ -211,7 +302,6 @@ export default function HandymanDashboard() {
     );
   }
 
-  // Case 4: Not approved but not pending/rejected (fallback)
   if (registrationStatus !== 'approved') {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
@@ -238,9 +328,7 @@ export default function HandymanDashboard() {
 
   return (
     <div>
-      {/* Header */}
       <div className="mb-6 overflow-hidden rounded-3xl bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral p-6 transition-all duration-300 hover:shadow-lg relative">
-        {/* Subtle decorative background gradient */}
         <div className="absolute top-0 right-0 w-64 h-full bg-gradient-to-l from-primary/5 to-transparent pointer-events-none" />
         
         <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
@@ -249,7 +337,6 @@ export default function HandymanDashboard() {
             <p className="text-sm text-textGray">
               لديك {orders.length} طلب{orders.length !== 1 ? 'ات' : ''} جديد{orders.length !== 1 ? 'ة' : ''} اليوم
             </p>
-            {/* Status badge */}
             <div className="mt-2 flex items-center gap-2">
               <span className="inline-flex items-center gap-1 rounded-full bg-tertiary/10 px-3 py-1 text-xs font-bold text-tertiary">
                 <span className="h-2 w-2 rounded-full bg-tertiary"></span>
@@ -295,7 +382,6 @@ export default function HandymanDashboard() {
         </div>
       </div>
 
-      {/* Wallet Alert */}
       {analytics?.walletBalance > 0 && (
         <div
           className={`card mb-6 flex flex-wrap items-center justify-between gap-3 border-r-4 ${
@@ -318,7 +404,13 @@ export default function HandymanDashboard() {
         </div>
       )}
 
-      {/* Stats Cards */}
+      {monthlyStats && (
+        <MonthlyTargetBar
+          completed={monthlyStats.monthlyCompleted}
+          target={monthlyStats.target}
+        />
+      )}
+
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
         {[
           {
@@ -344,7 +436,6 @@ export default function HandymanDashboard() {
           },
         ].map(({ icon: Icon, color, title, value, sub }) => (
           <div key={title} className={`overflow-hidden rounded-2xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral transition-all duration-300 hover:-translate-y-1 hover:shadow-lg relative`}>
-            {/* Top border colored accent */}
             <div className={`absolute top-0 right-0 left-0 h-1 bg-gradient-to-l ${color.replace('border-', 'from-').replace('text-', 'from-')} to-transparent opacity-50`} />
             
             <div className="flex items-center gap-4 mb-4">
@@ -360,7 +451,6 @@ export default function HandymanDashboard() {
         ))}
       </div>
 
-      {/* Orders Section */}
       <section className="mb-8">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 font-bold text-textDark">
