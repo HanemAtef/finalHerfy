@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
-import { useDispatch, useSelector } from "react-redux";
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   FaArrowRight,
   FaBell,
@@ -14,31 +14,25 @@ import {
   FaBan,
   FaStar,
   FaFlag,
-} from "react-icons/fa";
-import {
-  fetchOrderById,
-  updateOrderStatus,
-  confirmOrderPrice,
-} from "../../store/slices/orderSlice";
-import { connectSocket } from "../../socket/socket";
-import { reportService } from "../../services/api";
-import TrackingMap from "../../components/Map/TrackingMap";
-import LoadingSpinner from "../../components/common/LoadingSpinner";
-import ReasonModal from "../../components/common/ReasonModal";
-import { formatPrice, formatDate, getDefaultAvatar } from "../../utils/helpers";
-import useCurrentLocation from "../../hooks/useCurrentLocation";
+} from 'react-icons/fa';
+import { fetchOrderById, updateOrderStatus, confirmOrderPrice } from '../../store/slices/orderSlice';
+import { connectSocket } from '../../socket/socket';
+import { reportService } from '../../services/api';
+import TrackingMap from '../../components/Map/TrackingMap';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
+import ReasonModal from '../../components/common/ReasonModal';
+import { formatPrice, formatDate, getDefaultAvatar } from '../../utils/helpers';
+import useCurrentLocation from '../../hooks/useCurrentLocation';
 
 export default function TrackingPage() {
   const { orderId } = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { currentOrder, isLoading, error } = useSelector(
-    (state) => state.orders,
-  );
+  const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
   const { token } = useSelector((state) => state.auth);
-
+  
   const { location, loading: locationLoading } = useCurrentLocation();
-
+  
   const [handymanLoc, setHandymanLoc] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
@@ -52,11 +46,7 @@ export default function TrackingPage() {
   }, [dispatch, orderId]);
 
   useEffect(() => {
-    if (
-      !currentOrder ||
-      ["completed", "cancelled"].includes(currentOrder.status)
-    )
-      return;
+    if (!currentOrder || ['completed', 'cancelled'].includes(currentOrder.status)) return;
     const interval = setInterval(() => dispatch(fetchOrderById(orderId)), 8000);
     return () => clearInterval(interval);
   }, [dispatch, orderId, currentOrder?.status]);
@@ -75,12 +65,16 @@ export default function TrackingPage() {
     // 8s REST poll).
     const socket = connectSocket(token);
 
-    socket.emit("joinOrderRoom", orderId);
+    socket.emit('joinOrderRoom', orderId);
 
-    socket.on(
-      "locationUpdate",
-      ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime }) => {
-        setHandymanLoc({ latitude: lat, longitude: lng });
+    socket.on('locationUpdate', ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime }) => {
+      setHandymanLoc({ latitude: lat, longitude: lng });
+      
+      if (distanceRemaining !== undefined) setDistance(distanceRemaining);
+      if (eta !== undefined) setEta(eta);
+      if (trafficDelay !== undefined) setTrafficDelay(trafficDelay);
+      if (arrivalTime !== undefined) setArrivalTime(arrivalTime);
+    });
 
     // FIX: الباك اند بيعمل emit باسم 'trackingStarted' (camelCase) مش
     // 'tracking-started'، فكان الحدث ده مبيتستقبلش أبدًا.
@@ -103,7 +97,7 @@ export default function TrackingPage() {
   }, [currentOrder]);
 
   const handleCancel = () => {
-    dispatch(updateOrderStatus({ id: orderId, status: "cancelled" }));
+    dispatch(updateOrderStatus({ id: orderId, status: 'cancelled' }));
   };
 
   const handleConfirmPrice = (confirmed) => {
@@ -118,9 +112,7 @@ export default function TrackingPage() {
 
   const ReportButton = () =>
     reportSent ? (
-      <p className="text-sm text-tertiary">
-        تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته
-      </p>
+      <p className="text-sm text-tertiary">تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته</p>
     ) : (
       <button
         type="button"
@@ -132,17 +124,13 @@ export default function TrackingPage() {
     );
 
   if (isLoading && !currentOrder) return <LoadingSpinner fullScreen />;
-
+  
   if (!currentOrder) {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-white p-6 text-center">
         <p className="font-bold text-textDark">تعذر تحميل تفاصيل الطلب</p>
         {error && <p className="text-sm text-textGray">{error}</p>}
-        <button
-          type="button"
-          onClick={() => navigate(-1)}
-          className="btn-outline"
-        >
+        <button type="button" onClick={() => navigate(-1)} className="btn-outline">
           رجوع
         </button>
       </div>
@@ -155,58 +143,42 @@ export default function TrackingPage() {
   const Header = ({ title }) => (
     <header className="flex items-center justify-between border-b border-borderGray px-4 py-3">
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => navigate(-1)}
-          className="text-primary"
-        >
+        <button type="button" onClick={() => navigate(-1)} className="text-primary">
           <FaArrowRight size={18} />
         </button>
         <h1 className="font-bold text-primary">{title}</h1>
       </div>
       <div className="flex gap-3 text-primary">
         <FaBell />
-        <Link to={`/chat/${orderId}`}>
-          <FaComments />
-        </Link>
+        <Link to={`/chat/${orderId}`}><FaComments /></Link>
       </div>
     </header>
   );
 
   // ===== CANCELLED =====
-  if (status === "cancelled") {
+  if (status === 'cancelled') {
     return (
       <div className="fixed inset-0 flex flex-col overflow-y-auto bg-white">
         <Header title="الطلب" />
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
           <FaBan className="text-emergency" size={48} />
-          <h2 className="text-xl font-bold text-textDark">
-            تم إلغاء هذا الطلب
-          </h2>
+          <h2 className="text-xl font-bold text-textDark">تم إلغاء هذا الطلب</h2>
           <div className="card w-full max-w-sm text-right">
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">رقم الطلب</span>
-              <span className="font-medium text-textDark">
-                #{String(orderId).slice(-6)}
-              </span>
+              <span className="font-medium text-textDark">#{String(orderId).slice(-6)}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">الخدمة</span>
-              <span className="font-medium text-textDark">
-                {currentOrder.profession}
-              </span>
+              <span className="font-medium text-textDark">{currentOrder.profession}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">الحرفي</span>
-              <span className="font-medium text-textDark">
-                {handyman.name || "—"}
-              </span>
+              <span className="font-medium text-textDark">{handyman.name || '—'}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">تاريخ الطلب</span>
-              <span className="font-medium text-textDark">
-                {formatDate(currentOrder.createdAt)}
-              </span>
+              <span className="font-medium text-textDark">{formatDate(currentOrder.createdAt)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-textGray">السعر</span>
@@ -215,11 +187,7 @@ export default function TrackingPage() {
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => navigate("/customer/home")}
-            className="btn-primary"
-          >
+          <button type="button" onClick={() => navigate('/customer/home')} className="btn-primary">
             العودة للرئيسية
           </button>
           <ReportButton />
@@ -238,70 +206,44 @@ export default function TrackingPage() {
   }
 
   // ===== COMPLETED =====
-  if (status === "completed") {
+  if (status === 'completed') {
     return (
       <div className="fixed inset-0 flex flex-col overflow-y-auto bg-white">
         <Header title="الطلب" />
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
           <FaCheckCircle className="text-tertiary" size={48} />
-          <h2 className="text-xl font-bold text-textDark">
-            تم إنجاز الطلب بنجاح
-          </h2>
-          <p className="text-sm text-textGray">
-            لا تنسَ تقييم {handyman.name || "الحرفي"}
-          </p>
+          <h2 className="text-xl font-bold text-textDark">تم إنجاز الطلب بنجاح</h2>
+          <p className="text-sm text-textGray">لا تنسَ تقييم {handyman.name || 'الحرفي'}</p>
 
           <div className="card w-full max-w-sm text-right">
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">رقم الطلب</span>
-              <span className="font-medium text-textDark">
-                #{String(orderId).slice(-6)}
-              </span>
+              <span className="font-medium text-textDark">#{String(orderId).slice(-6)}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">الخدمة</span>
-              <span className="font-medium text-textDark">
-                {currentOrder.profession}
-              </span>
+              <span className="font-medium text-textDark">{currentOrder.profession}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">الحرفي</span>
-              <span className="font-medium text-textDark">
-                {handyman.name || "—"}
-              </span>
+              <span className="font-medium text-textDark">{handyman.name || '—'}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">المبلغ المدفوع</span>
-              <span className="font-bold text-secondary">
-                {formatPrice(currentOrder.price)}
-              </span>
+              <span className="font-bold text-secondary">{formatPrice(currentOrder.price)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-textGray">حالة الدفع</span>
-              <span
-                className={
-                  currentOrder.paymentStatus === "paid"
-                    ? "font-medium text-tertiary"
-                    : "font-medium text-emergency"
-                }
-              >
-                {currentOrder.paymentStatus === "paid"
-                  ? "تم الدفع"
-                  : "لم يتم الدفع بعد"}
+              <span className={currentOrder.paymentStatus === 'paid' ? 'font-medium text-tertiary' : 'font-medium text-emergency'}>
+                {currentOrder.paymentStatus === 'paid' ? 'تم الدفع' : 'لم يتم الدفع بعد'}
               </span>
             </div>
           </div>
 
           {currentOrder.completionImage && (
             <div className="w-full max-w-sm text-right">
-              <p className="mb-2 text-sm font-bold text-textDark">
-                صورة إثبات إتمام العمل
-              </p>
-              <img
-                src={currentOrder.completionImage}
-                alt=""
-                className="h-32 w-32 rounded-lg object-cover"
-              />
+              <p className="mb-2 text-sm font-bold text-textDark">صورة إثبات إتمام العمل</p>
+              <img src={currentOrder.completionImage} alt="" className="h-32 w-32 rounded-lg object-cover" />
             </div>
           )}
 
@@ -328,7 +270,7 @@ export default function TrackingPage() {
   }
 
   // ===== PENDING =====
-  if (status === "pending") {
+  if (status === 'pending') {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <Header title="بانتظار الحرفي" />
@@ -336,8 +278,7 @@ export default function TrackingPage() {
           <FaHourglassHalf className="animate-pulse text-primary" size={48} />
           <h2 className="text-xl font-bold text-textDark">تم إرسال طلبك</h2>
           <p className="max-w-xs text-sm text-textGray">
-            بانتظار موافقة {handyman.name || "الحرفي"} على طلبك. سيصلك إشعار فور
-            قبول الطلب.
+            بانتظار موافقة {handyman.name || 'الحرفي'} على طلبك. سيصلك إشعار فور قبول الطلب.
           </p>
           <div className="card w-full max-w-sm text-right">
             <p className="text-sm text-textGray">الخدمة المطلوبة</p>
@@ -356,32 +297,23 @@ export default function TrackingPage() {
   }
 
   // ===== ACCEPTED =====
-  if (status === "accepted") {
+  if (status === 'accepted') {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <Header title="تأكيد السعر" />
         <div className="flex flex-1 flex-col items-center justify-center gap-5 p-6 text-center">
           <div className="flex items-center gap-3">
-            <img
-              src={getDefaultAvatar(handyman.name)}
-              alt=""
-              className="h-14 w-14 rounded-full object-cover"
-            />
+            <img src={getDefaultAvatar(handyman.name)} alt="" className="h-14 w-14 rounded-full object-cover" />
             <div className="text-right">
-              <p className="font-bold text-textDark">
-                {handyman.name || "الحرفي"}
-              </p>
+              <p className="font-bold text-textDark">{handyman.name || 'الحرفي'}</p>
               <p className="text-xs text-textGray">قبل طلبك وحدد السعر</p>
             </div>
           </div>
           <div className="card w-full max-w-sm">
             <div className="flex items-center justify-center gap-2 text-2xl font-bold text-primary">
-              <FaMoneyBillWave />{" "}
-              {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+              <FaMoneyBillWave /> {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
             </div>
-            <p className="mt-1 text-xs text-textGray">
-              السعر المقترح لإتمام الخدمة
-            </p>
+            <p className="mt-1 text-xs text-textGray">السعر المقترح لإتمام الخدمة</p>
           </div>
           <div className="flex w-full max-w-sm gap-3">
             <button
@@ -407,42 +339,28 @@ export default function TrackingPage() {
   }
 
   // ===== price_confirmed & handyman hasn't started heading over yet =====
-  if (status === "price_confirmed" && !currentOrder.isHandymanOnTheWay) {
+  if (status === 'price_confirmed' && !currentOrder.isHandymanOnTheWay) {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
-        <Header
-          title={
-            currentOrder.requestType === "scheduled"
-              ? "موعد الطلب"
-              : "جاري التجهيز"
-          }
-        />
+        <Header title={currentOrder.requestType === 'scheduled' ? 'موعد الطلب' : 'جاري التجهيز'} />
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
           <FaClock className="text-primary" size={48} />
-          {currentOrder.requestType === "scheduled" ? (
+          {currentOrder.requestType === 'scheduled' ? (
             <>
-              <h2 className="text-xl font-bold text-textDark">
-                لديك موعد محجوز
-              </h2>
+              <h2 className="text-xl font-bold text-textDark">لديك موعد محجوز</h2>
               <p className="max-w-xs text-sm text-textGray">
-                سيتحرك {handyman.name || "الحرفي"} إليك عند اقتراب الموعد وستظهر
-                لك خريطة التتبع تلقائياً.
+                سيتحرك {handyman.name || 'الحرفي'} إليك عند اقتراب الموعد وستظهر لك خريطة التتبع تلقائياً.
               </p>
               <div className="card w-full max-w-sm">
                 <p className="text-sm text-textGray">موعد الطلب</p>
-                <p className="font-bold text-textDark">
-                  {formatDate(currentOrder.scheduledDate)}
-                </p>
+                <p className="font-bold text-textDark">{formatDate(currentOrder.scheduledDate)}</p>
               </div>
             </>
           ) : (
             <>
-              <h2 className="text-xl font-bold text-textDark">
-                تم تأكيد السعر
-              </h2>
+              <h2 className="text-xl font-bold text-textDark">تم تأكيد السعر</h2>
               <p className="max-w-xs text-sm text-textGray">
-                {handyman.name || "الحرفي"} بيستعد للتحرك ناحيتك، هتظهر خريطة
-                التتبع فور تحركه.
+                {handyman.name || 'الحرفي'} بيستعد للتحرك ناحيتك، هتظهر خريطة التتبع فور تحركه.
               </p>
             </>
           )}
@@ -467,7 +385,7 @@ export default function TrackingPage() {
   }
 
   // ===== ✅ LIVE TRACKING (All other statuses: price_confirmed + on way, in-progress) =====
-
+  
   if (locationLoading) {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
@@ -486,9 +404,7 @@ export default function TrackingPage() {
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
           <FaClock className="text-emergency" size={48} />
           <h2 className="text-xl font-bold text-textDark">تعذر تحديد موقعك</h2>
-          <p className="text-sm text-textGray">
-            الرجاء تفعيل خدمة تحديد الموقع في المتصفح
-          </p>
+          <p className="text-sm text-textGray">الرجاء تفعيل خدمة تحديد الموقع في المتصفح</p>
           <button
             type="button"
             onClick={() => window.location.reload()}
@@ -525,11 +441,11 @@ export default function TrackingPage() {
           <div className="absolute bottom-32 left-1/2 -translate-x-1/2 rounded-full border border-primary bg-white px-4 py-2 shadow-md">
             <span className="flex items-center gap-2 text-sm font-medium text-primary">
               <FaClock />
-              {eta !== null
-                ? `سيصل بعد ${eta} دقيقة`
-                : currentOrder.eta
+              {eta !== null 
+                ? `سيصل بعد ${eta} دقيقة` 
+                : currentOrder.eta 
                   ? `سيصل بعد ${currentOrder.eta} دقيقة`
-                  : "الحرفي في الطريق"}
+                  : 'الحرفي في الطريق'}
             </span>
             {distance !== null && (
               <span className="mr-3 flex items-center gap-1 text-sm text-secondary">
@@ -554,9 +470,7 @@ export default function TrackingPage() {
           <div className="flex items-center gap-2 text-primary">
             <FaCheckCircle className="text-tertiary" />
             <span className="font-bold">
-              {status === "in-progress"
-                ? "الحرفي يعمل على طلبك"
-                : "تم تأكيد السعر — الحرفي في الطريق"}
+              {status === 'in-progress' ? 'الحرفي يعمل على طلبك' : 'تم تأكيد السعر — الحرفي في الطريق'}
             </span>
           </div>
           <span className="rounded-lg bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
@@ -572,19 +486,13 @@ export default function TrackingPage() {
               className="h-14 w-14 rounded-lg object-cover"
             />
             <div>
-              <p className="font-bold text-textDark">
-                {handyman.name || "الحرفي"}
-              </p>
-              <p className="text-xs text-textGray">
-                خبير {currentOrder.profession} معتمد
-              </p>
+              <p className="font-bold text-textDark">{handyman.name || 'الحرفي'}</p>
+              <p className="text-xs text-textGray">خبير {currentOrder.profession} معتمد</p>
             </div>
           </div>
           <div className="text-left">
             <p className="text-xs text-textGray">رسوم الخدمة</p>
-            <p className="font-bold text-textDark">
-              {formatPrice(currentOrder.price || currentOrder.estimatedPrice)}
-            </p>
+            <p className="font-bold text-textDark">{formatPrice(currentOrder.price || currentOrder.estimatedPrice)}</p>
             {distance !== null && (
               <>
                 <p className="mt-1 text-xs text-textGray">المسافة المتبقية</p>
@@ -613,6 +521,7 @@ export default function TrackingPage() {
           <ReportButton />
         </div>
       </div>
+
       {reportOpen && (
         <ReasonModal
           title="سبب الإبلاغ عن هذا الطلب"

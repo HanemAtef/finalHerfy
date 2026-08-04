@@ -4,12 +4,6 @@ const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
 const mongoose = require("mongoose");
 
-// FIX (M8): distance/eta were declared on every getNearbyHandymen response
-// but hardcoded to null — no $near projection or ETA lookup ever populated
-// them. This is a local haversine estimate (not the full TomTom-backed
-// routing feature, which is a separate unwired feature — see the audit's
-// G-5 item), but it means the fields the frontend already reads carry real
-// values instead of always showing nothing.
 // =====================================================
 // ========== HELPER FUNCTIONS ==========
 // =====================================================
@@ -39,7 +33,7 @@ function haversineDistanceMeters([lng1, lat1], [lng2, lat2]) {
  */
 const getNearbyHandymen = async (req, res) => {
   try {
-    const { lat, lng, radius = 8000, profession, sort } = req.query;
+    const { lat, lng, radius = 5000, profession, sort } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({

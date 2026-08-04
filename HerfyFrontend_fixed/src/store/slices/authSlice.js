@@ -10,8 +10,6 @@ import { authService } from '../../services/api';
 // NOTE: this only works once the backend actually includes `isAdmin` in the
 // login/register/getMe/updateProfile responses — today it does not, so admin
 // login will still misroute until that field is added server-side.
-
-
 const normalizeUser = (user) => {
   if (!user) return user;
   return { ...user, role: user.isAdmin ? 'admin' : user.role };
@@ -26,9 +24,7 @@ export const loginUser = createAsyncThunk(
       if (response.data.refreshToken) {
         localStorage.setItem('refreshToken', response.data.refreshToken);
       }
-      console.log(response.data);
       return response.data;
-      
     } catch (error) {
       return rejectWithValue(error.response?.data || { msg: 'فشل تسجيل الدخول' });
     }

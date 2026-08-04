@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
-import { useDispatch, useSelector } from "react-redux";
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   FaArrowRight,
   FaMapMarkerAlt,
@@ -25,12 +25,10 @@ export default function HandymanOrderDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { currentOrder, isLoading, error } = useSelector(
-    (state) => state.orders,
-  );
+  const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
   const { token } = useSelector((state) => state.auth);
 
-  const [price, setPrice] = useState("");
+  const [price, setPrice] = useState('');
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -41,8 +39,7 @@ export default function HandymanOrderDetailsPage() {
   }, [dispatch, id]);
 
   useEffect(() => {
-    if (currentOrder?.estimatedPrice)
-      setPrice(String(currentOrder.estimatedPrice));
+    if (currentOrder?.estimatedPrice) setPrice(String(currentOrder.estimatedPrice));
   }, [currentOrder?.estimatedPrice]);
 
   // ===== Live GPS emitter =====
@@ -51,47 +48,47 @@ export default function HandymanOrderDetailsPage() {
   // live job. Once the handyman is on the way (or already working), join the
   // order's socket room and stream position updates every few seconds.
   useEffect(() => {
-    const isLive =
-      currentOrder &&
-      ((currentOrder.status === "price_confirmed" &&
-        currentOrder.isHandymanOnTheWay) ||
-        currentOrder.status === "in-progress");
+    const isLive = currentOrder && (
+      (currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
+      currentOrder.status === 'in-progress'
+    );
     if (!isLive || !navigator.geolocation || !token) return undefined;
 
     const socket = connectSocket(token);
 
-    socket.emit("joinOrderRoom", id);
+    socket.emit('joinOrderRoom', id);
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        socket.emit("sendLocation", {
+        socket.emit('sendLocation', {
           orderId: id,
           lat: position.coords.latitude,
           lng: position.coords.longitude,
         });
       },
       () => {},
-      { enableHighAccuracy: true, maximumAge: 8000, timeout: 10000 },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     );
 
     return () => {
       navigator.geolocation.clearWatch(watchId);
-      socket.emit("leaveOrderRoom", id);
+      socket.emit('leaveOrderRoom', id);
     };
   }, [id, currentOrder?.status, currentOrder?.isHandymanOnTheWay, token]);
 
   const handleStatus = (status, extra = {}) => {
     dispatch(updateOrderStatus({ id, status, ...extra })).then((result) => {
-      if (status === "accepted" && updateOrderStatus.fulfilled.match(result)) {
-        navigate("/handyman/dashboard");
+      if (status === 'accepted' && updateOrderStatus.fulfilled.match(result)) {
+        navigate('/handyman/dashboard');
       }
+
     });
   };
 
   const handleAccept = () => {
     const numericPrice = Number(price);
     if (!numericPrice || numericPrice <= 0) return;
-    handleStatus("accepted", { price: numericPrice });
+    handleStatus('accepted', { price: numericPrice });
   };
 
   const handleCompletionImageChange = async (e) => {
@@ -108,7 +105,7 @@ export default function HandymanOrderDetailsPage() {
 
   const handleComplete = () => {
     if (!completionImage) return;
-    handleStatus("completed", { completionImage });
+    handleStatus('completed', { completionImage });
   };
 
   const handleConfirmPayment = () => {
@@ -131,11 +128,7 @@ export default function HandymanOrderDetailsPage() {
       <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-white p-6 text-center">
         <p className="font-bold text-textDark">تعذر تحميل تفاصيل الطلب</p>
         {error && <p className="text-sm text-textGray">{error}</p>}
-        <button
-          type="button"
-          onClick={() => navigate(-1)}
-          className="btn-outline"
-        >
+        <button type="button" onClick={() => navigate(-1)} className="btn-outline">
           رجوع
         </button>
       </div>
@@ -144,38 +137,26 @@ export default function HandymanOrderDetailsPage() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <div className="mb-6 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => navigate(-1)}
-          className="text-primary"
-        >
-          <FaArrowRight size={20} />
+      <div className="mb-8 flex items-center gap-4 border-b border-gray-100 pb-4">
+        <button type="button" onClick={() => navigate(-1)} className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-primary shadow-sm hover:bg-neutral transition-all">
+          <FaArrowRight size={18} />
         </button>
         <h1 className="text-2xl font-bold text-textDark">تفاصيل الطلب</h1>
       </div>
 
-      {error && (
-        <div className="mb-4 rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">
-          {error}
-        </div>
-      )}
+      <AlertMessage type="error" message={error} className="mb-4" />
 
-      {currentOrder.status === "cancelled" && (
+      {currentOrder.status === 'cancelled' && (
         <div className="card mb-4 flex items-center gap-3 border-r-4 border-emergency bg-emergency/5">
           <FaBan className="shrink-0 text-emergency" size={20} />
-          <p className="text-sm text-textDark">
-            تم إلغاء هذا الطلب. المحادثة مغلقة الآن.
-          </p>
+          <p className="text-sm text-textDark">تم إلغاء هذا الطلب. المحادثة مغلقة الآن.</p>
         </div>
       )}
 
-      {currentOrder.status === "disputed" && (
+      {currentOrder.status === 'disputed' && (
         <div className="card mb-4 flex items-center gap-3 border-r-4 border-secondary bg-secondary/5">
           <FaFlag className="shrink-0 text-secondary" size={20} />
-          <p className="text-sm text-textDark">
-            هذا الطلب قيد مراجعة بلاغ من فريق الدعم. المحادثة مغلقة مؤقتاً.
-          </p>
+          <p className="text-sm text-textDark">هذا الطلب قيد مراجعة بلاغ من فريق الدعم. المحادثة مغلقة مؤقتاً.</p>
         </div>
       )}
 
@@ -189,22 +170,13 @@ export default function HandymanOrderDetailsPage() {
           </span>
         </div>
 
-        <h2 className="mb-2 text-lg font-bold text-textDark">
-          {currentOrder.profession}
-        </h2>
-        <p className="mb-4 text-sm text-textGray">
-          {currentOrder.description || "لا يوجد وصف"}
-        </p>
+        <h2 className="mb-2 text-lg font-bold text-textDark">{currentOrder.profession}</h2>
+        <p className="mb-4 text-sm text-textGray">{currentOrder.description || 'لا يوجد وصف'}</p>
 
         {currentOrder.images?.length > 0 && (
           <div className="mb-4 flex flex-wrap gap-2">
             {currentOrder.images.map((img) => (
-              <img
-                key={img}
-                src={img}
-                alt=""
-                className="h-16 w-16 rounded-lg object-cover"
-              />
+              <img key={img} src={img} alt="" className="h-16 w-16 rounded-lg object-cover" />
             ))}
           </div>
         )}
@@ -220,22 +192,16 @@ export default function HandymanOrderDetailsPage() {
           </div>
           <div className="flex justify-between">
             <span className="text-textGray">نوع الطلب</span>
-            <span>
-              {currentOrder.requestType === "scheduled" ? "مجدول" : "فوري"}
-            </span>
+            <span>{currentOrder.requestType === 'scheduled' ? 'مجدول' : 'فوري'}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-textGray">السعر المقدر من العميل</span>
-            <span className="font-bold text-secondary">
-              {formatPrice(currentOrder.estimatedPrice)}
-            </span>
+            <span className="font-bold text-secondary">{formatPrice(currentOrder.estimatedPrice)}</span>
           </div>
           {currentOrder.price != null && (
             <div className="flex justify-between">
               <span className="text-textGray">السعر الذي حددته</span>
-              <span className="font-bold text-secondary">
-                {formatPrice(currentOrder.price)}
-              </span>
+              <span className="font-bold text-secondary">{formatPrice(currentOrder.price)}</span>
             </div>
           )}
         </div>
@@ -254,7 +220,7 @@ export default function HandymanOrderDetailsPage() {
               icon={false}
             />
           ) : (
-            "غير محدد"
+            'غير محدد'
           )}
         </p>
       </div>
@@ -285,7 +251,7 @@ export default function HandymanOrderDetailsPage() {
             </button>
             <button
               type="button"
-              onClick={() => handleStatus("cancelled")}
+              onClick={() => handleStatus('cancelled')}
               className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency"
             >
               <FaTimes /> رفض
@@ -308,11 +274,7 @@ export default function HandymanOrderDetailsPage() {
             </p>
           )}
           {!currentOrder.isHandymanOnTheWay ? (
-            <button
-              type="button"
-              onClick={handleOnTheWay}
-              className="btn-primary w-full"
-            >
+            <button type="button" onClick={handleOnTheWay} className="btn-primary w-full">
               أنا قادم للعميل
             </button>
           ) : (
@@ -322,7 +284,7 @@ export default function HandymanOrderDetailsPage() {
               </p>
               <button
                 type="button"
-                onClick={() => handleStatus("in-progress")}
+                onClick={() => handleStatus('in-progress')}
                 className="btn-primary w-full"
               >
                 بدء التنفيذ
@@ -340,17 +302,11 @@ export default function HandymanOrderDetailsPage() {
             صورة إثبات إتمام العمل (مطلوبة)
           </label>
           {completionImage ? (
-            <img
-              src={completionImage}
-              alt=""
-              className="mb-3 h-32 w-32 rounded-lg object-cover"
-            />
+            <img src={completionImage} alt="" className="mb-3 h-32 w-32 rounded-lg object-cover" />
           ) : (
             <label className="mb-3 flex h-32 w-32 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-borderGray text-textGray">
               <FaCamera size={20} />
-              <span className="text-xs">
-                {uploading ? "جاري الرفع..." : "إضافة صورة"}
-              </span>
+              <span className="text-xs">{uploading ? 'جاري الرفع...' : 'إضافة صورة'}</span>
               <input
                 type="file"
                 accept="image/*"
@@ -372,16 +328,10 @@ export default function HandymanOrderDetailsPage() {
       )}
 
       <div className="flex flex-wrap gap-3">
-        <a
-          href={`tel:${currentOrder.customerId?.phone}`}
-          className="btn-outline flex items-center justify-center gap-2 flex-1"
-        >
+        <a href={`tel:${currentOrder.customerId?.phone}`} className="btn-outline flex items-center justify-center gap-2 flex-1">
           <FaPhone /> اتصال
         </a>
-        <Link
-          to={`/chat/${id}`}
-          className="btn-outline flex items-center justify-center gap-2 flex-1"
-        >
+        <Link to={`/chat/${id}`} className="btn-outline flex items-center justify-center gap-2 flex-1">
           <FaComments /> محادثة
         </Link>
       </div>
@@ -392,35 +342,26 @@ export default function HandymanOrderDetailsPage() {
         <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mt-6 mb-6">
           {currentOrder.completionImage && (
             <div className="mb-4">
-              <p className="mb-2 text-sm font-bold text-textDark">
-                صورة إثبات إتمام العمل
-              </p>
-              <img
-                src={currentOrder.completionImage}
-                alt=""
-                className="h-40 w-40 rounded-lg object-cover"
-              />
+              <p className="mb-2 text-sm font-bold text-textDark">صورة إثبات إتمام العمل</p>
+              <img src={currentOrder.completionImage} alt="" className="h-40 w-40 rounded-lg object-cover" />
             </div>
           )}
           <div className="mb-2 flex items-center justify-between">
             <span className="font-bold text-textDark">الدفع</span>
             <span
               className={`rounded-lg px-3 py-1 text-sm font-bold ${
-                currentOrder.paymentStatus === "paid"
-                  ? "bg-secondary/10 text-secondary"
-                  : "bg-emergency/10 text-emergency"
+                currentOrder.paymentStatus === 'paid'
+                  ? 'bg-secondary/10 text-secondary'
+                  : 'bg-emergency/10 text-emergency'
               }`}
             >
-              {currentOrder.paymentStatus === "paid"
-                ? "تم الدفع"
-                : "لم يتم الدفع بعد"}
+              {currentOrder.paymentStatus === 'paid' ? 'تم الدفع' : 'لم يتم الدفع بعد'}
             </span>
           </div>
-          {currentOrder.paymentStatus !== "paid" ? (
+          {currentOrder.paymentStatus !== 'paid' ? (
             <>
               <p className="mb-3 text-sm text-textGray">
-                استلم المبلغ نقداً من العميل ({formatPrice(currentOrder.price)})
-                ثم أكّد الاستلام هنا.
+                استلم المبلغ نقداً من العميل ({formatPrice(currentOrder.price)}) ثم أكّد الاستلام هنا.
               </p>
               <button
                 type="button"
@@ -438,14 +379,10 @@ export default function HandymanOrderDetailsPage() {
           )}
         </div>
       )}
-      {["completed", "cancelled", "in-progress", "price_confirmed"].includes(
-        currentOrder.status,
-      ) && (
+      {['completed', 'cancelled', 'in-progress', 'price_confirmed'].includes(currentOrder.status) && (
         <div className="mt-4 text-center">
           {reportSent ? (
-            <p className="text-sm text-tertiary">
-              تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته
-            </p>
+            <p className="text-sm text-tertiary">تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته</p>
           ) : (
             <button
               type="button"

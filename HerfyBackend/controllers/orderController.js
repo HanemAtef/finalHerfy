@@ -22,12 +22,7 @@ const createOrder = async (req, res) => {
     } = req.body;
 
     let isEmergencyBool = false;
-    if (
-      isEmergency === true ||
-      isEmergency === "true" ||
-      isEmergency === 1 ||
-      isEmergency === "1"
-    ) {
+    if (isEmergency === true || isEmergency === "true" || isEmergency === 1 || isEmergency === "1") {
       isEmergencyBool = true;
     }
 
@@ -63,28 +58,7 @@ const createOrder = async (req, res) => {
     let totalPrice = finalPrice + penaltyAmount;
 
     const commissionRate = isEmergencyBool ? 15 : 10;
-    if (requestType === "scheduled") {
-      if (!scheduledDate) {
-        return res.status(400).json({
-          msg: "Scheduled date is required.",
-        });
-      }
 
-      const selectedDate = new Date(scheduledDate);
-      const now = new Date();
-
-      if (isNaN(selectedDate.getTime())) {
-        return res.status(400).json({
-          msg: "Invalid scheduled date.",
-        });
-      }
-
-      if (selectedDate <= now) {
-        return res.status(400).json({
-          msg: "Scheduled date and time must be in the future.",
-        });
-      }
-    }
     const order = await Order.create({
       customerId: req.user.id,
       handymanId,
@@ -119,20 +93,18 @@ const createOrder = async (req, res) => {
     // (see confirmCashPayment).
 
     // ========== NOTIFICATION: New order to handyman ==========
-    const io = req.app.get("io");
+    const io = req.app.get('io');
     await createNotification(
       io,
       handymanId,
-      "order_created",
-      " New Order",
+      'order_created',
+      ' New Order',
       `${customer.name} has sent you a new order: ${profession}`,
-      { orderId: order._id, customerName: customer.name },
+      { orderId: order._id, customerName: customer.name }
     );
 
     res.status(201).json({
-      msg: isEmergencyBool
-        ? "Emergency order created successfully"
-        : "Order created successfully",
+      msg: isEmergencyBool ? "Emergency order created successfully" : "Order created successfully",
       order,
     });
   } catch (error) {
@@ -158,9 +130,7 @@ const getOrder = async (req, res) => {
       req.user.id !== order.handymanId?._id?.toString() &&
       req.user.role !== "admin"
     ) {
-      return res
-        .status(403)
-        .json({ msg: "You are not authorized to view this order" });
+      return res.status(403).json({ msg: "You are not authorized to view this order" });
     }
 
     res.status(200).json(order);
@@ -237,14 +207,7 @@ const updateOrderStatus = async (req, res) => {
     const { id } = req.params;
     const { status, price } = req.body;
 
-    const validStatuses = [
-      "pending",
-      "accepted",
-      "price_confirmed",
-      "in-progress",
-      "completed",
-      "cancelled",
-    ];
+    const validStatuses = ["pending", "accepted", "price_confirmed", "in-progress", "completed", "cancelled"];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ msg: "Invalid status" });
     }
@@ -264,9 +227,7 @@ const updateOrderStatus = async (req, res) => {
     // authenticated user cancel/mutate someone else's order. Require the caller
     // to be a party to this order (or an admin) up front, for every status.
     if (!isCustomer && !isHandyman && !isAdmin) {
-      return res
-        .status(403)
-        .json({ msg: "You are not authorized to update this order" });
+      return res.status(403).json({ msg: "You are not authorized to update this order" });
     }
 
     const currentStatus = order.status;
@@ -281,15 +242,8 @@ const updateOrderStatus = async (req, res) => {
 
     // ========== Cancelled Logic ==========
     if (status === "cancelled") {
-      if (
-        currentStatus === "pending" &&
-        !isCustomer &&
-        !isHandyman &&
-        !isAdmin
-      ) {
-        return res
-          .status(403)
-          .json({ msg: "Only customer or handyman can cancel pending order" });
+      if (currentStatus === "pending" && !isCustomer && !isHandyman && !isAdmin) {
+        return res.status(403).json({ msg: "Only customer or handyman can cancel pending order" });
       }
 
       if (currentStatus === "accepted" && isCustomer) {
@@ -300,34 +254,12 @@ const updateOrderStatus = async (req, res) => {
         // No penalty - customer hasn't confirmed price yet
       }
 
-      if (currentStatus === "price_confirmed" && isCustomer) {
-        const customer = await User.findById(order.customerId);
-        if (customer) {
-          customer.penaltyCount = (customer.penaltyCount || 0) + 1;
-          customer.penaltyAmount = (customer.penaltyAmount || 0) + 50;
-          if (customer.penaltyCount >= 3) {
-            customer.isPenalized = true;
-          }
-          await customer.save();
-        }
-        // ========== NOTIFICATION: Penalty warning ==========
-        const io = req.app.get("io");
-        await createNotification(
-          io,
-          order.customerId,
-          "penalty_warning",
-          " Penalty Warning",
-          `You have been charged a 50 EGP penalty. Total penalties: ${customer.penaltyCount}`,
-          { orderId: order._id, penaltyCount: customer.penaltyCount },
-        );
-      }
-
       if (
-        (currentStatus === "price_confirmed" ||
-          currentStatus === "in-progress") &&
-        isHandyman
-      ) {
-        const handyman = await Handyman.findOne({ userId: order.handymanId });
+        (currentStatus === "price_confirmed" || currentStatus === "in-progress") && isHandyman) {
+        const handyman = await Handyman.findOne({
+          userId: order.handymanId,
+        });
+
         if (handyman) {
           const now = new Date();
 
@@ -382,10 +314,10 @@ const updateOrderStatus = async (req, res) => {
         await createNotification(
           io,
           order.customerId,
-          "penalty_warning",
-          " Penalty Warning",
+          'penalty_warning',
+          ' Penalty Warning',
           `You have been charged a 50 EGP penalty. Total penalties: ${customer.penaltyCount}`,
-          { orderId: order._id, penaltyCount: customer.penaltyCount },
+          { orderId: order._id, penaltyCount: customer.penaltyCount }
         );
       }
 
@@ -398,10 +330,10 @@ const updateOrderStatus = async (req, res) => {
       await createNotification(
         io,
         recipientId,
-        "order_cancelled",
-        " Order Cancelled",
+        'order_cancelled',
+        ' Order Cancelled',
         `${req.user.name} cancelled the order`,
-        { orderId: order._id },
+        { orderId: order._id }
       );
     }
 
@@ -415,16 +347,14 @@ const updateOrderStatus = async (req, res) => {
       // letting a cancelled or disputed order be silently reopened (and
       // bypassing admin dispute resolution). Only a pending order can be accepted.
       if (currentStatus !== "pending") {
-        return res
-          .status(400)
-          .json({ msg: "Only a pending order can be accepted" });
+        return res.status(400).json({ msg: "Only a pending order can be accepted" });
       }
 
       if (isHandyman) {
         const handymanProfile = await Handyman.findOne({ userId: req.user.id });
         if (handymanProfile?.isSuspended) {
           return res.status(403).json({
-            msg: `حسابك موقوف مؤقتاً (${handymanProfile.suspendedReason || "رصيد عمولة مستحق"}). تواصل مع الدعم للتسوية.`,
+            msg: `حسابك موقوف مؤقتاً (${handymanProfile.suspendedReason || 'رصيد عمولة مستحق'}). تواصل مع الدعم للتسوية.`,
           });
         }
       }
@@ -468,10 +398,7 @@ const updateOrderStatus = async (req, res) => {
         // Transactions unsupported in this environment (e.g. standalone
         // Mongo without a replica set) — fall back to the previous
         // non-transactional check rather than failing the request outright.
-        console.log(
-          "Accept transaction unavailable, falling back:",
-          txErr.message,
-        );
+        console.log("Accept transaction unavailable, falling back:", txErr.message);
         const inProgressOrders = await Order.countDocuments({
           handymanId: order.handymanId,
           status: "in-progress",
@@ -490,21 +417,21 @@ const updateOrderStatus = async (req, res) => {
       await createNotification(
         io,
         order.customerId,
-        "order_accepted",
-        " Order Accepted",
+        'order_accepted',
+        ' Order Accepted',
         `${req.user.name} accepted your order`,
-        { orderId: order._id, handymanName: req.user.name },
+        { orderId: order._id, handymanName: req.user.name }
       );
 
       try {
-        io.to(id).emit("tracking-started", {
+        io.to(id).emit('tracking-started', {
           orderId: id,
           handymanName: req.user.name,
-          message: "Handyman is on the way!",
+          message: 'Handyman is on the way!',
         });
         console.log(`Tracking started event sent for order ${id}`);
       } catch (error) {
-        console.log("Socket.io error:", error.message);
+        console.log('Socket.io error:', error.message);
       }
 
       if (isHandyman && typeof handymanProfile !== 'undefined' && handymanProfile) {
@@ -519,9 +446,7 @@ const updateOrderStatus = async (req, res) => {
     // ========== In-Progress Logic ==========
     if (status === "in-progress") {
       if (currentStatus !== "price_confirmed") {
-        return res
-          .status(400)
-          .json({ msg: "Order must be price confirmed before starting" });
+        return res.status(400).json({ msg: "Order must be price confirmed before starting" });
       }
       if (!isHandyman && !isAdmin) {
         return res.status(403).json({ msg: "Only handyman can start work" });
@@ -535,7 +460,7 @@ const updateOrderStatus = async (req, res) => {
       if (inProgressCount >= 3) {
         await Handyman.findOneAndUpdate(
           { userId: order.handymanId },
-          { isAvailable: false },
+          { isAvailable: false }
         );
       }
     }
@@ -543,24 +468,16 @@ const updateOrderStatus = async (req, res) => {
     // ========== Completed Logic ==========
     if (status === "completed") {
       if (!isHandyman && !isAdmin) {
-        return res
-          .status(403)
-          .json({ msg: "Only handyman can complete order" });
+        return res.status(403).json({ msg: "Only handyman can complete order" });
       }
 
       if (currentStatus !== "in-progress") {
-        return res
-          .status(400)
-          .json({
-            msg: "Order must be in-progress before it can be completed",
-          });
+        return res.status(400).json({ msg: "Order must be in-progress before it can be completed" });
       }
 
       const { completionImage } = req.body;
       if (!completionImage) {
-        return res
-          .status(400)
-          .json({ msg: "Completion proof image is required" });
+        return res.status(400).json({ msg: "Completion proof image is required" });
       }
       order.completionImage = completionImage;
       order.paymentStatus = "unpaid";
@@ -580,7 +497,7 @@ const updateOrderStatus = async (req, res) => {
       if (inProgressCount < 3) {
         await Handyman.findOneAndUpdate(
           { userId: order.handymanId },
-          { isAvailable: true },
+          { isAvailable: true }
         );
       }
       // ========== NOTIFICATION: Order completed ==========
@@ -588,10 +505,10 @@ const updateOrderStatus = async (req, res) => {
       await createNotification(
         io,
         order.customerId,
-        "order_completed",
-        " Order Completed",
+        'order_completed',
+        ' Order Completed',
         `${req.user.name} completed your order`,
-        { orderId: order._id },
+        { orderId: order._id }
       );
     }
 
@@ -621,13 +538,8 @@ const confirmPrice = async (req, res) => {
 
     // SECURITY FIX (C3): only the order's own customer (or an admin) may
     // confirm/reject its price — previously any authenticated user could.
-    if (
-      req.user.id !== order.customerId?.toString() &&
-      req.user.role !== "admin"
-    ) {
-      return res
-        .status(403)
-        .json({ msg: "Only the customer on this order can confirm the price" });
+    if (req.user.id !== order.customerId?.toString() && req.user.role !== "admin") {
+      return res.status(403).json({ msg: "Only the customer on this order can confirm the price" });
     }
 
     if (order.status !== "accepted") {
@@ -641,21 +553,21 @@ const confirmPrice = async (req, res) => {
       await createNotification(
         io,
         order.handymanId,
-        "price_confirmed",
-        " Price Confirmed",
+        'price_confirmed',
+        ' Price Confirmed',
         `${req.user.name} confirmed the price`,
-        { orderId: order._id, price: order.price },
+        { orderId: order._id, price: order.price }
       );
     } else {
       order.status = "cancelled";
-      const io = req.app.get("io");
+      const io = req.app.get('io');
       await createNotification(
         io,
         order.handymanId,
-        "order_cancelled",
-        " Price Rejected",
+        'order_cancelled',
+        ' Price Rejected',
         `${req.user.name} rejected the price and cancelled the order`,
-        { orderId: order._id },
+        { orderId: order._id }
       );
     }
 
@@ -673,9 +585,7 @@ const getPendingOrders = async (req, res) => {
     const { handymanId } = req.params;
 
     if (req.user.id !== handymanId && req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ msg: "You can only view your own pending orders" });
+      return res.status(403).json({ msg: "You can only view your own pending orders" });
     }
 
     const orders = await Order.find({
@@ -709,9 +619,7 @@ const requestReschedule = async (req, res) => {
     const isOrderCustomer = req.user.id === order.customerId?.toString();
     const isOrderHandyman = req.user.id === order.handymanId?.toString();
     if (!isOrderCustomer && !isOrderHandyman && req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({ msg: "You are not authorized to reschedule this order" });
+      return res.status(403).json({ msg: "You are not authorized to reschedule this order" });
     }
 
     order.rescheduleRequest = {
@@ -728,10 +636,10 @@ const requestReschedule = async (req, res) => {
     await createNotification(
       io,
       recipientId,
-      "reschedule_request",
-      " Reschedule Request",
+      'reschedule_request',
+      ' Reschedule Request',
       `${req.user.name} requested to reschedule`,
-      { orderId: order._id, newDate },
+      { orderId: order._id, newDate }
     );
 
     res.json({ msg: "Reschedule request sent", order });
@@ -755,19 +663,12 @@ const respondReschedule = async (req, res) => {
     const isOrderCustomer = req.user.id === order.customerId?.toString();
     const isOrderHandyman = req.user.id === order.handymanId?.toString();
     if (!isOrderCustomer && !isOrderHandyman && req.user.role !== "admin") {
-      return res
-        .status(403)
-        .json({
-          msg: "You are not authorized to respond to this reschedule request",
-        });
+      return res.status(403).json({ msg: "You are not authorized to respond to this reschedule request" });
     }
 
     // BUG FIX: guard against a missing rescheduleRequest (previously threw,
     // caught by the generic catch, and returned a confusing 500).
-    if (
-      !order.rescheduleRequest ||
-      order.rescheduleRequest.status !== "pending"
-    ) {
+    if (!order.rescheduleRequest || order.rescheduleRequest.status !== "pending") {
       return res.status(400).json({ msg: "No pending reschedule request" });
     }
 
@@ -787,16 +688,13 @@ const respondReschedule = async (req, res) => {
     await createNotification(
       io,
       recipientId,
-      "reschedule_response",
-      accepted ? " Reschedule Accepted" : " Reschedule Rejected",
-      `${req.user.name} ${accepted ? "accepted" : "rejected"} the reschedule request`,
-      { orderId: order._id },
+      'reschedule_response',
+      accepted ? ' Reschedule Accepted' : ' Reschedule Rejected',
+      `${req.user.name} ${accepted ? 'accepted' : 'rejected'} the reschedule request`,
+      { orderId: order._id }
     );
 
-    res.json({
-      msg: accepted ? "Reschedule accepted" : "Reschedule rejected",
-      order,
-    });
+    res.json({ msg: accepted ? "Reschedule accepted" : "Reschedule rejected", order });
   } catch (error) {
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });
@@ -817,15 +715,11 @@ const confirmCashPayment = async (req, res) => {
     const isAdmin = req.user.role === "admin";
 
     if (!isHandyman && !isAdmin) {
-      return res
-        .status(403)
-        .json({ msg: "Only the handyman can confirm receiving the payment" });
+      return res.status(403).json({ msg: "Only the handyman can confirm receiving the payment" });
     }
 
     if (order.status !== "completed") {
-      return res
-        .status(400)
-        .json({ msg: "Order must be completed before confirming payment" });
+      return res.status(400).json({ msg: "Order must be completed before confirming payment" });
     }
 
     if (order.paymentStatus === "paid") {
@@ -843,10 +737,7 @@ const confirmCashPayment = async (req, res) => {
     if (order.penaltyAmount > 0) {
       const customer = await User.findById(order.customerId);
       if (customer) {
-        customer.penaltyAmount = Math.max(
-          0,
-          (customer.penaltyAmount || 0) - order.penaltyAmount,
-        );
+        customer.penaltyAmount = Math.max(0, (customer.penaltyAmount || 0) - order.penaltyAmount);
         await customer.save();
       }
     }
@@ -858,48 +749,37 @@ const confirmCashPayment = async (req, res) => {
     const handyman = await Handyman.findOne({ userId: order.handymanId });
     let justSuspended = false;
     if (handyman) {
-      handyman.walletBalance =
-        (handyman.walletBalance || 0) + (order.commissionAmount || 0);
-      if (
-        handyman.walletBalance >= WALLET_SUSPENSION_THRESHOLD &&
-        !handyman.isSuspended
-      ) {
+      handyman.walletBalance = (handyman.walletBalance || 0) + (order.commissionAmount || 0);
+      if (handyman.walletBalance >= WALLET_SUSPENSION_THRESHOLD && !handyman.isSuspended) {
         handyman.isSuspended = true;
-        handyman.suspendedReason =
-          "رصيد العمولة المستحقة للمنصة تجاوز الحد المسموح";
+        handyman.suspendedReason = "رصيد العمولة المستحقة للمنصة تجاوز الحد المسموح";
         justSuspended = true;
       }
       await handyman.save();
     }
 
-    const io = req.app.get("io");
+    const io = req.app.get('io');
     await createNotification(
       io,
       order.customerId,
-      "payment_confirmed",
-      " Payment Confirmed",
+      'payment_confirmed',
+      ' Payment Confirmed',
       `${req.user.name} confirmed receiving the payment for your order`,
-      { orderId: order._id },
+      { orderId: order._id }
     );
 
     if (justSuspended) {
       await createNotification(
         io,
         order.handymanId,
-        "account_blocked",
-        " Account Suspended",
+        'account_blocked',
+        ' Account Suspended',
         `تم إيقاف حسابك مؤقتاً لتجاوز رصيد العمولة المستحقة ${WALLET_SUSPENSION_THRESHOLD} ج.م. يرجى التواصل مع الدعم للتسوية.`,
-        { walletBalance: handyman.walletBalance },
+        { walletBalance: handyman.walletBalance }
       );
     }
 
-    res
-      .status(200)
-      .json({
-        msg: "Payment confirmed",
-        order,
-        walletBalance: handyman?.walletBalance,
-      });
+    res.status(200).json({ msg: "Payment confirmed", order, walletBalance: handyman?.walletBalance });
   } catch (error) {
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });
@@ -922,38 +802,32 @@ const markOnTheWay = async (req, res) => {
     const isAdmin = req.user.role === "admin";
 
     if (!isHandyman && !isAdmin) {
-      return res
-        .status(403)
-        .json({ msg: "Only the assigned handyman can do this" });
+      return res.status(403).json({ msg: "Only the assigned handyman can do this" });
     }
 
     if (!["price_confirmed", "in-progress"].includes(order.status)) {
-      return res
-        .status(400)
-        .json({
-          msg: "Order must be price confirmed before starting the trip",
-        });
+      return res.status(400).json({ msg: "Order must be price confirmed before starting the trip" });
     }
 
     order.isHandymanOnTheWay = true;
     order.onTheWayAt = new Date();
     await order.save();
 
-    const io = req.app.get("io");
+    const io = req.app.get('io');
     if (io) {
-      io.to(id).emit("tracking-started", {
+      io.to(id).emit('tracking-started', {
         orderId: id,
         handymanName: req.user.name,
-        message: "Handyman is on the way!",
+        message: 'Handyman is on the way!',
       });
     }
     await createNotification(
       io,
       order.customerId,
-      "handyman_on_the_way",
-      " Handyman On The Way",
+      'handyman_on_the_way',
+      ' Handyman On The Way',
       `${req.user.name} is on the way to you`,
-      { orderId: order._id },
+      { orderId: order._id }
     );
 
     res.status(200).json({ msg: "Marked as on the way", order });
