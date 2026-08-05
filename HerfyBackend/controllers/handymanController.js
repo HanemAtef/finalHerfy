@@ -554,6 +554,39 @@ const getHandymanAnalytics = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get handyman monthly target stats
+ * @route   GET /api/handymen/monthly-stats
+ * @access  Private (Handyman only)
+ */
+const getHandymanMonthlyStats = async (req, res) => {
+  try {
+    const handymanId = req.user.id;
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const monthlyCompleted = await Order.countDocuments({
+      handymanId,
+      status: "completed",
+      createdAt: { $gte: monthStart, $lt: nextMonthStart },
+    });
+
+    const target = Number(process.env.HANDYMAN_MONTHLY_TARGET) || 10;
+
+    res.status(200).json({
+      monthlyCompleted,
+      target,
+    });
+  } catch (error) {
+    console.error("Error getting monthly stats:", error);
+    res.status(500).json({
+      msg: "Server error",
+      error: error.message,
+    });
+  }
+};
+
 // =====================================================
 // ========== EXPORTS ==========
 // =====================================================
@@ -566,5 +599,6 @@ module.exports = {
   toggleAvailability,
   getHandymanStatus,
   getHandymanFullProfile,
+  getHandymanMonthlyStats,
   updateAvailability,
 };

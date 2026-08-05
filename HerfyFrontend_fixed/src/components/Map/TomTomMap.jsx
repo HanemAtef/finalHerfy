@@ -82,7 +82,7 @@ function TomTomMap() {
         <div style="min-width:200px;font-family:inherit;direction:rtl;text-align:right;">
           <h3 style="margin:0 0 6px;color:#0F4C75;">${handyman.name}</h3>
           <p style="margin:2px 0;">${handyman.profession}</p>
-          <p style="margin:2px 0;">⭐ ${handyman.rating ?? '—'}</p>
+          <p style="margin:2px 0;"> ${handyman.rating ?? '—'}</p>
           <p style="margin:2px 0;">${formatPrice(handyman.price)}</p>
           <p style="margin:2px 0;color:${handyman.isAvailable ? '#28A745' : '#EF4444'};">
             ${handyman.isAvailable ? 'متاح الآن' : 'غير متاح'}

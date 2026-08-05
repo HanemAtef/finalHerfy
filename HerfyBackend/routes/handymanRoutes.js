@@ -11,17 +11,17 @@ const {
   getHandymanDetails,
   updateHandymanProfile,
   getHandymanAnalytics,
+  getHandymanMonthlyStats,
   toggleAvailability,
-  getHandymanStatus,        // ✅ تأكد من استيرادها
-  getHandymanFullProfile,   // ✅ تأكد من استيرادها
-  updateAvailability,       // ✅ تأكد من استيرادها
+  getHandymanStatus,        
+  getHandymanFullProfile,  
+  updateAvailability,      
 } = require("../controllers/handymanController");
 
 // =====================================================
 // ========== PUBLIC ROUTES (No auth required) ==========
 // =====================================================
 
-console.log("✅ Handyman Routes loaded");
 
 router.get("/nearby", getNearbyHandymen);
 
@@ -44,6 +44,14 @@ router.get(
   allowedToMiddleware("handyman"),
   checkHandymanActive,
   getHandymanFullProfile
+);
+
+router.get(
+  "/monthly-stats",
+  authMiddleware,
+  allowedToMiddleware("handyman"),
+  checkHandymanActive,
+  getHandymanMonthlyStats
 );
 
 // Keep parameterized routes after fixed paths; otherwise `/status` is
