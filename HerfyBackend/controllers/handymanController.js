@@ -33,7 +33,7 @@ function haversineDistanceMeters([lng1, lat1], [lng2, lat2]) {
  */
 const getNearbyHandymen = async (req, res) => {
   try {
-    const { lat, lng, radius = 5000, profession, sort } = req.query;
+    const { lat, lng, radius = 50000000, profession, sort } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({

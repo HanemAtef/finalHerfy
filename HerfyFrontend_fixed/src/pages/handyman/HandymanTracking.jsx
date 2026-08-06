@@ -16,8 +16,22 @@ export default function HandymanTracking() {
   
   const [isTracking, setIsTracking] = useState(false);
   const [isArrived, setIsArrived] = useState(false);
-  const intervalRef = useRef(null);
+  const watchIdRef = useRef(null);
+  const lastLocationRef = useRef(null);
   const socketRef = useRef(null);
+
+  // Helper distance check in meters
+  const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
 
   // جلب تفاصيل الطلب
   useEffect(() => {
@@ -30,13 +44,12 @@ export default function HandymanTracking() {
     if (!socket) return;
     socketRef.current = socket;
 
-    // استقبال تأكيد إرسال الموقع
     socket.on('locationSent', (data) => {
-      console.log('✅ Location sent:', data);
+      console.log('✅ [Frontend] Location sent confirmed:', data);
     });
 
     socket.on('error', (error) => {
-      console.error('❌ Socket error:', error);
+      console.error('❌ [Frontend] Socket error:', error);
     });
 
     return () => {
@@ -49,29 +62,38 @@ export default function HandymanTracking() {
   const startTracking = () => {
     if (!socketRef.current || !orderId) return;
 
-    // إرسال إشارة بداية التتبع
+    // Join order room first
+    socketRef.current.emit('joinOrderRoom', orderId);
     socketRef.current.emit('startTracking', orderId);
     setIsTracking(true);
 
-    // إرسال الموقع فوراً
-    if (location) {
-      socketRef.current.emit('sendLocation', {
-        orderId,
-        lat: location.latitude,
-        lng: location.longitude
-      });
-    }
-
-    // بدأ إرسال الموقع كل 5 ثواني
-    intervalRef.current = setInterval(() => {
-      if (location) {
-        socketRef.current.emit('sendLocation', {
-          orderId,
-          lat: location.latitude,
-          lng: location.longitude
-        });
+    if (navigator.geolocation) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
-    }, 5000);
+
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const lat = position?.coords?.latitude;
+          const lng = position?.coords?.longitude;
+
+          if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+            const last = lastLocationRef.current;
+            const movedDistance = last ? calculateDistanceMeters(last.lat, last.lng, lat, lng) : 999;
+            
+            // Only emit if moved > 10m or first emit
+            if (!last || movedDistance >= 10) {
+              console.log(`📍 [Frontend] Emitting GPS position update: lat=${lat}, lng=${lng} (moved: ${Math.round(movedDistance)}m)`);
+              socketRef.current.emit('sendLocation', { orderId, lat, lng });
+              lastLocationRef.current = { lat, lng, time: Date.now() };
+            }
+          }
+        },
+        (err) => console.warn('❌ GPS watchPosition error:', err.message),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+      );
+    }
   };
 
   // نهاية التتبع (وصلت)
@@ -82,22 +104,20 @@ export default function HandymanTracking() {
     setIsTracking(false);
     setIsArrived(true);
 
-    // إيقاف إرسال الموقع
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
 
-    // تحديث حالة الطلب إلى in-progress
     dispatch(updateOrderStatus({ id: orderId, status: 'in-progress' }));
   };
 
   // تنظيف عند الخروج
   useEffect(() => {
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
       if (socketRef.current) {
         socketRef.current.off('locationSent');

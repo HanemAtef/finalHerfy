@@ -19,6 +19,8 @@ import LoadingSpinner from '../../components/common/LoadingSpinner';
 import LocationLabel from '../../components/common/LocationLabel';
 import ReasonModal from '../../components/common/ReasonModal';
 import AlertMessage from '../../components/common/AlertMessage';
+import TrackingMap from '../../components/Map/TrackingMap';
+import useCurrentLocation from '../../hooks/useCurrentLocation';
 import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
 
 export default function HandymanOrderDetailsPage() {
@@ -28,11 +30,21 @@ export default function HandymanOrderDetailsPage() {
   const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
   const { token } = useSelector((state) => state.auth);
 
+  const { location: currentDeviceLocation } = useCurrentLocation();
+  const [handymanLoc, setHandymanLoc] = useState(null);
   const [price, setPrice] = useState('');
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
+
+  console.log('📍 [HandymanOrderDetails Render]', {
+    orderId: id,
+    hasCurrentOrder: !!currentOrder,
+    handymanLoc,
+    currentDeviceLocation,
+    customerLocation: currentOrder?.customerLocation,
+  });
 
   useEffect(() => {
     dispatch(fetchOrderById(id));
@@ -42,37 +54,44 @@ export default function HandymanOrderDetailsPage() {
     if (currentOrder?.estimatedPrice) setPrice(String(currentOrder.estimatedPrice));
   }, [currentOrder?.estimatedPrice]);
 
-  // ===== Live GPS emitter =====
-  // Nothing was ever pushing the handyman's real position to the customer's
-  // tracking map — this is the actual reason the map "never showed" during a
-  // live job. Once the handyman is on the way (or already working), join the
-  // order's socket room and stream position updates every few seconds.
+  // ===== Live GPS emitter & state updater =====
   useEffect(() => {
     const isLive = currentOrder && (
       (currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
       currentOrder.status === 'in-progress'
     );
-    if (!isLive || !navigator.geolocation || !token) return undefined;
+    if (!navigator.geolocation || !token) return undefined;
 
-    const socket = connectSocket(token);
+    const socket = isLive ? connectSocket(token) : null;
+    if (socket && isLive) {
+      socket.emit('joinOrderRoom', id);
+    }
 
-    socket.emit('joinOrderRoom', id);
+    let lastEmitted = null;
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        socket.emit('sendLocation', {
-          orderId: id,
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        });
+        const lat = position?.coords?.latitude;
+        const lng = position?.coords?.longitude;
+        if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+          setHandymanLoc({ latitude: lat, longitude: lng });
+          const now = Date.now();
+          if (isLive && socket && (!lastEmitted || (now - lastEmitted.time >= 5000))) {
+            console.log(`📍 [HandymanOrderDetails] Emitting live location: lat=${lat}, lng=${lng}`);
+            socket.emit('sendLocation', { orderId: id, lat, lng });
+            lastEmitted = { lat, lng, time: now };
+          }
+        }
       },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      (err) => console.warn('GPS watch error:', err.message),
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
 
     return () => {
       navigator.geolocation.clearWatch(watchId);
-      socket.emit('leaveOrderRoom', id);
+      if (socket && isLive) {
+        socket.emit('leaveOrderRoom', id);
+      }
     };
   }, [id, currentOrder?.status, currentOrder?.isHandymanOnTheWay, token]);
 
@@ -210,7 +229,7 @@ export default function HandymanOrderDetailsPage() {
       <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
         <div className="flex items-center gap-2 text-primary mb-3">
           <FaMapMarkerAlt size={18} />
-          <span className="font-bold text-lg">موقع العميل</span>
+          <span className="font-bold text-lg">موقع العميل والتتبع المباشر</span>
         </div>
         <p className="text-sm text-textGray">
           {currentOrder.customerLocation?.coordinates ? (
@@ -223,6 +242,27 @@ export default function HandymanOrderDetailsPage() {
             'غير محدد'
           )}
         </p>
+
+        {currentOrder.customerLocation?.coordinates &&
+          Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
+          Number.isFinite(currentOrder.customerLocation.coordinates[0]) && (
+            <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
+              <TrackingMap
+                customerLocation={{
+                  latitude: currentOrder.customerLocation.coordinates[1],
+                  longitude: currentOrder.customerLocation.coordinates[0],
+                }}
+                handymanLocation={
+                  handymanLoc && Number.isFinite(handymanLoc.latitude) && Number.isFinite(handymanLoc.longitude)
+                    ? handymanLoc
+                    : (currentDeviceLocation && Number.isFinite(currentDeviceLocation.latitude) && Number.isFinite(currentDeviceLocation.longitude)
+                      ? currentDeviceLocation
+                      : null)
+                }
+                className="absolute inset-0 h-full w-full"
+              />
+            </div>
+        )}
       </div>
 
       {/* Accepting requires setting a price first — this is what the customer

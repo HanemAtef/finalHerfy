@@ -11,6 +11,9 @@ import { formatPrice, getDefaultAvatar } from "../../utils/helpers";
 // returned the location directly (it returns { location, error, loading }),
 // and it called a dead, hardcoded-localhost:3000 service file instead of
 // the app's shared, authenticated `handymanService`.
+const isValidCoord = (lat, lng) =>
+  typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng);
+
 function TomTomMap() {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -21,9 +24,13 @@ function TomTomMap() {
 
   const { location } = useCurrentLocation();
 
+  const validLat = location?.latitude;
+  const validLng = location?.longitude;
+  const hasValidLocation = isValidCoord(validLat, validLng);
+
   // Initialize the map once we have a location
   useEffect(() => {
-    if (!location || mapInstance.current || !mapRef.current) return;
+    if (!hasValidLocation || mapInstance.current || !mapRef.current) return;
 
     const apiKey = import.meta.env.VITE_TOMTOM_API_KEY;
     if (!apiKey) return;
@@ -31,20 +38,20 @@ function TomTomMap() {
     mapInstance.current = tt.map({
       key: apiKey,
       container: mapRef.current,
-      center: [location.longitude, location.latitude],
+      center: [validLng, validLat],
       zoom: 13,
     });
 
     new tt.Marker({ color: "#0F4C75" })
-      .setLngLat([location.longitude, location.latitude])
+      .setLngLat([validLng, validLat])
       .addTo(mapInstance.current);
 
     const loadHandymen = async () => {
       setLoading(true);
       try {
         const { data } = await handymanService.getNearby({
-          lat: location.latitude,
-          lng: location.longitude,
+          lat: validLat,
+          lng: validLng,
         });
         setNearbyHandymen(data.handymen || []);
       } catch (error) {
@@ -63,7 +70,7 @@ function TomTomMap() {
         mapInstance.current = null;
       }
     };
-  }, [location?.latitude, location?.longitude]);
+  }, [hasValidLocation, validLat, validLng]);
 
   // Update markers whenever nearbyHandymen changes
   useEffect(() => {
@@ -76,6 +83,7 @@ function TomTomMap() {
       const coords = handyman.location?.coordinates;
       if (!coords || coords.length < 2) return;
       const [longitude, latitude] = coords;
+      if (!isValidCoord(latitude, longitude)) return;
       const id = handyman.id || handyman._id;
 
       const popup = new tt.Popup({ offset: 30 }).setHTML(`
@@ -101,8 +109,9 @@ function TomTomMap() {
 
   const flyToHandyman = (handyman) => {
     const coords = handyman.location?.coordinates;
-    if (!coords || !mapInstance.current) return;
+    if (!coords || coords.length < 2 || !mapInstance.current) return;
     const [lng, lat] = coords;
+    if (!isValidCoord(lat, lng)) return;
     const id = handyman.id || handyman._id;
 
     mapInstance.current.flyTo({ center: [lng, lat], zoom: 16 });
