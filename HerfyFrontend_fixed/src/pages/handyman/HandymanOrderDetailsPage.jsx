@@ -19,6 +19,8 @@ import LoadingSpinner from '../../components/common/LoadingSpinner';
 import LocationLabel from '../../components/common/LocationLabel';
 import ReasonModal from '../../components/common/ReasonModal';
 import AlertMessage from '../../components/common/AlertMessage';
+import TrackingMap from '../../components/Map/TrackingMap';
+import useCurrentLocation from '../../hooks/useCurrentLocation';
 import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
 
 export default function HandymanOrderDetailsPage() {
@@ -28,11 +30,23 @@ export default function HandymanOrderDetailsPage() {
   const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
   const { token } = useSelector((state) => state.auth);
 
+  const { location: currentDeviceLocation } = useCurrentLocation();
+  const [handymanLoc, setHandymanLoc] = useState(null);
+  const [routeGeometry, setRouteGeometry] = useState(null);
   const [price, setPrice] = useState('');
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
+
+  console.log('📍 [HandymanOrderDetails Render]', {
+    orderId: id,
+    hasCurrentOrder: !!currentOrder,
+    handymanLoc,
+    currentDeviceLocation,
+    customerLocation: currentOrder?.customerLocation,
+    routePoints: routeGeometry?.length || 0,
+  });
 
   useEffect(() => {
     dispatch(fetchOrderById(id));
@@ -42,39 +56,138 @@ export default function HandymanOrderDetailsPage() {
     if (currentOrder?.estimatedPrice) setPrice(String(currentOrder.estimatedPrice));
   }, [currentOrder?.estimatedPrice]);
 
-  // ===== Live GPS emitter =====
-  // Nothing was ever pushing the handyman's real position to the customer's
-  // tracking map — this is the actual reason the map "never showed" during a
-  // live job. Once the handyman is on the way (or already working), join the
-  // order's socket room and stream position updates every few seconds.
+  // ===== Live GPS emitter & socket listener =====
   useEffect(() => {
-    const isLive = currentOrder && (
-      (currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
-      currentOrder.status === 'in-progress'
-    );
-    if (!isLive || !navigator.geolocation || !token) return undefined;
+    const isLive =
+      currentOrder &&
+      (
+        (currentOrder.status === "price_confirmed" &&
+          currentOrder.isHandymanOnTheWay) ||
+        currentOrder.status === "in-progress"
+      );
+
+    console.log("🚦 LIVE STATUS =", isLive);
+
+    if (!navigator.geolocation) {
+      console.log("❌ Browser doesn't support Geolocation");
+      return;
+    }
+
+    if (!token) {
+      console.log("❌ No token");
+      return;
+    }
 
     const socket = connectSocket(token);
 
-    socket.emit('joinOrderRoom', id);
+    console.log("🔌 socket.connected =", socket.connected);
+
+    const onConnect = () => {
+      console.log("✅ SOCKET CONNECTED");
+
+      if (isLive) {
+        console.log("📥 JOIN ROOM", id);
+        socket.emit("joinOrderRoom", id);
+      }
+    };
+
+    socket.off("connect", onConnect);
+    socket.on("connect", onConnect);
+
+    if (socket.connected && isLive) {
+      console.log("📥 JOIN ROOM", id);
+      socket.emit("joinOrderRoom", id);
+    }
+
+const onLocationUpdate = (payload) => {
+  console.log("📩 LOCATION UPDATE RECEIVED", payload);
+
+  if (
+    Number.isFinite(payload?.lat) &&
+    Number.isFinite(payload?.lng)
+  ) {
+    setHandymanLoc({
+      latitude: payload.lat,
+      longitude: payload.lng,
+    });
+  }
+
+  if (Array.isArray(payload?.geometry)) {
+    setRouteGeometry(payload.geometry);
+  }
+};
+
+    socket.off("locationUpdate", onLocationUpdate);
+    socket.on("locationUpdate", onLocationUpdate);
+
+    let lastSent = 0;
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        socket.emit('sendLocation', {
+        console.log("📍 GPS CALLBACK", position.coords);
+
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+
+        setHandymanLoc({
+          latitude: lat,
+          longitude: lng,
+        });
+
+        if (!isLive) {
+          console.log("⛔ Not live yet");
+          return;
+        }
+
+        if (!socket.connected) {
+          console.log("❌ Socket disconnected");
+          return;
+        }
+
+        const now = Date.now();
+
+        if (now - lastSent < 5000) return;
+
+        lastSent = now;
+
+        console.log("📤 EMIT sendLocation", {
           orderId: id,
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
+          lat,
+          lng,
+        });
+
+        socket.emit("sendLocation", {
+          orderId: id,
+          lat: lat,
+          lng: lng,
         });
       },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      (err) => {
+        console.log("❌ GPS ERROR", err);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      }
     );
 
     return () => {
       navigator.geolocation.clearWatch(watchId);
-      socket.emit('leaveOrderRoom', id);
+
+      socket.off("connect", onConnect);
+      socket.off("locationUpdate", onLocationUpdate);
+
+      if (isLive) {
+        socket.emit("leaveOrderRoom", id);
+      }
     };
-  }, [id, currentOrder?.status, currentOrder?.isHandymanOnTheWay, token]);
+  }, [
+    id,
+    token,
+    currentOrder?.status,
+    currentOrder?.isHandymanOnTheWay,
+  ]);
 
   const handleStatus = (status, extra = {}) => {
     dispatch(updateOrderStatus({ id, status, ...extra })).then((result) => {
@@ -210,7 +323,7 @@ export default function HandymanOrderDetailsPage() {
       <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
         <div className="flex items-center gap-2 text-primary mb-3">
           <FaMapMarkerAlt size={18} />
-          <span className="font-bold text-lg">موقع العميل</span>
+          <span className="font-bold text-lg">موقع العميل والتتبع المباشر</span>
         </div>
         <p className="text-sm text-textGray">
           {currentOrder.customerLocation?.coordinates ? (
@@ -223,6 +336,28 @@ export default function HandymanOrderDetailsPage() {
             'غير محدد'
           )}
         </p>
+
+        {currentOrder.customerLocation?.coordinates &&
+          Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
+          Number.isFinite(currentOrder.customerLocation.coordinates[0]) && (
+            <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
+              <TrackingMap
+                customerLocation={{
+                  latitude: currentOrder.customerLocation.coordinates[1],
+                  longitude: currentOrder.customerLocation.coordinates[0],
+                }}
+                handymanLocation={
+                  handymanLoc && Number.isFinite(handymanLoc.latitude) && Number.isFinite(handymanLoc.longitude)
+                    ? handymanLoc
+                    : (currentDeviceLocation && Number.isFinite(currentDeviceLocation.latitude) && Number.isFinite(currentDeviceLocation.longitude)
+                      ? currentDeviceLocation
+                      : null)
+                }
+                routeGeometry={routeGeometry}
+                className="absolute inset-0 h-full w-full"
+              />
+            </div>
+          )}
       </div>
 
       {/* Accepting requires setting a price first — this is what the customer
@@ -349,11 +484,10 @@ export default function HandymanOrderDetailsPage() {
           <div className="mb-2 flex items-center justify-between">
             <span className="font-bold text-textDark">الدفع</span>
             <span
-              className={`rounded-lg px-3 py-1 text-sm font-bold ${
-                currentOrder.paymentStatus === 'paid'
-                  ? 'bg-secondary/10 text-secondary'
-                  : 'bg-emergency/10 text-emergency'
-              }`}
+              className={`rounded-lg px-3 py-1 text-sm font-bold ${currentOrder.paymentStatus === 'paid'
+                ? 'bg-secondary/10 text-secondary'
+                : 'bg-emergency/10 text-emergency'
+                }`}
             >
               {currentOrder.paymentStatus === 'paid' ? 'تم الدفع' : 'لم يتم الدفع بعد'}
             </span>
