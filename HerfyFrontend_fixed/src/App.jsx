@@ -116,7 +116,7 @@ function App() {
             <Route path="profile" element={<AdminProfilePage />} />
             <Route path="notifications" element={<AdminNotificationsPage />} />
           </Route>
-
+            
           {/* Chat (customer & handyman) */}
           <Route
             path="/chat/:orderId"
@@ -126,7 +126,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-
+           
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -134,5 +134,5 @@ function App() {
     </BrowserRouter>
   );
 }
-
+        
 export default App;
