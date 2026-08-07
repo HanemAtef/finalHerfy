@@ -13,7 +13,7 @@ export default function HandymanTracking() {
   const dispatch = useDispatch();
   const { currentOrder, isLoading } = useSelector((state) => state.orders);
   const { location } = useCurrentLocation();
-  
+
   const [isTracking, setIsTracking] = useState(false);
   const [isArrived, setIsArrived] = useState(false);
   const watchIdRef = useRef(null);
@@ -81,7 +81,7 @@ export default function HandymanTracking() {
           if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
             const last = lastLocationRef.current;
             const movedDistance = last ? calculateDistanceMeters(last.lat, last.lng, lat, lng) : 999;
-            
+
             // Only emit if moved > 10m or first emit
             if (!last || movedDistance >= 10) {
               console.log(`📍 [Frontend] Emitting GPS position update: lat=${lat}, lng=${lng} (moved: ${Math.round(movedDistance)}m)`);

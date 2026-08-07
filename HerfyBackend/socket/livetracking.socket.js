@@ -1,6 +1,6 @@
 const Order = require('../models/Order');
 const Handyman = require('../models/Handyman');
-const {calculateRoute} = require('../utils/tomtom');
+const { calculateRoute } = require('../utils/tomtom');
 
 const etaThrottleMap = new Map(); // orderId -> last calculated timestamp
 
@@ -42,10 +42,13 @@ const liveTrackingSocket = (io) => {
     });
 
     // sendLocation
+
     socket.on('sendLocation', async (data) => {
       const { orderId, lat, lng } = data || {};
+
       const numLat = Number(lat);
       const numLng = Number(lng);
+      
 
       console.log(`📥 [Backend Socket Audit] sendLocation received for order ${orderId}: lat=${lat}, lng=${lng}`);
 
@@ -59,6 +62,10 @@ const liveTrackingSocket = (io) => {
         console.warn(`❌ [Backend Socket Audit] Order not found: ${orderId}`);
         return socket.emit('error', { msg: 'Order not found' });
       }
+  console.log("===== BEFORE TOMTOM =====");
+console.log("customerLocation =", order.customerLocation);
+console.log("coordinates =", order.customerLocation?.coordinates);
+console.log("origin =", { lat: numLat, lng: numLng });
 
       const userId = socket.user?._id?.toString();
       const isAssignedHandyman = userId && order.handymanId.toString() === userId;
@@ -72,12 +79,12 @@ const liveTrackingSocket = (io) => {
       let routeData = null;
       if (order.customerLocation && Array.isArray(order.customerLocation.coordinates) && order.customerLocation.coordinates.length === 2) {
         const [customerLng, customerLat] = order.customerLocation.coordinates;
-        
+
         if (Number.isFinite(customerLat) && Number.isFinite(customerLng)) {
           const now = Date.now();
           const lastCalc = etaThrottleMap.get(orderId) || 0;
           const intervalSec = parseInt(process.env.ETA_RECALCULATION_INTERVAL_SEC) || 60;
-          
+
           if (now - lastCalc > intervalSec * 1000) {
             console.log(`🗺️ [Backend TomTom Audit] Requesting calculateRoute: origin=(${numLat}, ${numLng}) -> destination=(${customerLat}, ${customerLng})`);
             try {
@@ -85,8 +92,9 @@ const liveTrackingSocket = (io) => {
                 { lat: numLat, lng: numLng },
                 { lat: customerLat, lng: customerLng }
               );
+
               etaThrottleMap.set(orderId, now);
-              
+
               if (routeData && order.eta && Math.abs(routeData.eta - order.eta) <= 2) {
                 routeData.eta = order.eta;
               }
@@ -118,12 +126,13 @@ const liveTrackingSocket = (io) => {
       const updateData = {
         lat: numLat,
         lng: numLng,
-        ...(routeData && routeData.distance !== null && {
+        ...(routeData && {
           distanceRemaining: routeData.distance,
           eta: routeData.eta,
           trafficDelay: routeData.trafficDelay,
-          arrivalTime: routeData.arrivalTime
-        })
+          arrivalTime: routeData.arrivalTime,
+          geometry: routeData.geometry,
+        }),
       };
 
       // Broadcast immediately to order room

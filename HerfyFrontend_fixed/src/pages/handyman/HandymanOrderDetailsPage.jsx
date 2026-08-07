@@ -32,6 +32,7 @@ export default function HandymanOrderDetailsPage() {
 
   const { location: currentDeviceLocation } = useCurrentLocation();
   const [handymanLoc, setHandymanLoc] = useState(null);
+  const [routeGeometry, setRouteGeometry] = useState(null);
   const [price, setPrice] = useState('');
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -44,6 +45,7 @@ export default function HandymanOrderDetailsPage() {
     handymanLoc,
     currentDeviceLocation,
     customerLocation: currentOrder?.customerLocation,
+    routePoints: routeGeometry?.length || 0,
   });
 
   useEffect(() => {
@@ -54,46 +56,138 @@ export default function HandymanOrderDetailsPage() {
     if (currentOrder?.estimatedPrice) setPrice(String(currentOrder.estimatedPrice));
   }, [currentOrder?.estimatedPrice]);
 
-  // ===== Live GPS emitter & state updater =====
+  // ===== Live GPS emitter & socket listener =====
   useEffect(() => {
-    const isLive = currentOrder && (
-      (currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
-      currentOrder.status === 'in-progress'
-    );
-    if (!navigator.geolocation || !token) return undefined;
+    const isLive =
+      currentOrder &&
+      (
+        (currentOrder.status === "price_confirmed" &&
+          currentOrder.isHandymanOnTheWay) ||
+        currentOrder.status === "in-progress"
+      );
 
-    const socket = isLive ? connectSocket(token) : null;
-    if (socket && isLive) {
-      socket.emit('joinOrderRoom', id);
+    console.log("🚦 LIVE STATUS =", isLive);
+
+    if (!navigator.geolocation) {
+      console.log("❌ Browser doesn't support Geolocation");
+      return;
     }
 
-    let lastEmitted = null;
+    if (!token) {
+      console.log("❌ No token");
+      return;
+    }
+
+    const socket = connectSocket(token);
+
+    console.log("🔌 socket.connected =", socket.connected);
+
+    const onConnect = () => {
+      console.log("✅ SOCKET CONNECTED");
+
+      if (isLive) {
+        console.log("📥 JOIN ROOM", id);
+        socket.emit("joinOrderRoom", id);
+      }
+    };
+
+    socket.off("connect", onConnect);
+    socket.on("connect", onConnect);
+
+    if (socket.connected && isLive) {
+      console.log("📥 JOIN ROOM", id);
+      socket.emit("joinOrderRoom", id);
+    }
+
+const onLocationUpdate = (payload) => {
+  console.log("📩 LOCATION UPDATE RECEIVED", payload);
+
+  if (
+    Number.isFinite(payload?.lat) &&
+    Number.isFinite(payload?.lng)
+  ) {
+    setHandymanLoc({
+      latitude: payload.lat,
+      longitude: payload.lng,
+    });
+  }
+
+  if (Array.isArray(payload?.geometry)) {
+    setRouteGeometry(payload.geometry);
+  }
+};
+
+    socket.off("locationUpdate", onLocationUpdate);
+    socket.on("locationUpdate", onLocationUpdate);
+
+    let lastSent = 0;
 
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
-        const lat = position?.coords?.latitude;
-        const lng = position?.coords?.longitude;
-        if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
-          setHandymanLoc({ latitude: lat, longitude: lng });
-          const now = Date.now();
-          if (isLive && socket && (!lastEmitted || (now - lastEmitted.time >= 5000))) {
-            console.log(`📍 [HandymanOrderDetails] Emitting live location: lat=${lat}, lng=${lng}`);
-            socket.emit('sendLocation', { orderId: id, lat, lng });
-            lastEmitted = { lat, lng, time: now };
-          }
+        console.log("📍 GPS CALLBACK", position.coords);
+
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+
+        setHandymanLoc({
+          latitude: lat,
+          longitude: lng,
+        });
+
+        if (!isLive) {
+          console.log("⛔ Not live yet");
+          return;
         }
+
+        if (!socket.connected) {
+          console.log("❌ Socket disconnected");
+          return;
+        }
+
+        const now = Date.now();
+
+        if (now - lastSent < 5000) return;
+
+        lastSent = now;
+
+        console.log("📤 EMIT sendLocation", {
+          orderId: id,
+          lat,
+          lng,
+        });
+
+        socket.emit("sendLocation", {
+          orderId: id,
+          lat: lat,
+          lng: lng,
+        });
       },
-      (err) => console.warn('GPS watch error:', err.message),
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      (err) => {
+        console.log("❌ GPS ERROR", err);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      }
     );
 
     return () => {
       navigator.geolocation.clearWatch(watchId);
-      if (socket && isLive) {
-        socket.emit('leaveOrderRoom', id);
+
+      socket.off("connect", onConnect);
+      socket.off("locationUpdate", onLocationUpdate);
+
+      if (isLive) {
+        socket.emit("leaveOrderRoom", id);
       }
     };
-  }, [id, currentOrder?.status, currentOrder?.isHandymanOnTheWay, token]);
+  }, [
+    id,
+    token,
+    currentOrder?.status,
+    currentOrder?.isHandymanOnTheWay,
+  ]);
 
   const handleStatus = (status, extra = {}) => {
     dispatch(updateOrderStatus({ id, status, ...extra })).then((result) => {
@@ -259,10 +353,11 @@ export default function HandymanOrderDetailsPage() {
                       ? currentDeviceLocation
                       : null)
                 }
+                routeGeometry={routeGeometry}
                 className="absolute inset-0 h-full w-full"
               />
             </div>
-        )}
+          )}
       </div>
 
       {/* Accepting requires setting a price first — this is what the customer
@@ -389,11 +484,10 @@ export default function HandymanOrderDetailsPage() {
           <div className="mb-2 flex items-center justify-between">
             <span className="font-bold text-textDark">الدفع</span>
             <span
-              className={`rounded-lg px-3 py-1 text-sm font-bold ${
-                currentOrder.paymentStatus === 'paid'
-                  ? 'bg-secondary/10 text-secondary'
-                  : 'bg-emergency/10 text-emergency'
-              }`}
+              className={`rounded-lg px-3 py-1 text-sm font-bold ${currentOrder.paymentStatus === 'paid'
+                ? 'bg-secondary/10 text-secondary'
+                : 'bg-emergency/10 text-emergency'
+                }`}
             >
               {currentOrder.paymentStatus === 'paid' ? 'تم الدفع' : 'لم يتم الدفع بعد'}
             </span>

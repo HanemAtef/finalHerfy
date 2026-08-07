@@ -3,20 +3,30 @@ import tt from '@tomtom-international/web-sdk-maps';
 import '@tomtom-international/web-sdk-maps/dist/maps.css';
 
 const isValidCoord = (lat, lng) =>
-  typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng);
+  typeof lat === 'number' &&
+  typeof lng === 'number' &&
+  Number.isFinite(lat) &&
+  Number.isFinite(lng) &&
+  lat >= -90 &&
+  lat <= 90 &&
+  lng >= -180 &&
+  lng <= 180 &&
+  !(lat === 0 && lng === 0);
 
 export default function TrackingMap({
   customerLocation,
   handymanLocation,
   pickupLocation,
   destinationLocation,
+  routeGeometry,
   center,
   zoom = 13,
   className = 'h-full w-full',
 }) {
-  const mapRef = useRef(null);
-  const mapInstance = useRef(null);
-  const markersRef = useRef([]);
+ const mapRef = useRef(null);
+const mapInstance = useRef(null);
+const markersRef = useRef([]);
+const mapLoaded = useRef(false);
 
   // Log coordinates audit before rendering
   console.group('🗺️ [TrackingMap Coordinates Audit]');
@@ -24,6 +34,7 @@ export default function TrackingMap({
   console.log('📍 handymanLocation:', handymanLocation);
   console.log('📍 pickupLocation:', pickupLocation);
   console.log('📍 destinationLocation:', destinationLocation);
+  console.log('📍 routeGeometry points count:', routeGeometry?.length || 0);
   console.log('📍 center:', center);
   
   const nullCheck = {
@@ -61,26 +72,36 @@ export default function TrackingMap({
     }
 
     try {
-      mapInstance.current = tt.map({
-        key: apiKey,
-        container: mapRef.current,
-        center: defaultCenter,
-        zoom,
+      // Step 11: Print DOM container metrics before map creation
+      const domContainer = mapRef.current;
+      const rect = domContainer?.getBoundingClientRect();
+      console.log('📐 [Step 11 DOM Metrics before tt.map]', {
+        offsetWidth: domContainer?.offsetWidth,
+        offsetHeight: domContainer?.offsetHeight,
+        clientWidth: domContainer?.clientWidth,
+        clientHeight: domContainer?.clientHeight,
+        rect: rect ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height } : null,
       });
 
-      // Log DOM container dimensions immediately after map creation
-      const domContainer = mapRef.current;
+mapInstance.current = tt.map({
+  key: apiKey,
+  container: mapRef.current,
+  center: defaultCenter,
+  zoom,
+});
+
+mapInstance.current.on("load", () => {
+  console.log("✅ TomTom Style Loaded");
+  mapLoaded.current = true;
+  // Step 12: Print DOM container metrics after map load
+   mapInstance.current.resize();
+});
       const sdkContainer = mapInstance.current.getContainer();
-      console.log('📐 [TrackingMap DOM Audit]', {
-        domClientWidth: domContainer?.clientWidth,
-        domClientHeight: domContainer?.clientHeight,
-        domOffsetWidth: domContainer?.offsetWidth,
-        domOffsetHeight: domContainer?.offsetHeight,
+      console.log('📐 [TrackingMap SDK Container Metrics]', {
         sdkClientWidth: sdkContainer?.clientWidth,
         sdkClientHeight: sdkContainer?.clientHeight,
       });
 
-      // Force canvas layout recalculation for flex containers
       setTimeout(() => {
         try {
           mapInstance.current?.resize();
@@ -99,7 +120,12 @@ export default function TrackingMap({
 
   // ✅ Markers and route bounds update (Uber-style tracking: Handyman -> Customer)
   useEffect(() => {
-    if (!mapInstance.current) return;
+   if (!mapInstance.current) return;
+
+if (!mapLoaded.current) {
+  console.log("⏳ Waiting for TomTom style...");
+  return;
+}
 
     // Clear old markers
     markersRef.current.forEach((m) => {
@@ -150,10 +176,84 @@ export default function TrackingMap({
       }
     }
 
-    // 3. Adjust Map Bounds between Origin (Handyman) & Destination (Customer)
-    const activeCoords = [];
-    if (handyOrigin) activeCoords.push([handyOrigin.longitude, handyOrigin.latitude]);
-    if (custDestination) activeCoords.push([custDestination.longitude, custDestination.latitude]);
+    // 3. Render Uber Driving Route Layer
+    const routeCoords = Array.isArray(routeGeometry) && routeGeometry.length >= 2
+      ? routeGeometry.filter((c) => Array.isArray(c) && c.length === 2 && isValidCoord(c[1], c[0]))
+      : (handyOrigin && custDestination
+        ? [[handyOrigin.longitude, handyOrigin.latitude], [custDestination.longitude, custDestination.latitude]]
+        : []);
+console.log("🛣 routeCoords =", JSON.stringify(routeCoords, null, 2));
+    if (routeCoords.length >= 2) {
+      const geojsonFeature = {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: routeCoords,
+        },
+      };
+
+      // Step 4: Log immediately before addSource / setData
+      console.log('🗺️ [Step 4 Pre-Source Audit]', {
+        routeGeometry,
+        geojsonFeature,
+        coordinatesLength: routeCoords.length,
+        firstPoint: routeCoords[0],
+        lastPoint: routeCoords[routeCoords.length - 1],
+      });
+
+      try {
+        const existingSource = mapInstance.current.getSource('uber-route-source');
+        if (existingSource) {
+          existingSource.setData(geojsonFeature);
+          // Step 7: Verification after setData
+          console.log('🗺️ [Step 7 setData Verification] Source data updated with coordinates count:', routeCoords.length);
+        } else {
+          mapInstance.current.addSource('uber-route-source', {
+            type: 'geojson',
+            data: geojsonFeature,
+          });
+
+          // Step 5: Verify source exists after addSource
+          const addedSource = mapInstance.current.getSource('uber-route-source');
+          console.log('🗺️ [Step 5 Source Verification]', {
+            sourceExists: !!addedSource,
+            sourceType: addedSource?.type,
+          });
+
+          mapInstance.current.addLayer({
+            id: 'uber-route-layer',
+            type: 'line',
+            source: 'uber-route-source',
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round',
+            },
+            paint: {
+              'line-color': '#0F4C75',
+              'line-width': 6,
+              'line-opacity': 0.85,
+            },
+          });
+
+          // Step 6: Verify layer exists after addLayer
+          const addedLayer = mapInstance.current.getLayer('uber-route-layer');
+          console.log('🗺️ [Step 6 Layer Verification]', {
+            layerExists: !!addedLayer,
+            layerId: addedLayer?.id,
+            layerType: addedLayer?.type,
+          });
+        }
+      } catch (err) {
+        console.warn('Could not render route layer:', err);
+      }
+    }
+
+    // 4. Adjust Map Bounds between Origin (Handyman) & Destination (Customer)
+    const activeCoords = routeCoords.length >= 2 ? routeCoords : [];
+    if (activeCoords.length === 0) {
+      if (handyOrigin) activeCoords.push([handyOrigin.longitude, handyOrigin.latitude]);
+      if (custDestination) activeCoords.push([custDestination.longitude, custDestination.latitude]);
+    }
 
     const validActiveCoords = activeCoords.filter(
       (c) => Array.isArray(c) && c.length === 2 && isValidCoord(c[1], c[0])
@@ -164,7 +264,6 @@ export default function TrackingMap({
         console.log('📍 [SDK Call] Fitting map bounds between Handyman & Customer:', validActiveCoords);
         const bounds = new tt.LngLatBounds();
         validActiveCoords.forEach((coord) => {
-          console.log('📍 [SDK Call] bounds.extend:', coord);
           bounds.extend(coord);
         });
         mapInstance.current.fitBounds(bounds, { padding: 60 });
@@ -186,6 +285,7 @@ export default function TrackingMap({
     pickupLocation?.longitude,
     destinationLocation?.latitude,
     destinationLocation?.longitude,
+    routeGeometry,
   ]);
 
   if (!import.meta.env.VITE_TOMTOM_API_KEY) {
@@ -199,5 +299,11 @@ export default function TrackingMap({
     );
   }
 
-  return <div ref={mapRef} className={className} />;
+  return (
+    <div
+      ref={mapRef}
+      className={className}
+      style={{ width: '100%', height: '100%', minHeight: '300px' }}
+    />
+  );
 }

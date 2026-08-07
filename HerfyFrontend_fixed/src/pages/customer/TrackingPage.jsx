@@ -34,6 +34,7 @@ export default function TrackingPage() {
   const { location, loading: locationLoading } = useCurrentLocation();
   
   const [handymanLoc, setHandymanLoc] = useState(null);
+  const [routeGeometry, setRouteGeometry] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
   const [distance, setDistance] = useState(null);
@@ -54,25 +55,26 @@ export default function TrackingPage() {
   useEffect(() => {
     if (!orderId || !token) return;
 
-    // connectSocket() is idempotent (returns the existing socket if already
-    // connected). We call it here too — instead of relying solely on
-    // AuthInit's useSocket() — because React fires child effects before
-    // parent effects. On a hard reload of /customer/tracking/:orderId this
-    // effect used to run before AuthInit's useSocket() had called
-    // connectSocket(), so getSocket() returned null, the room was never
-    // joined, and every 'locationUpdate' the handyman sent was missed — the
-    // live map never appeared (it only ever showed a stale snapshot via the
-    // 8s REST poll).
     const socket = connectSocket(token);
 
     socket.emit('joinOrderRoom', orderId);
 
-    socket.on('locationUpdate', ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime }) => {
+    socket.on('locationUpdate', ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime, geometry }) => {
       const numLat = Number(lat);
       const numLng = Number(lng);
       if (Number.isFinite(numLat) && Number.isFinite(numLng)) {
         console.log(`📍 [TrackingPage] Real-time handyman location received: ${numLat}, ${numLng}`);
         setHandymanLoc({ latitude: numLat, longitude: numLng });
+      }
+
+      if (Array.isArray(geometry) && geometry.length >= 2) {
+        console.log('🗺️ [Step 2 Customer Geometry Audit]', {
+          isArray: Array.isArray(geometry),
+          length: geometry.length,
+          firstPoint: geometry[0],
+          lastPoint: geometry[geometry.length - 1],
+        });
+        setRouteGeometry(geometry);
       }
 
       if (distanceRemaining !== undefined) setDistance(distanceRemaining);
@@ -430,6 +432,7 @@ export default function TrackingPage() {
                   : null
             }
             handymanLocation={handymanLoc}
+            routeGeometry={routeGeometry}
             pickupLocation={
               Array.isArray(currentOrder?.customerLocation?.coordinates) &&
               Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
