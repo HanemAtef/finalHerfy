@@ -14,6 +14,7 @@ const {
   settleWallet,
   getDashboardChart,
   broadcastAnnouncement,
+  getUserDetail,
 } = require("../controllers/adminControllers");
 const {
   approveHandyman,
@@ -54,6 +55,7 @@ router.get("/dashboard/chart", getDashboardChart);
 // ========== USER MANAGEMENT ==========
 // =====================================================
 router.get("/users", getAllUsers);
+router.get("/users/:userId", getUserDetail);
 router.patch("/users/:userId/ban", toggleUserBan); // legacy, kept for compatibility
 router.patch("/users/:userId/ban-with-reason", banUserWithReason);
 router.delete("/users/:userId", deleteUserAccount);
