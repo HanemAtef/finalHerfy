@@ -17,8 +17,6 @@ const {
   getUserDetail,
 } = require("../controllers/adminControllers");
 const {
-  approveHandyman,
-  rejectHandyman,
   suspendHandyman,
   deleteUserAccount,
   banUserWithReason,
@@ -87,8 +85,6 @@ router.patch("/handymen/auto-verify-all", autoVerifyAll);
 // =====================================================
 // ========== HANDYMAN MODERATION (Manual) ==========
 // =====================================================
-router.patch("/handymen/:handymanId/approve", approveHandyman);
-router.patch("/handymen/:handymanId/reject", rejectHandyman);
 router.patch("/handymen/:handymanId/suspend", suspendHandyman);
 
 // =====================================================

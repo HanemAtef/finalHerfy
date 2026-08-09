@@ -5,7 +5,8 @@ const Handyman = require("../models/Handyman");
 const axios = require("axios");
 const mongoose = require("mongoose");
 const { createNotification } = require("./notificationController");
-
+const { cleanupThrottle } = require("../socket/liveTrackingThrottle");
+const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
 // ========== 1. create order ==========
 const createOrder = async (req, res) => {
   try {
@@ -42,6 +43,10 @@ const createOrder = async (req, res) => {
       return res.status(404).json({ msg: "Handyman not found" });
     }
 
+
+    if (handymanId === req.user.id) {
+      return res.status(400).json({ msg: "You cannot create an order for yourself" });
+    }
 
     const handymanProfile = await Handyman.findOne({
       userId: handymanId,
@@ -324,6 +329,7 @@ const updateOrderStatus = async (req, res) => {
       if (currentStatus === "completed") {
         return res.status(400).json({ msg: "Cannot cancel a completed order" });
       }
+      cleanupThrottle(id);
       // ========== NOTIFICATION: Order cancelled ==========
       const io = req.app.get('io');
       const recipientId = isCustomer ? order.handymanId : order.customerId;
@@ -424,7 +430,7 @@ const updateOrderStatus = async (req, res) => {
       );
 
       try {
-        io.to(id).emit('tracking-started', {
+        io.to(id).emit('trackingStarted', {
           orderId: id,
           handymanName: req.user.name,
           message: 'Handyman is on the way!',
@@ -493,12 +499,15 @@ const updateOrderStatus = async (req, res) => {
         status: "in-progress",
       });
 
+      const updateQuery = { $inc: { completedOrders: 1 } };
       if (inProgressCount < 3) {
-        await Handyman.findOneAndUpdate(
-          { userId: order.handymanId },
-          { isAvailable: true }
-        );
+        updateQuery.isAvailable = true;
       }
+      await Handyman.findOneAndUpdate(
+        { userId: order.handymanId },
+        updateQuery
+      );
+      cleanupThrottle(id);
       // ========== NOTIFICATION: Order completed ==========
       const io = req.app.get('io');
       await createNotification(
@@ -701,89 +710,89 @@ const respondReschedule = async (req, res) => {
 };
 
 // ========== Confirm Cash Payment ==========
-// const confirmCashPayment = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-//     const order = await Order.findById(id);
+const confirmCashPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = await Order.findById(id);
 
-//     if (!order) {
-//       return res.status(404).json({ msg: "Order not found" });
-//     }
+    if (!order) {
+      return res.status(404).json({ msg: "Order not found" });
+    }
 
-//     const isHandyman = req.user.id === order.handymanId?.toString();
-//     const isAdmin = req.user.role === "admin";
+    const isHandyman = req.user.id === order.handymanId?.toString();
+    const isAdmin = req.user.role === "admin";
 
-//     if (!isHandyman && !isAdmin) {
-//       return res.status(403).json({ msg: "Only the handyman can confirm receiving the payment" });
-//     }
+    if (!isHandyman && !isAdmin) {
+      return res.status(403).json({ msg: "Only the handyman can confirm receiving the payment" });
+    }
 
-//     if (order.status !== "completed") {
-//       return res.status(400).json({ msg: "Order must be completed before confirming payment" });
-//     }
+    if (order.status !== "completed") {
+      return res.status(400).json({ msg: "Order must be completed before confirming payment" });
+    }
 
-//     if (order.paymentStatus === "paid") {
-//       return res.status(400).json({ msg: "Payment already confirmed" });
-//     }
+    if (order.paymentStatus === "paid") {
+      return res.status(400).json({ msg: "Payment already confirmed" });
+    }
 
-//     order.paymentStatus = "paid";
-//     order.paidAt = new Date();
-//     await order.save();
+    order.paymentStatus = "paid";
+    order.paidAt = new Date();
+    await order.save();
 
-//     // BUG FIX (C8): collect the penalty that was snapshotted onto this
-//     // order at creation time — this is the point the debt is actually
-//     // being paid in cash alongside the job, so this is when it should
-//     // come off the customer's outstanding balance (not at order creation).
-//     if (order.penaltyAmount > 0) {
-//       const customer = await User.findById(order.customerId);
-//       if (customer) {
-//         customer.penaltyAmount = Math.max(0, (customer.penaltyAmount || 0) - order.penaltyAmount);
-//         await customer.save();
-//       }
-//     }
+    // BUG FIX (C8): collect the penalty that was snapshotted onto this
+    // order at creation time — this is the point the debt is actually
+    // being paid in cash alongside the job, so this is when it should
+    // come off the customer's outstanding balance (not at order creation).
+    if (order.penaltyAmount > 0) {
+      const customer = await User.findById(order.customerId);
+      if (customer) {
+        customer.penaltyAmount = Math.max(0, (customer.penaltyAmount || 0) - order.penaltyAmount);
+        await customer.save();
+      }
+    }
 
-//     // The customer paid the handyman in cash directly, so the platform's
-//     // commission on this order hasn't actually been collected — track it as
-//     // a debt on the handyman's wallet.
-//     const WALLET_SUSPENSION_THRESHOLD = 500; // EGP
-//     const handyman = await Handyman.findOne({ userId: order.handymanId });
-//     let justSuspended = false;
-//     if (handyman) {
-//       handyman.walletBalance = (handyman.walletBalance || 0) + (order.commissionAmount || 0);
-//       if (handyman.walletBalance >= WALLET_SUSPENSION_THRESHOLD && !handyman.isSuspended) {
-//         handyman.isSuspended = true;
-//         handyman.suspendedReason = "رصيد العمولة المستحقة للمنصة تجاوز الحد المسموح";
-//         justSuspended = true;
-//       }
-//       await handyman.save();
-//     }
+    // The customer paid the handyman in cash directly, so the platform's
+    // commission on this order hasn't actually been collected — track it as
+    // a debt on the handyman's wallet.
+    const WALLET_SUSPENSION_THRESHOLD = 500; // EGP
+    const handyman = await Handyman.findOne({ userId: order.handymanId });
+    let justSuspended = false;
+    if (handyman) {
+      handyman.walletBalance = (handyman.walletBalance || 0) + (order.commissionAmount || 0);
+      if (handyman.walletBalance >= WALLET_SUSPENSION_THRESHOLD && !handyman.isSuspended) {
+        handyman.isSuspended = true;
+        handyman.suspendedReason = WALLET_DEBT_SUSPENSION_REASON;
+        justSuspended = true;
+      }
+      await handyman.save();
+    }
 
-//     const io = req.app.get('io');
-//     await createNotification(
-//       io,
-//       order.customerId,
-//       'payment_confirmed',
-//       ' Payment Confirmed',
-//       `${req.user.name} confirmed receiving the payment for your order`,
-//       { orderId: order._id }
-//     );
+    const io = req.app.get('io');
+    await createNotification(
+      io,
+      order.customerId,
+      'payment_confirmed',
+      ' Payment Confirmed',
+      `${req.user.name} confirmed receiving the payment for your order`,
+      { orderId: order._id }
+    );
 
-//     if (justSuspended) {
-//       await createNotification(
-//         io,
-//         order.handymanId,
-//         'account_blocked',
-//         ' Account Suspended',
-//         `تم إيقاف حسابك مؤقتاً لتجاوز رصيد العمولة المستحقة ${WALLET_SUSPENSION_THRESHOLD} ج.م. يرجى التواصل مع الدعم للتسوية.`,
-//         { walletBalance: handyman.walletBalance }
-//       );
-//     }
+    if (justSuspended) {
+      await createNotification(
+        io,
+        order.handymanId,
+        'account_blocked',
+        ' Account Suspended',
+        `تم إيقاف حسابك مؤقتاً لتجاوز رصيد العمولة المستحقة ${WALLET_SUSPENSION_THRESHOLD} ج.م. يرجى التواصل مع الدعم للتسوية.`,
+        { walletBalance: handyman.walletBalance }
+      );
+    }
 
-//     res.status(200).json({ msg: "Payment confirmed", order, walletBalance: handyman?.walletBalance });
-//   } catch (error) {
-//     console.log(error);
-//     res.status(500).json({ msg: "Server error", error: error.message });
-//   }
-// };
+    res.status(200).json({ msg: "Payment confirmed", order, walletBalance: handyman?.walletBalance });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
 
 // ========== Handyman marks "on the way" ==========
 // Separate from status transitions on purpose: it doesn't change the order
@@ -814,7 +823,7 @@ const markOnTheWay = async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      io.to(id).emit('tracking-started', {
+      io.to(id).emit('trackingStarted', {
         orderId: id,
         handymanName: req.user.name,
         message: 'Handyman is on the way!',
@@ -847,4 +856,5 @@ module.exports = {
   respondReschedule,
   requestReschedule,
   markOnTheWay,
+  confirmCashPayment,
 };

@@ -12,28 +12,16 @@ import {
   FaFlag,
   FaBan,
 } from "react-icons/fa";
-
-import {
-  fetchOrderById,
-  updateOrderStatus,
-  markOrderOnTheWay,
-} from "../../store/slices/orderSlice";
-
-import { uploadService, reportService } from "../../services/api";
-import { connectSocket } from "../../socket/socket";
-
-import LoadingSpinner from "../../components/common/LoadingSpinner";
-import LocationLabel from "../../components/common/LocationLabel";
-import ReasonModal from "../../components/common/ReasonModal";
-import AlertMessage from "../../components/common/AlertMessage";
-import TrackingMap from "../../components/Map/TrackingMap";
-import useCurrentLocation from "../../hooks/useCurrentLocation";
-
-import {
-  formatDate,
-  formatPrice,
-  ORDER_STATUS_LABELS,
-} from "../../utils/helpers";
+import { fetchOrderById, updateOrderStatus, markOrderOnTheWay } from '../../store/slices/orderSlice';
+import { uploadService, reportService } from '../../services/api';
+import { connectSocket } from '../../socket/socket';
+import LoadingSpinner from '../../components/common/LoadingSpinner';
+import LocationLabel from '../../components/common/LocationLabel';
+import ReasonModal from '../../components/common/ReasonModal';
+import AlertMessage from '../../components/common/AlertMessage';
+import TrackingMap from '../../components/Map/TrackingMap';
+import useCurrentLocation from '../../hooks/useCurrentLocation';
+import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
 
 export default function HandymanOrderDetailsPage() {
   const { id } = useParams();
