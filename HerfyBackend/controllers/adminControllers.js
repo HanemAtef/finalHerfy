@@ -2,6 +2,7 @@
 const User = require("../models/User");
 const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
+const Review = require("../models/Review");
 const AuditLog = require("../models/AuditLog");
 const RefreshToken = require("../models/RefreshToken");
 const { createNotification } = require("./notificationController");
@@ -481,128 +482,6 @@ const settleWallet = async (req, res) => {
     res.status(500).json({ msg: "Server error", error: error.message });
   }
 };
- 
-//getDashboardChart
-
-const getDashboardChart = async (req, res) => {
-  try {
-    const currentYear = new Date().getFullYear();
-
-    const usersPerMonth = await User.aggregate([
-      {
-        $match: {
-          createdAt: {
-            $gte: new Date(`${currentYear}-01-01`),
-            $lte: new Date(`${currentYear}-12-31`),
-          },
-        },
-      },
-      {
-        $group: {
-          _id: { $month: "$createdAt" },
-          users: { $sum: 1 },
-        },
-      },
-    ]);
-
-    const ordersPerMonth = await Order.aggregate([
-      {
-        $match: {
-          createdAt: {
-            $gte: new Date(`${currentYear}-01-01`),
-            $lte: new Date(`${currentYear}-12-31`),
-          },
-        },
-      },
-      {
-        $group: {
-          _id: { $month: "$createdAt" },
-          orders: { $sum: 1 },
-          revenue: { $sum: "$commissionAmount" },
-        },
-      },
-    ]);
-
-    const months = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-
-    const chart = months.map((month, index) => {
-      const user = usersPerMonth.find((u) => u._id === index + 1);
-      const order = ordersPerMonth.find((o) => o._id === index + 1);
-
-      return {
-        month,
-        users: user?.users || 0,
-        orders: order?.orders || 0,
-        revenue: order?.revenue || 0,
-      };
-    });
-
-    res.status(200).json({
-      success: true,
-      data: chart,
-    });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({
-      msg: "Server error",
-      error: error.message,
-    });
-  }
-};
-// ========== Broadcast a general announcement to users ==========
-// audience: "all" | "customer" | "handyman" — sent as a system_alert
-// notification to every matching user, and logged in the audit trail.
-const broadcastAnnouncement = async (req, res) => {
-  try {
-    const { title, body, audience = "all" } = req.body;
-    if (!title?.trim() || !body?.trim()) {
-      return res.status(400).json({ msg: "العنوان ونص التنبيه مطلوبين" });
-    }
-    if (!["all", "customer", "handyman"].includes(audience)) {
-      return res.status(400).json({ msg: "audience غير صالح" });
-    }
-
-    const filter = audience === "all" ? {} : { role: audience };
-    const recipients = await User.find(filter).select("_id").lean();
-
-    const io = req.app.get("io");
-    await Promise.all(
-      recipients.map((u) =>
-        createNotification(io, u._id, "system_alert", title.trim(), body.trim(), { audience })
-      )
-    );
-
-    await logAction(
-      req.user._id,
-      "system.broadcast",
-      "User",
-      null,
-      title.trim(),
-      { audience, recipientCount: recipients.length }
-    );
-
-    res.status(200).json({
-      msg: "تم نشر التنبيه بنجاح",
-      recipientCount: recipients.length,
-    });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ msg: "Server error", error: error.message });
-  }
-};
 
 // ========== 10. Get Dashboard Chart Data ==========
 const getDashboardChart = async (req, res) => {
@@ -717,6 +596,81 @@ const broadcastAnnouncement = async (req, res) => {
     res.status(200).json({
       msg: "تم نشر التنبيه بنجاح",
       recipientCount: recipients.length,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
+// ========== 11b. Get full profile for one user (customer or handyman) ==========
+// Powers the admin "click a name -> profile page" screen: basic info,
+// the handyman's portfolio/gallery, stats, and every order they were
+// ever part of on the platform (their job history).
+const getUserDetail = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      return res.status(404).json({ msg: "المستخدم غير موجود" });
+    }
+
+    const isHandyman = user.role === "handyman";
+
+    const handymanProfile = isHandyman
+      ? await Handyman.findOne({ userId: user._id }).lean()
+      : null;
+
+    const orderFilter = isHandyman ? { handymanId: user._id } : { customerId: user._id };
+    const orders = await Order.find(orderFilter)
+      .populate("customerId", "name")
+      .populate("handymanId", "name")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const ordersOut = orders.map((o) => ({
+      _id: o._id,
+      serviceType: o.profession,
+      customerId: o.customerId,
+      handymanId: o.handymanId,
+      finalPrice: o.totalPrice || o.price || o.estimatedPrice || 0,
+      createdAt: o.createdAt,
+      status: o.status,
+    }));
+
+    const totalOrders = await Order.countDocuments(orderFilter);
+    const completedOrders = await Order.countDocuments({ ...orderFilter, status: "completed" });
+    const cancelledOrders = await Order.countDocuments({ ...orderFilter, status: "cancelled" });
+
+    let reviews = [];
+    if (isHandyman) {
+      reviews = await Review.find({ handymanId: user._id })
+        .populate("customerId", "name")
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+    }
+
+    const stats = {
+      totalOrders,
+      completedOrders,
+      cancelledOrders,
+      rating: handymanProfile?.rating || 0,
+      walletBalance: handymanProfile?.walletBalance || 0,
+      gallery: handymanProfile?.gallery || [],
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user,
+        handymanProfile,
+        stats,
+        orders: ordersOut,
+        reviews,
+      },
     });
   } catch (error) {
     console.log(error);
@@ -969,11 +923,10 @@ module.exports = {
   // Wallet Management
   getWallets,
   settleWallet,
-  getDashboardChart,
-  broadcastAnnouncement,
   
   // Announcements
   broadcastAnnouncement,
+  getUserDetail,
   
   // Registration Request Management (NEW)
   getPendingRegistrationRequests,

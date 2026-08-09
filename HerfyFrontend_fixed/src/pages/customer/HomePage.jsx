@@ -145,7 +145,7 @@ export default function HomePage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="ابحث عن سباك، كهربائي، نجار..."
-            className="w-full rounded-full border-0 py-3 pr-11 pl-4 text-textDark shadow-lg focus:outline-none focus:ring-2 focus:ring-secondary bg-white"
+            className="w-full rounded-full border-0 py-3 pr-11 pl-4 text-textDark shadow-lg focus:outline-none focus:ring-2 focus:ring-secondary"
           />
         </form>
       </div>

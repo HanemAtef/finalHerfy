@@ -1,6 +1,4 @@
-
 import { useEffect, useState, useCallback, useRef } from 'react';
-
 
 export default function useCurrentLocation() {
   const [location, setLocation] = useState(null);
@@ -13,7 +11,7 @@ export default function useCurrentLocation() {
   // يفضل يتحدث تلقائيًا كل ما المستخدم (الحرفي مثلاً) يتحرك.
   const requestLocation = useCallback(() => {
     if (!navigator.geolocation) {
-      setError("المتصفح لا يدعم تحديد الموقع");
+      setError('المتصفح لا يدعم تحديد الموقع');
       return;
     }
 
@@ -26,23 +24,24 @@ export default function useCurrentLocation() {
     setLoading(true);
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
-        setLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        });
-        setError(null);
+        const lat = position?.coords?.latitude;
+        const lng = position?.coords?.longitude;
+        if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+          setLocation({ latitude: lat, longitude: lng });
+          setError(null);
+        }
         setLoading(false);
       },
       (err) => {
         setError(err.message);
-        // fallback location لو المستخدم لسه محددش موقع قبل كده
         setLocation((prev) => prev ?? { latitude: 30.0444, longitude: 31.2357 });
         setLoading(false);
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
     );
   }, []);
 
+  
   useEffect(() => {
     requestLocation();
 

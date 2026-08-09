@@ -41,7 +41,7 @@ const messageSchema = new mongoose.Schema(
       default: false,
     },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 messageSchema.pre("validate", function () {

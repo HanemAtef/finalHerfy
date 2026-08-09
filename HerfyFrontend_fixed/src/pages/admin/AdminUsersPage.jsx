@@ -196,12 +196,16 @@ export default function AdminUsersPage() {
               </thead>
               <tbody>
                 {pageItems.map((user) => (
-                  <tr key={user._id} className="border-b border-borderGray last:border-0">
+                  <tr
+                    key={user._id}
+                    onClick={() => navigate(`/admin/users/${user._id}`)}
+                    className="cursor-pointer border-b border-borderGray last:border-0 hover:bg-neutral/60"
+                  >
                     <td className="py-3">
                       <div className="flex items-center gap-3">
                         <img src={getDefaultAvatar(user.name)} alt="" className="h-9 w-9 rounded-full" />
                         <div>
-                          <p className="font-medium">{user.name}</p>
+                          <p className="font-medium hover:text-primary hover:underline">{user.name}</p>
                           <p className="text-xs text-textGray">{user.email}</p>
                         </div>
                       </div>
@@ -219,7 +223,7 @@ export default function AdminUsersPage() {
                       {user.rating ? `★ ${user.rating.toFixed(1)}` : '—'}
                     </td>
                     <td className="py-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => handleBan(user._id, !user.isBanned)}

@@ -103,6 +103,7 @@ export const adminService = {
   getStats: () => api.get('/admin/stats'),
   getDashboardChart: () => api.get('/admin/dashboard/chart'),
   getUsers: () => api.get('/admin/users'),
+  getUserDetail: (userId) => api.get(`/admin/users/${userId}`),
   banUser: (userId, data) => api.patch(`/admin/users/${userId}/ban`, data),
   banUserWithReason: (userId, data) => api.patch(`/admin/users/${userId}/ban-with-reason`, data),
   liftSuspension: (userId, data) => api.patch(`/admin/users/${userId}/lift-suspension`, data),
@@ -138,4 +139,7 @@ export const adminService = {
     link.remove();
     window.URL.revokeObjectURL(url);
   },
+  broadcastAnnouncement: (data) => api.post('/admin/broadcast', data),
+  getWallets: () => api.get('/admin/wallets'),
+  settleWallet: (handymanId) => api.patch(`/admin/wallets/${handymanId}/settle`),
 };

@@ -89,7 +89,7 @@ export default function CustomerLayout() {
           </NavLink>
         </div>
 
-        {/* <div className="hidden border-t border-borderGray px-4 py-2 lg:block">
+        <div className="hidden border-t border-borderGray px-4 py-2 lg:block">
           <form onSubmit={handleHeaderSearch} className="mx-auto flex max-w-container-max items-center gap-2">
             <div className="relative flex-1">
               <FaSearch className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
@@ -102,7 +102,7 @@ export default function CustomerLayout() {
               />
             </div>
           </form>
-        </div> */}
+        </div>
       </header>
 
       <main className="mx-auto max-w-container-max px-4 py-6 pb-24 lg:pb-6">

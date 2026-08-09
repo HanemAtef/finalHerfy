@@ -1,11 +1,11 @@
-import { useEffect, useState, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { useDispatch, useSelector } from "react-redux";
-import { FaLocationArrow, FaCheckCircle, FaTimes } from "react-icons/fa";
-import { getSocket } from "../socket/socket";
-import { fetchOrderById, updateOrderStatus } from "../store/slices/orderSlice";
-import useCurrentLocation from "../hooks/useCurrentLocation";
-import LoadingSpinner from "../components/common/LoadingSpinner";
+import { useEffect, useState, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useDispatch, useSelector } from 'react-redux';
+import { FaLocationArrow, FaCheckCircle, FaTimes } from 'react-icons/fa';
+import { getSocket } from '../socket/socket';
+import { fetchOrderById, updateOrderStatus } from '../store/slices/orderSlice';
+import useCurrentLocation from '../hooks/useCurrentLocation';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 
 export default function HandymanTracking() {
   const { orderId } = useParams();
@@ -16,8 +16,22 @@ export default function HandymanTracking() {
 
   const [isTracking, setIsTracking] = useState(false);
   const [isArrived, setIsArrived] = useState(false);
-  const intervalRef = useRef(null);
+  const watchIdRef = useRef(null);
+  const lastLocationRef = useRef(null);
   const socketRef = useRef(null);
+
+  // Helper distance check in meters
+  const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
 
   // جلب تفاصيل الطلب
   useEffect(() => {
@@ -30,18 +44,17 @@ export default function HandymanTracking() {
     if (!socket) return;
     socketRef.current = socket;
 
-    // استقبال تأكيد إرسال الموقع
-    socket.on("locationSent", (data) => {
-      console.log("✅ Location sent:", data);
+    socket.on('locationSent', (data) => {
+      console.log('✅ [Frontend] Location sent confirmed:', data);
     });
 
-    socket.on("error", (error) => {
-      console.error("❌ Socket error:", error);
+    socket.on('error', (error) => {
+      console.error('❌ [Frontend] Socket error:', error);
     });
 
     return () => {
-      socket.off("locationSent");
-      socket.off("error");
+      socket.off('locationSent');
+      socket.off('error');
     };
   }, []);
 
@@ -49,59 +62,66 @@ export default function HandymanTracking() {
   const startTracking = () => {
     if (!socketRef.current || !orderId) return;
 
-    // إرسال إشارة بداية التتبع
-    socketRef.current.emit("startTracking", orderId);
+    // Join order room first
+    socketRef.current.emit('joinOrderRoom', orderId);
+    socketRef.current.emit('startTracking', orderId);
     setIsTracking(true);
 
-    // إرسال الموقع فوراً
-    if (location) {
-      socketRef.current.emit("sendLocation", {
-        orderId,
-        lat: location.latitude,
-        lng: location.longitude,
-      });
-    }
-
-    // بدأ إرسال الموقع كل 5 ثواني
-    intervalRef.current = setInterval(() => {
-      if (location) {
-        socketRef.current.emit("sendLocation", {
-          orderId,
-          lat: location.latitude,
-          lng: location.longitude,
-        });
+    if (navigator.geolocation) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
-    }, 8000);
+
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const lat = position?.coords?.latitude;
+          const lng = position?.coords?.longitude;
+
+          if (typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng)) {
+            const last = lastLocationRef.current;
+            const movedDistance = last ? calculateDistanceMeters(last.lat, last.lng, lat, lng) : 999;
+
+            // Only emit if moved > 10m or first emit
+            if (!last || movedDistance >= 10) {
+              console.log(`📍 [Frontend] Emitting GPS position update: lat=${lat}, lng=${lng} (moved: ${Math.round(movedDistance)}m)`);
+              socketRef.current.emit('sendLocation', { orderId, lat, lng });
+              lastLocationRef.current = { lat, lng, time: Date.now() };
+            }
+          }
+        },
+        (err) => console.warn('❌ GPS watchPosition error:', err.message),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+      );
+    }
   };
 
   // نهاية التتبع (وصلت)
   const stopTracking = () => {
     if (!socketRef.current || !orderId) return;
 
-    socketRef.current.emit("stopTracking", orderId);
+    socketRef.current.emit('stopTracking', orderId);
     setIsTracking(false);
     setIsArrived(true);
 
-    // إيقاف إرسال الموقع
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
     }
 
-    // تحديث حالة الطلب إلى in-progress
-    dispatch(updateOrderStatus({ id: orderId, status: "in-progress" }));
+    dispatch(updateOrderStatus({ id: orderId, status: 'in-progress' }));
   };
 
   // تنظيف عند الخروج
   useEffect(() => {
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
       if (socketRef.current) {
-        socketRef.current.off("locationSent");
-        socketRef.current.off("error");
+        socketRef.current.off('locationSent');
+        socketRef.current.off('error');
       }
     };
   }, []);
@@ -122,9 +142,7 @@ export default function HandymanTracking() {
           <p className="text-sm text-textGray">الخدمة</p>
           <p className="font-bold text-textDark">{currentOrder.profession}</p>
           <p className="text-sm text-textGray">العميل</p>
-          <p className="font-bold text-textDark">
-            {currentOrder.customerId?.name || "—"}
-          </p>
+          <p className="font-bold text-textDark">{currentOrder.customerId?.name || '—'}</p>
         </div>
 
         {/* موقعي الحالي */}
@@ -155,9 +173,7 @@ export default function HandymanTracking() {
           <div className="space-y-4">
             <div className="rounded-xl bg-tertiary/10 p-4 text-center">
               <p className="font-bold text-tertiary">📍 في الطريق إلى العميل</p>
-              <p className="text-sm text-textGray">
-                يتم إرسال موقعك كل 5 ثواني
-              </p>
+              <p className="text-sm text-textGray">يتم إرسال موقعك كل 5 ثواني</p>
             </div>
             <button
               onClick={stopTracking}
