@@ -12,23 +12,7 @@ import {
   FaFlag,
   FaBan,
 } from "react-icons/fa";
-import {
-  fetchOrderById,
-  updateOrderStatus,
-  markOrderOnTheWay,
-} from "../../store/slices/orderSlice";
-import { uploadService, reportService } from "../../services/api";
-import { connectSocket } from "../../socket/socket";
-import LoadingSpinner from "../../components/common/LoadingSpinner";
-import LocationLabel from "../../components/common/LocationLabel";
-import ReasonModal from "../../components/common/ReasonModal";
-import {
-  formatDate,
-  formatPrice,
-  ORDER_STATUS_LABELS,
-} from "../../utils/helpers";
-// } from 'react-icons/fa';
-import { fetchOrderById, updateOrderStatus, confirmOrderPayment, markOrderOnTheWay } from '../../store/slices/orderSlice';
+import { fetchOrderById, updateOrderStatus, markOrderOnTheWay } from '../../store/slices/orderSlice';
 import { uploadService, reportService } from '../../services/api';
 import { connectSocket } from '../../socket/socket';
 import LoadingSpinner from '../../components/common/LoadingSpinner';

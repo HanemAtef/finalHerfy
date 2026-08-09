@@ -21,6 +21,7 @@ const {
   respondReschedule,
   requestReschedule,
   markOnTheWay,
+  confirmCashPayment,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
 
