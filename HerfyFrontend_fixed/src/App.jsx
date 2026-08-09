@@ -42,6 +42,7 @@ import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
 
 
+
 function App() {
   return (
     <BrowserRouter>
@@ -126,7 +127,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-           
+
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

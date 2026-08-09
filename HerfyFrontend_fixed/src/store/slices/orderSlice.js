@@ -100,18 +100,6 @@ export const confirmOrderPrice = createAsyncThunk(
   }
 );
 
-export const confirmOrderPayment = createAsyncThunk(
-  'orders/confirmOrderPayment',
-  async (id, { rejectWithValue }) => {
-    try {
-      const response = await orderService.confirmPayment(id);
-      return response.data.order || response.data;
-    } catch (error) {
-      return rejectWithValue(error.response?.data || { msg: 'فشل تأكيد الدفع' });
-    }
-  }
-);
-
 export const markOrderOnTheWay = createAsyncThunk(
   'orders/markOrderOnTheWay',
   async (id, { rejectWithValue }) => {
@@ -209,15 +197,6 @@ const orderSlice = createSlice({
         );
       })
       .addCase(confirmOrderPrice.rejected, rejected)
-      .addCase(confirmOrderPayment.pending, pending)
-      .addCase(confirmOrderPayment.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.currentOrder = action.payload;
-        state.orders = state.orders.map((o) =>
-          o._id === action.payload._id ? action.payload : o
-        );
-      })
-      .addCase(confirmOrderPayment.rejected, rejected)
       .addCase(markOrderOnTheWay.pending, pending)
       .addCase(markOrderOnTheWay.fulfilled, (state, action) => {
         state.isLoading = false;

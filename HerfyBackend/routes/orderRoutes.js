@@ -20,7 +20,6 @@ const {
   confirmPrice,
   respondReschedule,
   requestReschedule,
-  confirmCashPayment,
   markOnTheWay,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
@@ -53,6 +52,8 @@ router.get("/handyman/:handymanId/pending", getPendingOrders);
 router.get("/:id", getOrder);
 
 // ========== Update order status (controller handles permissions) ==========
+router.patch("/:id/status", validate(updateOrderSchema), updateOrderStatus);
+router.patch("/:id/confirm-price", authMiddleware, confirmPrice);
 router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrderStatus);
 router.patch("/:id/confirm-price", idempotency, authMiddleware, confirmPrice);
 router.patch("/:id/confirm-payment", idempotency, authMiddleware, confirmCashPayment);

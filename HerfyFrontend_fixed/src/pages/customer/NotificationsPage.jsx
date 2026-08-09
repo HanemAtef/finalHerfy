@@ -100,7 +100,6 @@ const resolveDestination = (notification, role) => {
     case 'order_rejected':
     case 'price_confirmed':
     case 'handyman_on_the_way':
-    case 'payment_confirmed':
       return role === 'handyman' ? `/handyman/orders/${orderId}` : `/customer/tracking/${orderId}`;
     default:
       return null;

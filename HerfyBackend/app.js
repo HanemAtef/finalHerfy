@@ -32,25 +32,38 @@ app.use(cors({
 }));
 
 // Set security HTTP headers
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-}));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
 
 // Development logging
 if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
-// Body parsers MUST come before rate limiters and validation middleware
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
+
+// Limit requests from same API
+const limiter = rateLimit({
+  max: 1000,
+  windowMs: 15 * 60 * 1000,
+  message: "Too many requests from this IP, please try again in 15 minutes!",
+});
+app.use("/api", limiter);
+
+// Body parser, reading data from body into req.body
+// Body parsers MUST come before rate limiters and validation middleware
+
 
 // Data sanitization against NoSQL query injection
 // Custom wrapper to prevent Express 5 TypeError: Cannot set property query
 app.use((req, res, next) => {
-  if (req.body) mongoSanitize.sanitize(req.body, { replaceWith: '_' });
-  if (req.params) mongoSanitize.sanitize(req.params, { replaceWith: '_' });
-  if (req.query) mongoSanitize.sanitize(req.query, { replaceWith: '_' });
+  if (req.body) mongoSanitize.sanitize(req.body, { replaceWith: "_" });
+  if (req.params) mongoSanitize.sanitize(req.params, { replaceWith: "_" });
+  if (req.query) mongoSanitize.sanitize(req.query, { replaceWith: "_" });
   next();
 });
 
@@ -63,7 +76,10 @@ const globalWriteLimiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_GLOBAL_MAX) || 60,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { status: 'error', msg: 'Too many requests, please try again later.' },
+  message: {
+    status: "error",
+    msg: "Too many requests, please try again later.",
+  },
 });
 
 // Apply write limiter to all POST, PUT, PATCH, DELETE requests
@@ -129,8 +145,8 @@ app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
 
 // Start dispute escalation cron job
-if (process.env.NODE_ENV !== 'test') {
-  const startDisputeEscalationJob = require('./jobs/disputeEscalation');
+if (process.env.NODE_ENV !== "test") {
+  const startDisputeEscalationJob = require("./jobs/disputeEscalation");
   startDisputeEscalationJob(io);
 }
 
@@ -152,20 +168,20 @@ app.use((err, req, res, next) => {
       status: err.status,
       error: err,
       message: err.message,
-      stack: err.stack
+      stack: err.stack,
     });
   } else {
     // Production: don't leak error details
     res.status(err.statusCode).json({
       status: err.status,
-      message: err.isOperational ? err.message : "Something went very wrong!"
+      message: err.isOperational ? err.message : "Something went very wrong!",
     });
   }
 });
 
 const port = process.env.PORT || 3000;
 
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== "test") {
   server.listen(port, () => {
     console.log(` Server is running on port ${port}`);
   });
@@ -175,7 +191,7 @@ if (process.env.NODE_ENV !== 'test') {
 process.on("unhandledRejection", (err) => {
   console.error("UNHANDLED REJECTION!  Shutting down...");
   console.error(err.name, err.message);
-  if (process.env.NODE_ENV !== 'test') {
+  if (process.env.NODE_ENV !== "test") {
     server.close(() => {
       process.exit(1);
     });
