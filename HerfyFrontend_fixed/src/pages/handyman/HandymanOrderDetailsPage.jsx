@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useDispatch, useSelector } from 'react-redux';
+import { useEffect, useState } from "react";
+import { useParams, useNavigate, Link } from "react-router-dom";
+import { useDispatch, useSelector } from "react-redux";
+
 import {
-  FaArrowRight,
   FaMapMarkerAlt,
   FaPhone,
   FaComments,
@@ -27,19 +27,24 @@ export default function HandymanOrderDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
-  const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
+
+  const { currentOrder, isLoading, error } = useSelector(
+    (state) => state.orders
+  );
+
   const { token } = useSelector((state) => state.auth);
 
   const { location: currentDeviceLocation } = useCurrentLocation();
+
   const [handymanLoc, setHandymanLoc] = useState(null);
   const [routeGeometry, setRouteGeometry] = useState(null);
-  const [price, setPrice] = useState('');
+  const [price, setPrice] = useState("");
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
 
-  console.log('📍 [HandymanOrderDetails Render]', {
+  console.log("📍 [HandymanOrderDetails Render]", {
     orderId: id,
     hasCurrentOrder: !!currentOrder,
     handymanLoc,
@@ -48,23 +53,25 @@ export default function HandymanOrderDetailsPage() {
     routePoints: routeGeometry?.length || 0,
   });
 
+  // Fetch order
   useEffect(() => {
     dispatch(fetchOrderById(id));
   }, [dispatch, id]);
 
+  // Set price
   useEffect(() => {
-    if (currentOrder?.estimatedPrice) setPrice(String(currentOrder.estimatedPrice));
+    if (currentOrder?.estimatedPrice) {
+      setPrice(String(currentOrder.estimatedPrice));
+    }
   }, [currentOrder?.estimatedPrice]);
 
   // ===== Live GPS emitter & socket listener =====
   useEffect(() => {
     const isLive =
       currentOrder &&
-      (
-        (currentOrder.status === "price_confirmed" &&
-          currentOrder.isHandymanOnTheWay) ||
-        currentOrder.status === "in-progress"
-      );
+      ((currentOrder.status === "price_confirmed" &&
+        currentOrder.isHandymanOnTheWay) ||
+        currentOrder.status === "in-progress");
 
     console.log("🚦 LIVE STATUS =", isLive);
 
@@ -99,23 +106,23 @@ export default function HandymanOrderDetailsPage() {
       socket.emit("joinOrderRoom", id);
     }
 
-const onLocationUpdate = (payload) => {
-  console.log("📩 LOCATION UPDATE RECEIVED", payload);
+    const onLocationUpdate = (payload) => {
+      console.log("📩 LOCATION UPDATE RECEIVED", payload);
 
-  if (
-    Number.isFinite(payload?.lat) &&
-    Number.isFinite(payload?.lng)
-  ) {
-    setHandymanLoc({
-      latitude: payload.lat,
-      longitude: payload.lng,
-    });
-  }
+      if (
+        Number.isFinite(payload?.lat) &&
+        Number.isFinite(payload?.lng)
+      ) {
+        setHandymanLoc({
+          latitude: payload.lat,
+          longitude: payload.lng,
+        });
+      }
 
-  if (Array.isArray(payload?.geometry)) {
-    setRouteGeometry(payload.geometry);
-  }
-};
+      if (Array.isArray(payload?.geometry)) {
+        setRouteGeometry(payload.geometry);
+      }
+    };
 
     socket.off("locationUpdate", onLocationUpdate);
     socket.on("locationUpdate", onLocationUpdate);
@@ -158,8 +165,8 @@ const onLocationUpdate = (payload) => {
 
         socket.emit("sendLocation", {
           orderId: id,
-          lat: lat,
-          lng: lng,
+          lat,
+          lng,
         });
       },
       (err) => {
@@ -189,56 +196,101 @@ const onLocationUpdate = (payload) => {
     currentOrder?.isHandymanOnTheWay,
   ]);
 
+  // Update order status
   const handleStatus = (status, extra = {}) => {
     dispatch(updateOrderStatus({ id, status, ...extra })).then((result) => {
-      if (status === 'accepted' && updateOrderStatus.fulfilled.match(result)) {
-        navigate('/handyman/dashboard');
+      if (
+        status === "accepted" &&
+        updateOrderStatus.fulfilled.match(result)
+      ) {
+        navigate("/handyman/dashboard");
       }
-
     });
   };
 
+  // Accept order
   const handleAccept = () => {
     const numericPrice = Number(price);
+
     if (!numericPrice || numericPrice <= 0) return;
-    handleStatus('accepted', { price: numericPrice });
+
+    handleStatus("accepted", {
+      price: numericPrice,
+    });
   };
 
+  // Upload completion image
   const handleCompletionImageChange = async (e) => {
     const file = e.target.files?.[0];
+
     if (!file) return;
+
     setUploading(true);
+
     try {
       const res = await uploadService.uploadImage(file);
       setCompletionImage(res.data.url);
+    } catch (err) {
+      console.error("Image upload failed:", err);
     } finally {
       setUploading(false);
     }
   };
 
+  // Complete order
   const handleComplete = () => {
     if (!completionImage) return;
-    handleStatus('completed', { completionImage });
+
+    handleStatus("completed", {
+      completionImage,
+    });
   };
 
-
+  // On the way
   const handleOnTheWay = () => {
     dispatch(markOrderOnTheWay(id));
   };
 
+  // Report
   const handleReport = async (reason) => {
-    await reportService.fileReport(id, { reason });
-    setReportSent(true);
-    dispatch(fetchOrderById(id));
+    try {
+      await reportService.fileReport(id, {
+        reason,
+      });
+
+      setReportSent(true);
+      setReportOpen(false);
+
+      dispatch(fetchOrderById(id));
+    } catch (err) {
+      console.error("Report failed:", err);
+    }
   };
 
-  if (isLoading && !currentOrder) return <LoadingSpinner fullScreen />;
+  // Loading
+  if (isLoading && !currentOrder) {
+    return <LoadingSpinner />;
+  }
+
+  // No order
   if (!currentOrder) {
     return (
-      <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-white p-6 text-center">
-        <p className="font-bold text-textDark">تعذر تحميل تفاصيل الطلب</p>
-        {error && <p className="text-sm text-textGray">{error}</p>}
-        <button type="button" onClick={() => navigate(-1)} className="btn-outline">
+      <div className="p-6 text-center">
+        <p className="mb-4 text-textGray">
+          تعذر تحميل تفاصيل الطلب
+        </p>
+
+        {error && (
+          <p className="mb-4 text-emergency">
+            {error}
+          </p>
+        )}
+
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          className="btn-outline"
+        >
           رجوع
         </button>
       </div>
@@ -246,124 +298,225 @@ const onLocationUpdate = (payload) => {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <div className="mb-8 flex items-center gap-4 border-b border-gray-100 pb-4">
-        <button type="button" onClick={() => navigate(-1)} className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-primary shadow-sm hover:bg-neutral transition-all">
-          <FaArrowRight size={18} />
-        </button>
-        <h1 className="text-2xl font-bold text-textDark">تفاصيل الطلب</h1>
-      </div>
+    <div className="p-4 md:p-6">
 
-      <AlertMessage type="error" message={error} className="mb-4" />
+      {/* Back */}
+      <button
+        type="button"
+        onClick={() => navigate(-1)}
+        className="mb-4 flex h-10 items-center justify-center rounded-full bg-white px-5 text-primary shadow-sm transition-all hover:bg-neutral"
+      >
+        رجوع
+      </button>
 
-      {currentOrder.status === 'cancelled' && (
+      <h1 className="mb-6 text-2xl font-bold text-textDark">
+        تفاصيل الطلب
+      </h1>
+
+      {error && (
+        <AlertMessage
+          type="error"
+          message={error}
+          className="mb-4"
+        />
+      )}
+
+      {/* Cancelled */}
+      {currentOrder.status === "cancelled" && (
         <div className="card mb-4 flex items-center gap-3 border-r-4 border-emergency bg-emergency/5">
-          <FaBan className="shrink-0 text-emergency" size={20} />
-          <p className="text-sm text-textDark">تم إلغاء هذا الطلب. المحادثة مغلقة الآن.</p>
+          <FaBan
+            className="shrink-0 text-emergency"
+            size={20}
+          />
+
+          <p className="text-sm text-textDark">
+            تم إلغاء هذا الطلب. المحادثة مغلقة الآن.
+          </p>
         </div>
       )}
 
-      {currentOrder.status === 'disputed' && (
+      {/* Disputed */}
+      {currentOrder.status === "disputed" && (
         <div className="card mb-4 flex items-center gap-3 border-r-4 border-secondary bg-secondary/5">
-          <FaFlag className="shrink-0 text-secondary" size={20} />
-          <p className="text-sm text-textDark">هذا الطلب قيد مراجعة بلاغ من فريق الدعم. المحادثة مغلقة مؤقتاً.</p>
+          <FaFlag
+            className="shrink-0 text-secondary"
+            size={20}
+          />
+
+          <p className="text-sm text-textDark">
+            هذا الطلب قيد مراجعة بلاغ من فريق الدعم.
+            المحادثة مغلقة مؤقتاً.
+          </p>
         </div>
       )}
 
-      <div className="overflow-hidden rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6 transition-all hover:shadow-lg">
+      {/* Order Information */}
+      <div className="mb-6 overflow-hidden rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all hover:shadow-lg">
+
         <div className="mb-5 flex items-center justify-between border-b border-gray-50 pb-4">
           <span className="rounded-xl bg-primary/10 px-4 py-1.5 text-sm font-bold text-primary">
             #{String(id).slice(-5)}
           </span>
-          <span className="text-sm font-semibold text-secondary bg-secondary/10 px-3 py-1.5 rounded-xl">
+
+          <span className="rounded-xl bg-secondary/10 px-3 py-1.5 text-sm font-semibold text-secondary">
             {ORDER_STATUS_LABELS[currentOrder.status]}
           </span>
         </div>
 
-        <h2 className="mb-2 text-lg font-bold text-textDark">{currentOrder.profession}</h2>
-        <p className="mb-4 text-sm text-textGray">{currentOrder.description || 'لا يوجد وصف'}</p>
+        <h2 className="mb-2 text-lg font-bold text-textDark">
+          {currentOrder.profession}
+        </h2>
+
+        <p className="mb-4 text-sm text-textGray">
+          {currentOrder.description || "لا يوجد وصف"}
+        </p>
 
         {currentOrder.images?.length > 0 && (
           <div className="mb-4 flex flex-wrap gap-2">
             {currentOrder.images.map((img) => (
-              <img key={img} src={img} alt="" className="h-16 w-16 rounded-lg object-cover" />
+              <img
+                key={img}
+                src={img}
+                alt=""
+                className="h-16 w-16 rounded-lg object-cover"
+              />
             ))}
           </div>
         )}
 
         <div className="space-y-3 border-t border-borderGray pt-4 text-sm">
+
           <div className="flex justify-between">
-            <span className="text-textGray">العميل</span>
-            <span className="font-medium">{currentOrder.customerId?.name}</span>
+            <span className="text-textGray">
+              العميل
+            </span>
+
+            <span className="font-medium">
+              {currentOrder.customerId?.name}
+            </span>
           </div>
+
           <div className="flex justify-between">
-            <span className="text-textGray">التاريخ</span>
-            <span>{formatDate(currentOrder.createdAt)}</span>
+            <span className="text-textGray">
+              التاريخ
+            </span>
+
+            <span>
+              {formatDate(currentOrder.createdAt)}
+            </span>
           </div>
+
           <div className="flex justify-between">
-            <span className="text-textGray">نوع الطلب</span>
-            <span>{currentOrder.requestType === 'scheduled' ? 'مجدول' : 'فوري'}</span>
+            <span className="text-textGray">
+              نوع الطلب
+            </span>
+
+            <span>
+              {currentOrder.requestType === "scheduled"
+                ? "مجدول"
+                : "فوري"}
+            </span>
           </div>
+
           <div className="flex justify-between">
-            <span className="text-textGray">السعر المقدر من العميل</span>
-            <span className="font-bold text-secondary">{formatPrice(currentOrder.estimatedPrice)}</span>
+            <span className="text-textGray">
+              السعر المقدر من العميل
+            </span>
+
+            <span className="font-bold text-secondary">
+              {formatPrice(currentOrder.estimatedPrice)}
+            </span>
           </div>
+
           {currentOrder.price != null && (
             <div className="flex justify-between">
-              <span className="text-textGray">السعر الذي حددته</span>
-              <span className="font-bold text-secondary">{formatPrice(currentOrder.price)}</span>
+              <span className="text-textGray">
+                السعر الذي حددته
+              </span>
+
+              <span className="font-bold text-secondary">
+                {formatPrice(currentOrder.price)}
+              </span>
             </div>
           )}
+
         </div>
       </div>
 
-      <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
-        <div className="flex items-center gap-2 text-primary mb-3">
+      {/* Location */}
+      <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+
+        <div className="mb-3 flex items-center gap-2 text-primary">
           <FaMapMarkerAlt size={18} />
-          <span className="font-bold text-lg">موقع العميل والتتبع المباشر</span>
+
+          <span className="text-lg font-bold">
+            موقع العميل والتتبع المباشر
+          </span>
         </div>
+
         <p className="text-sm text-textGray">
           {currentOrder.customerLocation?.coordinates ? (
             <LocationLabel
-              lat={currentOrder.customerLocation.coordinates[1]}
-              lng={currentOrder.customerLocation.coordinates[0]}
+              lat={
+                currentOrder.customerLocation.coordinates[1]
+              }
+              lng={
+                currentOrder.customerLocation.coordinates[0]
+              }
               icon={false}
             />
           ) : (
-            'غير محدد'
+            "غير محدد"
           )}
         </p>
 
         {currentOrder.customerLocation?.coordinates &&
-          Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
-          Number.isFinite(currentOrder.customerLocation.coordinates[0]) && (
+          Number.isFinite(
+            currentOrder.customerLocation.coordinates[1]
+          ) &&
+          Number.isFinite(
+            currentOrder.customerLocation.coordinates[0]
+          ) && (
             <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
+
               <TrackingMap
                 customerLocation={{
-                  latitude: currentOrder.customerLocation.coordinates[1],
-                  longitude: currentOrder.customerLocation.coordinates[0],
+                  latitude:
+                    currentOrder.customerLocation.coordinates[1],
+                  longitude:
+                    currentOrder.customerLocation.coordinates[0],
                 }}
                 handymanLocation={
-                  handymanLoc && Number.isFinite(handymanLoc.latitude) && Number.isFinite(handymanLoc.longitude)
+                  handymanLoc &&
+                  Number.isFinite(handymanLoc.latitude) &&
+                  Number.isFinite(handymanLoc.longitude)
                     ? handymanLoc
-                    : (currentDeviceLocation && Number.isFinite(currentDeviceLocation.latitude) && Number.isFinite(currentDeviceLocation.longitude)
+                    : currentDeviceLocation &&
+                        Number.isFinite(
+                          currentDeviceLocation.latitude
+                        ) &&
+                        Number.isFinite(
+                          currentDeviceLocation.longitude
+                        )
                       ? currentDeviceLocation
-                      : null)
+                      : null
                 }
                 routeGeometry={routeGeometry}
                 className="absolute inset-0 h-full w-full"
               />
+
             </div>
           )}
       </div>
 
-      {/* Accepting requires setting a price first — this is what the customer
-          will be asked to confirm on the next step, so it can't be skipped. */}
-      {currentOrder.status === 'pending' && (
-        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
+      {/* Pending */}
+      {currentOrder.status === "pending" && (
+        <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+
           <label className="mb-2 block text-sm font-bold text-textDark">
             حدد السعر الذي تعرضه على العميل (ج.م)
           </label>
+
           <input
             type="number"
             min="1"
@@ -372,41 +525,62 @@ const onLocationUpdate = (payload) => {
             className="input-field mb-4"
             placeholder="مثال: 250"
           />
+
           <div className="flex flex-wrap gap-3">
+
             <button
               type="button"
               onClick={handleAccept}
-              disabled={!price || Number(price) <= 0 || isLoading}
+              disabled={
+                !price ||
+                Number(price) <= 0 ||
+                isLoading
+              }
               className="btn-primary flex flex-1 items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <FaCheck /> قبول وإرسال السعر
+              <FaCheck />
+              قبول وإرسال السعر
             </button>
+
             <button
               type="button"
-              onClick={() => handleStatus('cancelled')}
+              onClick={() => handleStatus("cancelled")}
               className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency"
             >
-              <FaTimes /> رفض
+              <FaTimes />
+              رفض
             </button>
+
           </div>
         </div>
       )}
 
-      {currentOrder.status === 'accepted' && (
-        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6 text-center text-sm font-medium text-textGray">
-          بانتظار موافقة العميل على السعر ({formatPrice(currentOrder.price)})
+      {/* Accepted */}
+      {currentOrder.status === "accepted" && (
+        <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 text-center text-sm font-medium text-textGray shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+          بانتظار موافقة العميل على السعر (
+          {formatPrice(currentOrder.price)}
+          )
         </div>
       )}
 
-      {currentOrder.status === 'price_confirmed' && (
-        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
-          {currentOrder.requestType === 'scheduled' && (
+      {/* Price Confirmed */}
+      {currentOrder.status === "price_confirmed" && (
+        <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+
+          {currentOrder.requestType === "scheduled" && (
             <p className="mb-3 text-sm text-textGray">
-              موعد الطلب: {formatDate(currentOrder.scheduledDate)}
+              موعد الطلب:{" "}
+              {formatDate(currentOrder.scheduledDate)}
             </p>
           )}
+
           {!currentOrder.isHandymanOnTheWay ? (
-            <button type="button" onClick={handleOnTheWay} className="btn-primary w-full">
+            <button
+              type="button"
+              onClick={handleOnTheWay}
+              className="btn-primary w-full"
+            >
               أنا قادم للعميل
             </button>
           ) : (
@@ -414,31 +588,47 @@ const onLocationUpdate = (payload) => {
               <p className="mb-3 text-center text-sm text-textGray">
                 تم تفعيل تتبع موقعك للعميل
               </p>
+
               <button
                 type="button"
-                onClick={() => handleStatus('in-progress')}
+                onClick={() =>
+                  handleStatus("in-progress")
+                }
                 className="btn-primary w-full"
               >
                 بدء التنفيذ
               </button>
             </>
           )}
+
         </div>
       )}
 
-      {/* Completing requires a proof-of-completion photo — the backend now
-          rejects a "completed" transition without one. */}
-      {currentOrder.status === 'in-progress' && (
-        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mb-6">
+      {/* In Progress */}
+      {currentOrder.status === "in-progress" && (
+        <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+
           <label className="mb-2 block text-sm font-bold text-textDark">
             صورة إثبات إتمام العمل (مطلوبة)
           </label>
+
           {completionImage ? (
-            <img src={completionImage} alt="" className="mb-3 h-32 w-32 rounded-lg object-cover" />
+            <img
+              src={completionImage}
+              alt=""
+              className="mb-3 h-32 w-32 rounded-lg object-cover"
+            />
           ) : (
             <label className="mb-3 flex h-32 w-32 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-borderGray text-textGray">
+
               <FaCamera size={20} />
-              <span className="text-xs">{uploading ? 'جاري الرفع...' : 'إضافة صورة'}</span>
+
+              <span className="text-xs">
+                {uploading
+                  ? "جاري الرفع..."
+                  : "إضافة صورة"}
+              </span>
+
               <input
                 type="file"
                 accept="image/*"
@@ -446,8 +636,10 @@ const onLocationUpdate = (payload) => {
                 disabled={uploading}
                 onChange={handleCompletionImageChange}
               />
+
             </label>
           )}
+
           <button
             type="button"
             onClick={handleComplete}
@@ -456,76 +648,59 @@ const onLocationUpdate = (payload) => {
           >
             إتمام الطلب
           </button>
+
         </div>
       )}
 
+      {/* Contact */}
       <div className="flex flex-wrap gap-3">
-        <a href={`tel:${currentOrder.customerId?.phone}`} className="btn-outline flex items-center justify-center gap-2 flex-1">
-          <FaPhone /> اتصال
+
+        <a
+          href={`tel:${currentOrder.customerId?.phone}`}
+          className="btn-outline flex flex-1 items-center justify-center gap-2"
+        >
+          <FaPhone />
+          اتصال
         </a>
-        <Link to={`/chat/${id}`} className="btn-outline flex items-center justify-center gap-2 flex-1">
-          <FaComments /> محادثة
+
+        <Link
+          to={`/chat/${id}`}
+          className="btn-outline flex flex-1 items-center justify-center gap-2"
+        >
+          <FaComments />
+          محادثة
         </Link>
+
       </div>
 
-      {/* Cash payment: after finishing the job the handyman collects cash
-          from the customer, then confirms it in the app. */}
-      {currentOrder.status === 'completed' && (
-        <div className="rounded-3xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral mt-6 mb-6">
-          {currentOrder.completionImage && (
-            <div className="mb-4">
-              <p className="mb-2 text-sm font-bold text-textDark">صورة إثبات إتمام العمل</p>
-              <img src={currentOrder.completionImage} alt="" className="h-40 w-40 rounded-lg object-cover" />
-            </div>
-          )}
-          <div className="mb-2 flex items-center justify-between">
-            <span className="font-bold text-textDark">الدفع</span>
-            <span
-              className={`rounded-lg px-3 py-1 text-sm font-bold ${currentOrder.paymentStatus === 'paid'
-                ? 'bg-secondary/10 text-secondary'
-                : 'bg-emergency/10 text-emergency'
-                }`}
-            >
-              {currentOrder.paymentStatus === 'paid' ? 'تم الدفع' : 'لم يتم الدفع بعد'}
-            </span>
-          </div>
-          {currentOrder.paymentStatus !== 'paid' ? (
-            <>
-              <p className="mb-3 text-sm text-textGray">
-                استلم المبلغ نقداً من العميل ({formatPrice(currentOrder.price)}) ثم أكّد الاستلام هنا.
-              </p>
-              <button
-                type="button"
-                onClick={handleConfirmPayment}
-                disabled={isLoading}
-                className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                تأكيد استلام الدفع نقداً
-              </button>
-            </>
-          ) : (
-            <p className="text-sm text-textGray">
-              تم استلام المبلغ بتاريخ {formatDate(currentOrder.paidAt)}
-            </p>
-          )}
-        </div>
-      )}
-      {['completed', 'cancelled', 'in-progress', 'price_confirmed'].includes(currentOrder.status) && (
+      {/* Report */}
+      {[
+        "completed",
+        "cancelled",
+        "in-progress",
+        "price_confirmed",
+      ].includes(currentOrder.status) && (
         <div className="mt-4 text-center">
+
           {reportSent ? (
-            <p className="text-sm text-tertiary">تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته</p>
+            <p className="text-sm text-tertiary">
+              تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته
+            </p>
           ) : (
             <button
               type="button"
               onClick={() => setReportOpen(true)}
               className="inline-flex items-center gap-2 text-sm text-emergency hover:underline"
             >
-              <FaFlag size={12} /> الإبلاغ عن مشكلة في هذا الطلب
+              <FaFlag size={12} />
+              الإبلاغ عن مشكلة في هذا الطلب
             </button>
           )}
+
         </div>
       )}
 
+      {/* Report Modal */}
       {reportOpen && (
         <ReasonModal
           title="سبب الإبلاغ عن هذا الطلب"
@@ -535,6 +710,7 @@ const onLocationUpdate = (payload) => {
           onClose={() => setReportOpen(false)}
         />
       )}
+
     </div>
   );
 }
