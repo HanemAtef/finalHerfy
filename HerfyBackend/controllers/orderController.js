@@ -486,7 +486,6 @@ const updateOrderStatus = async (req, res) => {
         return res.status(400).json({ msg: "Completion proof image is required" });
       }
       order.completionImage = completionImage;
-      order.paymentStatus = "unpaid";
 
       const commissionRate = order.commissionRate || 10;
       const commissionAmount = (order.price * commissionRate) / 100;
@@ -856,6 +855,5 @@ module.exports = {
   confirmPrice,
   respondReschedule,
   requestReschedule,
-  confirmCashPayment,
   markOnTheWay,
 };

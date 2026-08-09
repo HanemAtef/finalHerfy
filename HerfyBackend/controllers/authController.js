@@ -40,6 +40,11 @@ const publicUser = (user) => ({
   isVerified: user.isVerified,
 });
 
+// console.log({
+//   penaltyCount: user.penaltyCount,
+//   penaltyAmount: user.penaltyAmount,
+// });
+
 /********* register user - مع دعم الملفات وحالة pending *********/
 const registerUser = async (req, res) => {
   try {

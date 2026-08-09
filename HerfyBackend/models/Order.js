@@ -154,23 +154,6 @@
         default: null,
       },
 
-      // Payment (cash-on-completion) tracking
-      paymentMethod: {
-        type: String,
-        enum: ["cash"],
-        default: "cash",
-      },
-
-      paymentStatus: {
-        type: String,
-        enum: ["unpaid", "paid"],
-        default: "unpaid",
-      },
-
-      paidAt: {
-        type: Date,
-        default: null,
-      },
     },
     { timestamps: true }
   );

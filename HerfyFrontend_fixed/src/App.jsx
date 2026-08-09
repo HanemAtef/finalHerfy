@@ -42,6 +42,7 @@ import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
 
 
+
 function App() {
   return (
     <BrowserRouter>
@@ -116,7 +117,7 @@ function App() {
             <Route path="profile" element={<AdminProfilePage />} />
             <Route path="notifications" element={<AdminNotificationsPage />} />
           </Route>
-
+            
           {/* Chat (customer & handyman) */}
           <Route
             path="/chat/:orderId"
@@ -134,5 +135,5 @@ function App() {
     </BrowserRouter>
   );
 }
-
+        
 export default App;
