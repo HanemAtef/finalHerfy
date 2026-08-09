@@ -226,6 +226,36 @@ describe('Order — status transitions', () => {
   });
 });
 
+describe('Fix 1 & 5 Acceptance Tests', () => {
+  it('Fix 1: handyman-role user calling POST /orders/create gets 403 Forbidden or 400', async () => {
+    const handyman = await makeHandyman();
+    const res = await request(app)
+      .post('/api/orders/create')
+      .set('Authorization', `Bearer ${handyman.token}`)
+      .send({
+        handymanId: handyman.user._id, // self-dealing attempt
+        profession: 'plumbing',
+        location: { type: 'Point', coordinates: [31.2, 30.0], address: 'test' }
+      });
+    expect([400, 403]).toContain(res.statusCode);
+  });
+
+  it('Fix 5: complete an order in a test, assert completedOrders increased by 1', async () => {
+    const { orderId, hToken, hUser } = await advanceTo('in-progress');
+    const beforeStats = await Handyman.findOne({ userId: hUser._id });
+    const initialCompleted = beforeStats.completedOrders || 0;
+
+    const res = await request(app)
+      .patch(`/api/orders/${orderId}/status`)
+      .set('Authorization', `Bearer ${hToken}`)
+      .send({ status: 'completed', completionImage: 'https://example.com/proof.jpg' });
+    expect(res.statusCode).toBe(200);
+
+    const afterStats = await Handyman.findOne({ userId: hUser._id });
+    expect(afterStats.completedOrders).toBe(initialCompleted + 1);
+  });
+});
+
 describe('Order — cancellation penalty', () => {
   it('customer cancelling in-progress order incurs penalty', async () => {
     const { orderId, cToken, cUser } = await advanceTo('in-progress');

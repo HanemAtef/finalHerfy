@@ -43,6 +43,9 @@ const reportSchema = new mongoose.Schema(
       default: null,
     },
     resolvedAt: Date,
+    orderStatusAtReport: {
+      type: String
+    },
 
     // Escalation
     slaDeadline: {
