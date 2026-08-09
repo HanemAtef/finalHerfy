@@ -2,6 +2,8 @@ const Order = require('../models/Order');
 const Handyman = require('../models/Handyman');
 const {calculateRoute} = require('../utils/tomtom');
 
+const etaThrottleMap = new Map(); // orderId -> last calculated timestamp
+
 const liveTrackingSocket = (io) => {
   io.on('connection', (socket) => {
     console.log(' New client connected:', socket.id);
@@ -47,10 +49,28 @@ const liveTrackingSocket = (io) => {
       let routeData = null;
       if (order.customerLocation && order.customerLocation.coordinates) {
         const [customerLng, customerLat] = order.customerLocation.coordinates;
-        routeData = await calculateRoute(
-            { lat, lng },
-            { lat: customerLat, lng: customerLng }
-        );
+        
+        const now = Date.now();
+        const lastCalc = etaThrottleMap.get(orderId) || 0;
+        const intervalSec = parseInt(process.env.ETA_RECALCULATION_INTERVAL_SEC) || 60;
+        
+        if (now - lastCalc > intervalSec * 1000) {
+          try {
+            routeData = await calculateRoute(
+                { lat, lng },
+                { lat: customerLat, lng: customerLng }
+            );
+            etaThrottleMap.set(orderId, now);
+            
+            // Only update if ETA changed meaningfully (e.g. > 2 mins difference)
+            if (routeData && order.eta && Math.abs(routeData.eta - order.eta) <= 2) {
+              // Ignore small changes to avoid UI spam
+              routeData.eta = order.eta;
+            }
+          } catch (err) {
+            console.log("TomTom recalculation failed, keeping previous ETA:", err.message);
+          }
+        }
       }
 
       // update handyman live location 

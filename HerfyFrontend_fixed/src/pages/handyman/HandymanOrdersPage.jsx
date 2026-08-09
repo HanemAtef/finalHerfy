@@ -52,14 +52,14 @@ export default function HandymanOrdersPage() {
       </h1>
       <p className="mb-6 text-sm text-textGray">إدارة ومتابعة جميع طلباتك</p>
 
-      <div className="mb-6 flex flex-wrap gap-2">
+      <div className="mb-6 flex flex-wrap gap-2 rounded-2xl bg-white p-2 shadow-sm w-fit border border-neutral">
         {FILTERS.map(({ key, label }) => (
           <button
             key={key}
             type="button"
             onClick={() => setFilter(key)}
-            className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${
-              filter === key ? 'bg-primary text-white' : 'border border-borderGray bg-white text-textGray'
+            className={`rounded-xl px-5 py-2.5 text-sm font-semibold transition-all duration-300 ${
+              filter === key ? 'bg-primary text-white shadow-md' : 'bg-transparent text-textGray hover:bg-neutral'
             }`}
           >
             {label}
@@ -70,25 +70,41 @@ export default function HandymanOrdersPage() {
       {isLoading ? (
         <LoadingSpinner />
       ) : filtered.length === 0 ? (
-        <div className="card py-12 text-center text-textGray">لا توجد طلبات</div>
+        <div className="rounded-2xl border-2 border-dashed border-borderGray bg-white/50 py-16 text-center text-textGray flex flex-col items-center justify-center">
+          <div className="text-5xl mb-4 opacity-50">📭</div>
+          <p className="font-semibold text-lg">لا توجد طلبات</p>
+          <p className="text-sm">لم يتم العثور على أي طلبات تطابق الفلتر المحدد.</p>
+        </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((order) => (
             <Link
               key={order._id}
               to={`/handyman/orders/${order._id}`}
-              className="card flex flex-wrap items-center justify-between gap-4 transition hover:shadow-md"
+              className="rounded-2xl bg-white p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-neutral flex flex-col justify-between gap-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg relative overflow-hidden"
             >
-              <div>
-                <p className="font-bold text-textDark">{order.profession}</p>
-                <p className="text-sm text-textGray">{order.customerId?.name}</p>
-                <p className="text-xs text-textGray">{formatDate(order.createdAt)}</p>
-              </div>
-              <div className="text-left">
-                <p className="font-bold">{formatPrice(order.totalPrice || order.estimatedPrice)}</p>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[order.status]}`}>
+              {/* Top Accent Line */}
+              <div className={`absolute top-0 left-0 w-full h-1 ${statusColors[order.status].split(' ')[0].replace('/10', '')}`} />
+              
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="font-bold text-textDark text-lg">{order.profession}</p>
+                  <p className="text-sm font-medium text-textGray mt-0.5">{order.customerId?.name}</p>
+                </div>
+                <span className={`text-xs font-bold px-3 py-1 rounded-full ${statusColors[order.status]}`}>
                   {ORDER_STATUS_LABELS[order.status]}
                 </span>
+              </div>
+              
+              <div className="flex justify-between items-end mt-2 pt-4 border-t border-gray-100">
+                <div>
+                  <p className="text-xs text-textGray mb-1">تاريخ الطلب</p>
+                  <p className="text-sm font-semibold">{formatDate(order.createdAt)}</p>
+                </div>
+                <div className="text-left">
+                  <p className="text-xs text-textGray mb-1">التكلفة</p>
+                  <p className="font-bold text-secondary text-lg">{formatPrice(order.totalPrice || order.estimatedPrice)}</p>
+                </div>
               </div>
             </Link>
           ))}

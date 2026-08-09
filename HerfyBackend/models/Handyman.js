@@ -1,3 +1,4 @@
+// HerfyBackend/models/Handyman.js
 const mongoose = require("mongoose");
 
 const handymanSchema = new mongoose.Schema(
@@ -9,10 +10,6 @@ const handymanSchema = new mongoose.Schema(
       unique: true,
     },
 
-    // Was a hardcoded enum — now free text validated at the controller
-    // level against the admin-managed ServiceType collection, so new
-    // trades can be added without a code deploy. Existing Arabic values
-    // already in the DB remain valid.
     profession: {
       type: String,
       required: true,
@@ -43,6 +40,21 @@ const handymanSchema = new mongoose.Schema(
       default: 0,
     },
 
+    totalOffers: {
+      type: Number,
+      default: 0,
+    },
+
+    acceptedOffers: {
+      type: Number,
+      default: 0,
+    },
+
+    acceptanceRate: {
+      type: Number,
+      default: 1.0, // defaults to 100%
+    },
+
     verified: {
       type: Boolean,
       default: false,
@@ -59,14 +71,29 @@ const handymanSchema = new mongoose.Schema(
       },
     ],
 
-    // ===== Wallet / platform commission ledger =====
-    // the platform's cut (order.commissionAmount) isn't collected at the
-    // time of the order — it accumulates here as a debt the handyman owes
-    // the platform, and is meant to be settled periodically (e.g. an admin
-    // marks it paid, or it's deducted from a future payout).
     walletBalance: {
       type: Number,
-      default: 0, // positive = amount owed TO the platform
+      default: 0,
+    },
+
+    penaltyAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyCancellationCount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyCancellationMonth: {
+      type: Number,
+      default: new Date().getMonth(),
+    },
+
+    monthlyCancellationYear: {
+      type: Number,
+      default: new Date().getFullYear(),
     },
 
     penaltyAmount: {
@@ -99,19 +126,79 @@ const handymanSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Admin verification workflow (approve / reject with a reason)
+    // ** إضافة حقول التسجيل والموافقة **
+    registrationStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    },
+
+    adminNote: {
+      type: String,
+      default: ''
+    },
+
+    registeredAt: {
+      type: Date,
+      default: Date.now
+    },
+
+    approvedAt: {
+      type: Date
+    },
+
+    rejectedAt: {
+      type: Date
+    },
+
+    // ** إضافة الملفات المرفقة **
+    nationalId: {
+      type: String, // مسار الصورة
+      required: function() {
+        return this.registrationStatus === 'pending';
+      }
+    },
+
+    certificate: {
+      type: String // مسار الصورة
+    },
+
+    profileImage: {
+      type: String
+    },
+
+    // ** إضافة الموقع **
+    location: {
+      type: {
+        type: String,
+        enum: ['Point']
+      },
+      coordinates: {
+        type: [Number],
+        required: false
+      }
+    },
+
+    address: {
+      type: String
+    },
+
+    // ** حقل للـ rejected القديم (للتوافق مع الكود الموجود) **
     rejected: {
       type: Boolean,
-      default: false,
+      default: false
     },
 
     rejectedReason: {
       type: String,
-      default: null,
-    },
+      default: null
+    }
   },
   { timestamps: true }
 );
+
+// إضافة index للموقع
+handymanSchema.index({ location: '2dsphere' });
 
 const Handyman = mongoose.model("Handyman", handymanSchema);
 module.exports = Handyman;

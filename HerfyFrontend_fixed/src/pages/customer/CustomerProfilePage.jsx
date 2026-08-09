@@ -271,6 +271,10 @@ export default function CustomerProfilePage() {
           </div>
         </div>
 
+        <div className="mt-6">
+          <ChangePasswordCard />
+        </div>
+
         <div className="card mt-6">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-bold">آخر الحجوزات</h3>

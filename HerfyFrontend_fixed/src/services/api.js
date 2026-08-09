@@ -4,44 +4,45 @@ const AUTH = {
   REGISTER: '/users/register',
   LOGIN: '/users/login',
   GET_ME: '/users/me',
+  VERIFY_EMAIL: '/users/verify-email',
+  RESEND_OTP: '/users/resend-otp',
+  LOGOUT: '/users/logout',
+  REFRESH: '/users/refresh',
+  FORGOT_PASSWORD: '/users/forgot-password',
+  RESET_PASSWORD: '/users/reset-password',
+  UPDATE_PROFILE: '/users/me',
+  CHANGE_PASSWORD: '/users/change-password',
 };
 
 export const authService = {
   register: (data) => api.post(AUTH.REGISTER, data),
   login: (data) => api.post(AUTH.LOGIN, data),
   getMe: () => api.get(AUTH.GET_ME),
-  updateProfile: (data) => api.put('/users/me', data),
-  forgotPassword: (data) => api.post('/users/forgot-password', data),
-  resetPassword: (data) => api.post('/users/reset-password', data),
-  verifyEmail: (data) => api.post('/users/verify-email', data),
-  resendOtp: (data) => api.post('/users/resend-otp', data),
-  logout: (data) => api.post('/users/logout', data),
+  updateProfile: (data) => api.put(AUTH.UPDATE_PROFILE, data),
+  changePassword: (data) => api.put(AUTH.CHANGE_PASSWORD, data),
+  forgotPassword: (data) => api.post(AUTH.FORGOT_PASSWORD, data),
+  resetPassword: (data) => api.post(AUTH.RESET_PASSWORD, data),
+  verifyEmail: (data) => api.post(AUTH.VERIFY_EMAIL, data),
+  resendOtp: (data) => api.post(AUTH.RESEND_OTP, data),
+  logout: (data) => api.post(AUTH.LOGOUT, data),
+  refreshToken: (data) => api.post(AUTH.REFRESH, data),
 };
 
 export const uploadService = {
-  // Uploads a single image (profile photo/avatar) and returns { url }
   uploadImage: (file) => {
     const formData = new FormData();
     formData.append('image', file);
-    return api.post('/uploads/image', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return api.post('/uploads/image', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
-  // Uploads multiple images (gallery, order photos, review photos) and returns { urls: [] }
   uploadImages: (files) => {
     const formData = new FormData();
     Array.from(files).forEach((file) => formData.append('images', file));
-    return api.post('/uploads/images', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return api.post('/uploads/images', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
-  // Uploads a voice message for chat and returns { url }
   uploadAudio: (file) => {
     const formData = new FormData();
     formData.append('audio', file);
-    return api.post('/uploads/audio', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return api.post('/uploads/audio', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
   },
 };
 
@@ -51,13 +52,16 @@ export const handymanService = {
   updateProfile: (id, data) => api.put(`/handymen/${id}`, data),
   getAnalytics: (id) => api.get(`/handymen/${id}/analytics`),
   toggleAvailability: (id, data) => api.patch(`/handymen/${id}/availability`, data),
+  getStatus: () => api.get('/handymen/status'),
+  getHandymanStatus: () => api.get('/handymen/status'),
+  getHandymanProfile: () => api.get('/handymen/profile'),
+    getMonthlyStats: () => api.get('/handymen/monthly-stats'),
 };
 
 export const orderService = {
   create: (data) => api.post('/orders/create', data),
   getById: (id) => api.get(`/orders/${id}`),
-  getCustomerOrders: (customerId, params) =>
-    api.get(`/orders/customer/${customerId}`, { params }),
+  getCustomerOrders: (customerId, params) => api.get(`/orders/customer/${customerId}`, { params }),
   getHandymanOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}`),
   getPendingOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}/pending`),
   updateStatus: (id, data) => api.patch(`/orders/${id}/status`, data),
@@ -101,11 +105,12 @@ export const adminService = {
   getUsers: () => api.get('/admin/users'),
   banUser: (userId, data) => api.patch(`/admin/users/${userId}/ban`, data),
   banUserWithReason: (userId, data) => api.patch(`/admin/users/${userId}/ban-with-reason`, data),
+  liftSuspension: (userId, data) => api.patch(`/admin/users/${userId}/lift-suspension`, data),
   deleteUser: (userId, reason) => api.delete(`/admin/users/${userId}`, { data: { reason } }),
-  getPendingVerification: () => api.get('/admin/handymen/pending-verification'),
+  getPendingVerification: () => api.get('/admin/pending-registrations'),
   autoVerify: (handymanId) => api.patch(`/admin/handymen/${handymanId}/auto-verify`),
-  approveHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/approve`, data),
-  rejectHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/reject`, data),
+  approveHandyman: (handymanId, data) => api.patch(`/admin/approve-registration/${handymanId}`, data),
+  rejectHandyman: (handymanId, data) => api.patch(`/admin/reject-registration/${handymanId}`, data),
   suspendHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/suspend`, data),
   getAuditLogs: (params) => api.get('/admin/audit-logs', { params }),
   getCities: () => api.get('/admin/cities?all=true'),
@@ -122,9 +127,6 @@ export const adminService = {
   getCraftsmenAnalytics: () => api.get('/admin/analytics/craftsmen'),
   getJobsAnalytics: () => api.get('/admin/analytics/jobs'),
   getReviewsAnalytics: () => api.get('/admin/analytics/reviews'),
-  // Authenticated CSV download — a plain <a href> can't carry the
-  // Authorization header, so we fetch as a blob and trigger the save
-  // ourselves.
   exportCSV: async (type) => {
     const response = await api.get(`/admin/export/${type}`, { responseType: 'blob' });
     const url = window.URL.createObjectURL(new Blob([response.data]));

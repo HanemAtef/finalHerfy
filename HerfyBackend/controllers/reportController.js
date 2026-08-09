@@ -5,6 +5,7 @@ const Report = require("../models/Report");
 const Order = require("../models/Order");
 const AuditLog = require("../models/AuditLog");
 const User = require("../models/User");
+const Message = require("../models/Message");
 const { createNotification } = require("./notificationController");
 
 // ========== Customer/handyman files a report on an order ==========
@@ -43,6 +44,8 @@ const createReport = async (req, res) => {
     }
 
     const against = isCustomer ? order.handymanId : order.customerId;
+    const slaHours = parseInt(process.env.DISPUTE_SLA_HOURS) || 48;
+    const slaDeadline = new Date(Date.now() + slaHours * 60 * 60 * 1000);
 
     const report = await Report.create({
       orderId,
@@ -50,6 +53,7 @@ const createReport = async (req, res) => {
       against,
       reason,
       description,
+      slaDeadline,
     });
 
     order.status = "disputed";
@@ -82,13 +86,15 @@ const createReport = async (req, res) => {
 // ========== Admin: list reports (filterable by status) ==========
 const getReports = async (req, res) => {
   try {
-    const { status } = req.query;
-    const filter = status ? { status } : {};
+    const { status, escalated } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+    if (escalated === 'true') filter.isEscalated = true;
     const reports = await Report.find(filter)
       .populate("orderId")
       .populate("reportedBy", "name email phone role")
       .populate("against", "name email phone role")
-      .sort({ createdAt: -1 });
+      .sort({ isEscalated: -1, createdAt: -1 });
 
     res.status(200).json({ data: reports });
   } catch (error) {
@@ -167,4 +173,42 @@ const getMyReports = async (req, res) => {
   }
 };
 
-module.exports = { createReport, getReports, resolveReport, getMyReports };
+// ========== Admin: full dispute detail (order history + chat + photos) ==========
+const getDisputeDetail = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const report = await Report.findById(id)
+      .populate("orderId")
+      .populate("reportedBy", "name email phone role")
+      .populate("against", "name email phone role")
+      .populate("resolvedBy", "name email");
+    if (!report) return res.status(404).json({ msg: "Report not found" });
+
+    const order = report.orderId;
+    const orderId = order?._id || report.orderId;
+
+    const [messages, allReports] = await Promise.all([
+      Message.find({ orderId }).populate("sender", "name role").sort({ createdAt: 1 }).lean(),
+      Report.find({ orderId }).populate("reportedBy", "name role").lean(),
+    ]);
+
+    // Collect uploaded photos from order images + completion image
+    const photos = [
+      ...(order?.images || []),
+      ...(order?.completionImage ? [order.completionImage] : []),
+    ];
+
+    res.status(200).json({
+      report,
+      order,
+      chatTranscript: messages,
+      allReportsOnOrder: allReports,
+      photos,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
+module.exports = { createReport, getReports, resolveReport, getMyReports, getDisputeDetail };

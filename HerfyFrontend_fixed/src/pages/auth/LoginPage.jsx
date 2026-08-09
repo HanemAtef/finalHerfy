@@ -4,6 +4,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { FaUser, FaLock, FaSignInAlt, FaUserCog, FaHeadset, FaShieldAlt, FaMoneyCheckAlt, FaArrowRight } from 'react-icons/fa';
 import { FcGoogle } from 'react-icons/fc';
 import { loginUser, clearError } from '../../store/slices/authSlice';
+import AlertMessage from '../../components/common/AlertMessage';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -54,7 +55,7 @@ export default function LoginPage() {
       </header>
 
       <div className="flex min-h-[calc(100vh-80px)] items-center justify-center px-4 py-8">
-        <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
+        <div className="w-full max-w-md rounded-3xl bg-white/90 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-md border border-white/20 transition-all duration-300">
           <Link to="/" className="mb-4 flex items-center gap-2 text-sm text-textGray hover:text-primary">
             <FaArrowRight /> رجوع
           </Link>
@@ -70,11 +71,7 @@ export default function LoginPage() {
             سجل دخولك للوصول إلى أفضل الحرفيين
           </p>
 
-          {error && (
-            <div className="mb-4 rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">
-              {error}
-            </div>
-          )}
+          <AlertMessage type="error" message={error} className="mb-6" />
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
@@ -124,8 +121,15 @@ export default function LoginPage() {
               </Link>
             </div>
 
-            <button type="submit" disabled={isLoading} className="btn-primary flex w-full items-center justify-center gap-2">
-              {isLoading ? 'جاري تسجيل الدخول...' : <><FaSignInAlt /> تسجيل الدخول</>}
+            <button type="submit" disabled={isLoading} className="btn-primary flex w-full items-center justify-center gap-2 hover:shadow-lg hover:-translate-y-0.5 transition-all">
+              {isLoading ? (
+                <>
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  جاري تسجيل الدخول...
+                </>
+              ) : (
+                <><FaSignInAlt /> تسجيل الدخول</>
+              )}
             </button>
           </form>
 

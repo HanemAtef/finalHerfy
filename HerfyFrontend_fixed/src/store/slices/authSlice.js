@@ -1,3 +1,4 @@
+// HerfyFrontend_fixed/src/store/slices/authSlice.js
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
 import { authService } from '../../services/api';
 
@@ -100,7 +101,7 @@ export const getMe = createAsyncThunk(
   async (_, { rejectWithValue }) => {
     try {
       const response = await authService.getMe();
-      return response.data.user;
+      return response.data;
     } catch (error) {
       return rejectWithValue(error.response?.data || { msg: 'فشل تحميل الملف الشخصي' });
     }
@@ -143,6 +144,48 @@ export const resetPassword = createAsyncThunk(
   }
 );
 
+export const changePassword = createAsyncThunk(
+  'auth/changePassword',
+  async (data, { rejectWithValue }) => {
+    try {
+      const response = await authService.changePassword(data);
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل تغيير كلمة المرور' });
+    }
+  }
+);
+
+// =====================================================
+// ========== NEW: GET HANDYMAN STATUS ==========
+// =====================================================
+export const getHandymanStatus = createAsyncThunk(
+  'auth/getHandymanStatus',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await authService.getHandymanStatus();
+      return response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل جلب حالة الحرفي' });
+    }
+  }
+);
+
+// =====================================================
+// ========== NEW: GET HANDYMAN PROFILE ==========
+// =====================================================
+export const getHandymanProfile = createAsyncThunk(
+  'auth/getHandymanProfile',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await authService.getHandymanProfile();
+      return response.data.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل جلب بيانات الحرفي' });
+    }
+  }
+);
+
 const initialState = {
   user: null,
   token: localStorage.getItem('token') || null,
@@ -150,6 +193,10 @@ const initialState = {
   isLoading: false,
   error: null,
   pendingVerificationEmail: null,
+  // ===== NEW: Handyman registration status =====
+  registrationStatus: null, // 'pending' | 'approved' | 'rejected' | null
+  handymanData: null, // Full handyman profile data
+  handymanStatusNote: null, // Admin note for rejection/approval
 };
 
 const authSlice = createSlice({
@@ -160,15 +207,30 @@ const authSlice = createSlice({
       state.user = null;
       state.token = null;
       state.isAuthenticated = false;
+      state.registrationStatus = null;
+      state.handymanData = null;
+      state.handymanStatusNote = null;
       localStorage.removeItem('token');
       localStorage.removeItem('refreshToken');
     },
     clearError: (state) => {
       state.error = null;
     },
+    // ===== NEW: Set registration status manually =====
+    setRegistrationStatus: (state, action) => {
+      state.registrationStatus = action.payload.status;
+      state.handymanStatusNote = action.payload.note || null;
+    },
+    // ===== NEW: Clear handyman data =====
+    clearHandymanData: (state) => {
+      state.handymanData = null;
+      state.registrationStatus = null;
+      state.handymanStatusNote = null;
+    },
   },
   extraReducers: (builder) => {
     builder
+      // ===== LOGIN =====
       .addCase(loginUser.pending, (state) => {
         state.isLoading = true;
         state.error = null;
@@ -178,6 +240,13 @@ const authSlice = createSlice({
         state.user = normalizeUser(action.payload.user);
         state.token = action.payload.token;
         state.isAuthenticated = true;
+        // Store handyman status if present
+        if (action.payload.handymanStatus) {
+          state.registrationStatus = action.payload.handymanStatus;
+        }
+        if (action.payload.user?.registrationStatus) {
+          state.registrationStatus = action.payload.user.registrationStatus;
+        }
       })
       .addCase(loginUser.rejected, (state, action) => {
         state.isLoading = false;
@@ -185,19 +254,36 @@ const authSlice = createSlice({
         state.pendingVerificationEmail = action.payload?.needsVerification
           ? action.payload.email
           : null;
+        // Store registration status if rejected/pending
+        if (action.payload?.status) {
+          state.registrationStatus = action.payload.status;
+          state.handymanStatusNote = action.payload?.note || null;
+        }
       })
+
+      // ===== REGISTER =====
       .addCase(registerUser.pending, (state) => {
         state.isLoading = true;
         state.error = null;
+        state.registrationStatus = null;
       })
       .addCase(registerUser.fulfilled, (state, action) => {
         state.isLoading = false;
         state.pendingVerificationEmail = action.payload.email;
+        // Store registration status for handyman
+        if (action.payload.registrationStatus) {
+          state.registrationStatus = action.payload.registrationStatus;
+        }
+        if (action.payload.role === 'handyman') {
+          state.registrationStatus = 'pending';
+        }
       })
       .addCase(registerUser.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload?.msg || 'فشل إنشاء الحساب';
       })
+
+      // ===== VERIFY EMAIL =====
       .addCase(verifyEmail.pending, (state) => {
         state.isLoading = true;
         state.error = null;
@@ -208,46 +294,73 @@ const authSlice = createSlice({
         state.token = action.payload.token;
         state.isAuthenticated = true;
         state.pendingVerificationEmail = null;
+        // Store registration status from verification response
+        if (action.payload.registrationStatus) {
+          state.registrationStatus = action.payload.registrationStatus;
+        }
       })
       .addCase(verifyEmail.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload?.msg || 'فشل التحقق من الحساب';
       })
+
+      // ===== RESEND OTP =====
       .addCase(resendOtp.pending, (state) => {
         state.error = null;
       })
       .addCase(resendOtp.rejected, (state, action) => {
         state.error = action.payload?.msg || 'فشل إرسال رمز التحقق';
       })
+
+      // ===== LOGOUT =====
       .addCase(logoutUser.fulfilled, (state) => {
         state.user = null;
         state.token = null;
         state.isAuthenticated = false;
         state.pendingVerificationEmail = null;
+        state.registrationStatus = null;
+        state.handymanData = null;
+        state.handymanStatusNote = null;
       })
       .addCase(logoutUser.rejected, (state) => {
-        // Even if the server call failed, local tokens are already cleared
-        // by the thunk — force the client-side state to match.
         state.user = null;
         state.token = null;
         state.isAuthenticated = false;
+        state.registrationStatus = null;
+        state.handymanData = null;
+        state.handymanStatusNote = null;
       })
+
+      // ===== GET ME =====
       .addCase(getMe.pending, (state) => {
         state.isLoading = true;
         state.error = null;
       })
       .addCase(getMe.fulfilled, (state, action) => {
         state.isLoading = false;
-        state.user = normalizeUser(action.payload);
+        const data = action.payload;
+        state.user = normalizeUser(data.user || data);
         state.isAuthenticated = true;
+        // Store handyman data if present
+        if (data.handyman) {
+          state.handymanData = data.handyman;
+          state.registrationStatus = data.handyman.registrationStatus || null;
+        }
+        if (data.user?.registrationStatus) {
+          state.registrationStatus = data.user.registrationStatus;
+        }
       })
       .addCase(getMe.rejected, (state) => {
         state.isLoading = false;
         state.isAuthenticated = false;
         state.user = null;
         state.token = null;
+        state.registrationStatus = null;
+        state.handymanData = null;
         localStorage.removeItem('token');
       })
+
+      // ===== UPDATE PROFILE =====
       .addCase(updateProfile.pending, (state) => {
         state.isLoading = true;
         state.error = null;
@@ -260,6 +373,8 @@ const authSlice = createSlice({
         state.isLoading = false;
         state.error = action.payload?.msg || 'فشل تحديث الملف الشخصي';
       })
+
+      // ===== FORGOT PASSWORD =====
       .addCase(forgotPassword.pending, (state) => {
         state.isLoading = true;
         state.error = null;
@@ -271,6 +386,8 @@ const authSlice = createSlice({
         state.isLoading = false;
         state.error = action.payload?.msg || 'فشل إرسال رمز التحقق';
       })
+
+      // ===== RESET PASSWORD =====
       .addCase(resetPassword.pending, (state) => {
         state.isLoading = true;
         state.error = null;
@@ -281,14 +398,92 @@ const authSlice = createSlice({
       .addCase(resetPassword.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload?.msg || 'فشل إعادة تعيين كلمة المرور';
+      })
+
+      // ===== CHANGE PASSWORD =====
+      .addCase(changePassword.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(changePassword.fulfilled, (state) => {
+        state.isLoading = false;
+      })
+      .addCase(changePassword.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload?.msg || 'فشل تغيير كلمة المرور';
+      })
+
+      // ===== GET HANDYMAN STATUS (NEW) =====
+      .addCase(getHandymanStatus.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(getHandymanStatus.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.registrationStatus = action.payload.status;
+        state.handymanStatusNote = action.payload.note || null;
+        if (action.payload.data) {
+          state.handymanData = action.payload.data;
+        }
+      })
+      .addCase(getHandymanStatus.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload?.msg || 'فشل جلب حالة الحرفي';
+      })
+
+      // ===== GET HANDYMAN PROFILE (NEW) =====
+      .addCase(getHandymanProfile.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(getHandymanProfile.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.handymanData = action.payload;
+        state.registrationStatus = action.payload.registrationStatus || null;
+      })
+      .addCase(getHandymanProfile.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload?.msg || 'فشل جلب بيانات الحرفي';
       });
   },
 });
 
+export const { logout, clearError, setRegistrationStatus, clearHandymanData } = authSlice.actions;
 
+// =====================================================
+// ========== SELECTORS ==========
+// =====================================================
 
+// Check if user is a handyman
+export const selectIsHandyman = (state) => state.auth.user?.role === 'handyman';
 
+// Check if handyman registration is pending
+export const selectIsHandymanPending = (state) => 
+  state.auth.registrationStatus === 'pending';
 
+// Check if handyman registration is approved
+export const selectIsHandymanApproved = (state) => 
+  state.auth.registrationStatus === 'approved';
 
-export const { logout, clearError } = authSlice.actions;
+// Check if handyman registration is rejected
+export const selectIsHandymanRejected = (state) => 
+  state.auth.registrationStatus === 'rejected';
+
+// Get handyman status message
+export const selectHandymanStatusMessage = (state) => {
+  const status = state.auth.registrationStatus;
+  const note = state.auth.handymanStatusNote;
+  
+  switch (status) {
+    case 'pending':
+      return 'حسابك في انتظار موافقة الأدمن';
+    case 'approved':
+      return 'تم الموافقة على حسابك';
+    case 'rejected':
+      return note ? `تم رفض حسابك: ${note}` : 'تم رفض حسابك';
+    default:
+      return null;
+  }
+};
+
 export default authSlice.reducer;

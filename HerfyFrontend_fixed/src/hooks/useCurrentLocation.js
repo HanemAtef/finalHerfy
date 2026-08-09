@@ -1,8 +1,6 @@
-<<<<<<< HEAD
-import { useEffect, useState, useCallback } from "react";
-=======
+
 import { useEffect, useState, useCallback, useRef } from 'react';
->>>>>>> 6a45ad8 (phot)
+
 
 export default function useCurrentLocation() {
   const [location, setLocation] = useState(null);
@@ -41,7 +39,7 @@ export default function useCurrentLocation() {
         setLocation((prev) => prev ?? { latitude: 30.0444, longitude: 31.2357 });
         setLoading(false);
       },
-      { enableHighAccuracy: true, timeout: 10000 },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   }, []);
 

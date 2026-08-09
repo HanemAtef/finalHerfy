@@ -1,3 +1,4 @@
+// HerfyBackend/routes/adminRoutes.js
 const express = require("express");
 const router = express.Router();
 const { authMiddleware, allowedToMiddleware } = require("../middlewares/authMiddleware");
@@ -11,8 +12,8 @@ const {
   autoVerifyAll,
   getWallets,
   settleWallet,
-   getDashboardChart,
-   broadcastAnnouncement,
+  getDashboardChart,
+  broadcastAnnouncement,
 } = require("../controllers/adminControllers");
 const {
   approveHandyman,
@@ -26,44 +27,82 @@ const {
   listCities, createCity, updateCity, deleteCity,
   listServiceTypes, createServiceType, updateServiceType, deleteServiceType,
 } = require("../controllers/referenceDataController");
-const { getReports, resolveReport } = require("../controllers/reportController");
+const { getReports, resolveReport, getDisputeDetail } = require("../controllers/reportController");
 const {
   getOverviewAnalytics, getCraftsmenAnalytics, getJobsAnalytics, getReviewsAnalytics, exportCSV,
 } = require("../controllers/analyticsController");
 
+// =====================================================
+// ========== IMPORT NEW REGISTRATION CONTROLLERS ==========
+// =====================================================
+const {
+  getPendingRegistrationRequests,
+  approveRegistrationRequest,
+  rejectRegistrationRequest
+} = require("../controllers/adminControllers");
+
 // All admin routes require authentication + admin role
 router.use(authMiddleware, allowedToMiddleware("admin"));
 
-//  Dashboard Statistics
+// =====================================================
+// ========== DASHBOARD & STATS ==========
+// =====================================================
 router.get("/stats", getAdminStats);
+router.get("/dashboard/chart", getDashboardChart);
 
-//  User Management
+// =====================================================
+// ========== USER MANAGEMENT ==========
+// =====================================================
 router.get("/users", getAllUsers);
 router.patch("/users/:userId/ban", toggleUserBan); // legacy, kept for compatibility
 router.patch("/users/:userId/ban-with-reason", banUserWithReason);
 router.delete("/users/:userId", deleteUserAccount);
 
-//  Order Management
+// =====================================================
+// ========== ORDER MANAGEMENT ==========
+// =====================================================
 router.get("/orders", getAllOrders);
 
-//  Auto-Verification (rule-based)
+// =====================================================
+// ========== REGISTRATION REQUEST MANAGEMENT (NEW) ==========
+// =====================================================
+// جلب طلبات التسجيل المعلقة
+router.get("/pending-registrations", getPendingRegistrationRequests);
+
+// الموافقة على طلب تسجيل
+router.patch("/approve-registration/:handymanId", approveRegistrationRequest);
+
+// رفض طلب تسجيل (مع سبب)
+router.patch("/reject-registration/:handymanId", rejectRegistrationRequest);
+
+// =====================================================
+// ========== HANDYMAN VERIFICATION (Auto) ==========
+// =====================================================
 router.get("/handymen/pending-verification", getPendingVerification);
 router.patch("/handymen/:handymanId/auto-verify", autoVerifyHandyman);
 router.patch("/handymen/auto-verify-all", autoVerifyAll);
 
-//  Manual moderation (approve/reject/suspend with reasons)
+// =====================================================
+// ========== HANDYMAN MODERATION (Manual) ==========
+// =====================================================
 router.patch("/handymen/:handymanId/approve", approveHandyman);
 router.patch("/handymen/:handymanId/reject", rejectHandyman);
 router.patch("/handymen/:handymanId/suspend", suspendHandyman);
 
-//  Audit log
+// =====================================================
+// ========== AUDIT LOG ==========
+// =====================================================
 router.get("/audit-logs", getAuditLogs);
 
-//  Wallets (commission owed by handymen on cash orders)
+// =====================================================
+// ========== WALLET MANAGEMENT ==========
+// =====================================================
 router.get("/wallets", getWallets);
 router.patch("/wallets/:handymanId/settle", settleWallet);
 
-//  Reference data (cities / service types)
+// =====================================================
+// ========== REFERENCE DATA ==========
+// =====================================================
 router.get("/cities", listCities);
 router.post("/cities", createCity);
 router.patch("/cities/:id", updateCity);
@@ -74,21 +113,25 @@ router.post("/service-types", createServiceType);
 router.patch("/service-types/:id", updateServiceType);
 router.delete("/service-types/:id", deleteServiceType);
 
-//  Reports / dispute resolution
+// =====================================================
+// ========== REPORTS & DISPUTES ==========
+// =====================================================
 router.get("/reports", getReports);
+router.get("/reports/:id/detail", getDisputeDetail);
 router.patch("/reports/:id/resolve", resolveReport);
 
-//  Analytics + CSV export
+// =====================================================
+// ========== ANALYTICS ==========
+// =====================================================
 router.get("/analytics/overview", getOverviewAnalytics);
 router.get("/analytics/craftsmen", getCraftsmenAnalytics);
 router.get("/analytics/jobs", getJobsAnalytics);
 router.get("/analytics/reviews", getReviewsAnalytics);
 router.get("/export/:type", exportCSV);
 
-//refactor chart 
-router.get("/dashboard/chart", getDashboardChart);
-
-//  Broadcast a general announcement to users
+// =====================================================
+// ========== ANNOUNCEMENTS ==========
+// =====================================================
 router.post("/broadcast", broadcastAnnouncement);
 
 module.exports = router;
