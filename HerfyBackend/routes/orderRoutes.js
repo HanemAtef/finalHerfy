@@ -29,7 +29,7 @@ const { createReport } = require("../controllers/reportController");
 router.use(authMiddleware);
 
 // ========== Customer only ==========
-router.post("/create", idempotency, validate(createOrderSchema), createOrder);
+router.post("/create", allowedToMiddleware("customer", "admin"), idempotency, validate(createOrderSchema), createOrder);
 
 // ========== Customer, Handyman, or Admin (controller handles) ==========
 // NOTE: keep this AFTER the more specific /customer/:id and /handyman/:id

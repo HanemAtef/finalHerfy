@@ -451,10 +451,16 @@ const settleWallet = async (req, res) => {
       return res.status(404).json({ msg: "Handyman not found" });
     }
 
+    const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
     const settledAmount = handyman.walletBalance;
     handyman.walletBalance = 0;
-    handyman.isSuspended = false;
-    handyman.suspendedReason = null;
+    
+    let suspensionCleared = false;
+    if (handyman.isSuspended && handyman.suspendedReason === WALLET_DEBT_SUSPENSION_REASON) {
+      handyman.isSuspended = false;
+      handyman.suspendedReason = null;
+      suspensionCleared = true;
+    }
     await handyman.save();
 
     await logAction(
@@ -472,11 +478,17 @@ const settleWallet = async (req, res) => {
       handyman.userId,
       "system_alert",
       "Wallet Settled",
-      `تم تسوية رصيد العمولة (${settledAmount} ج.م) وتفعيل حسابك مجدداً`,
+      suspensionCleared 
+        ? `تم تسوية رصيد العمولة (${settledAmount} ج.م) وتفعيل حسابك مجدداً`
+        : `تم تسوية رصيد العمولة (${settledAmount} ج.م)`,
       { settledAmount }
     );
 
-    res.status(200).json({ msg: "Wallet settled", handyman });
+    res.status(200).json({ 
+      msg: "Wallet settled", 
+      handyman, 
+      walletSettledButStillSuspended: handyman.isSuspended 
+    });
   } catch (error) {
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });

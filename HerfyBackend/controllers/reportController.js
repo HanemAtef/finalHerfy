@@ -54,6 +54,7 @@ const createReport = async (req, res) => {
       reason,
       description,
       slaDeadline,
+      orderStatusAtReport: order.status,
     });
 
     order.status = "disputed";
@@ -126,7 +127,7 @@ const resolveReport = async (req, res) => {
 
     const order = await Order.findById(report.orderId);
     if (order) {
-      order.status = action === "restore" ? "in-progress" : "cancelled";
+      order.status = action === "restore" ? (report.orderStatusAtReport || "in-progress") : "cancelled";
       await order.save();
     }
 

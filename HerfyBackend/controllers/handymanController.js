@@ -97,8 +97,6 @@ const getNearbyHandymen = async (req, res) => {
         return {
           id: user._id,
           name: user.name,
-          email: user.email,
-          phone: user.phone,
           location: user.location,
           profileImage: user.profileImage,
           profession: details.profession,
@@ -182,8 +180,6 @@ const getHandymanDetails = async (req, res) => {
     res.status(200).json({
       id: user._id,
       name: user.name,
-      email: user.email,
-      phone: user.phone,
       location: user.location,
       profileImage: user.profileImage,
       profession: details.profession,
