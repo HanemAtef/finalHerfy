@@ -62,7 +62,6 @@ export const orderService = {
   getPendingOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}/pending`),
   updateStatus: (id, data) => api.patch(`/orders/${id}/status`, data),
   confirmPrice: (id, data) => api.patch(`/orders/${id}/confirm-price`, data),
-  confirmPayment: (id) => api.patch(`/orders/${id}/confirm-payment`),
   markOnTheWay: (id) => api.patch(`/orders/${id}/on-the-way`),
   dispute: (id, data) => api.patch(`/orders/${id}/dispute`, data),
 };

@@ -42,8 +42,6 @@ const limiter = rateLimit({
 });
 app.use("/api", limiter);
 
-// Stripe webhook — MUST be registered before express.json() to get raw body
-app.use("/api/webhooks", require("./routes/webhookRoutes"));
 
 // Body parser, reading data from body into req.body
 app.use(express.json({ limit: "10kb" }));
@@ -105,8 +103,7 @@ app.use("/api/notifications", require("./routes/notificationRoutes"));
 app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
-app.use("/api/payments", require("./routes/paymentRoutes"));
-app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
+
 
 require("./controllers/referenceDataController").ensureSeeded().catch((e) =>
   console.log("ServiceType seed skipped:", e.message)

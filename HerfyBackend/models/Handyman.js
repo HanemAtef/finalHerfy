@@ -60,7 +60,6 @@ const handymanSchema = new mongoose.Schema(
     ],
 
     // ===== Wallet / platform commission ledger =====
-    // Since payment happens in cash directly between customer and handyman,
     // the platform's cut (order.commissionAmount) isn't collected at the
     // time of the order — it accumulates here as a debt the handyman owes
     // the platform, and is meant to be settled periodically (e.g. an admin

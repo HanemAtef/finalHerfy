@@ -105,15 +105,6 @@ const createOrder = async (req, res) => {
       isEmergency: isEmergencyBool,
     });
 
-    // BUG FIX (C8): the customer's owed penalty used to be zeroed out here,
-    // immediately on order creation, even though it was never actually
-    // charged anywhere collectible (the fields that carried it were being
-    // silently dropped, and even once persisted, nothing at payment time
-    // referenced them). The penalty now stays on the customer's balance —
-    // and is snapshotted onto this order's `penaltyAmount`/`totalPrice` —
-    // until it's actually collected when cash payment is confirmed
-    // (see confirmCashPayment).
-
     // ========== NOTIFICATION: New order to handyman ==========
     const io = req.app.get("io");
     await createNotification(
@@ -551,7 +542,6 @@ const updateOrderStatus = async (req, res) => {
           .json({ msg: "Completion proof image is required" });
       }
       order.completionImage = completionImage;
-      order.paymentStatus = "unpaid";
 
       const commissionRate = order.commissionRate || 10;
       const commissionAmount = (order.price * commissionRate) / 100;
@@ -793,109 +783,6 @@ const respondReschedule = async (req, res) => {
   }
 };
 
-// ========== Confirm Cash Payment ==========
-const confirmCashPayment = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const order = await Order.findById(id);
-
-    if (!order) {
-      return res.status(404).json({ msg: "Order not found" });
-    }
-
-    const isHandyman = req.user.id === order.handymanId?.toString();
-    const isAdmin = req.user.role === "admin";
-
-    if (!isHandyman && !isAdmin) {
-      return res
-        .status(403)
-        .json({ msg: "Only the handyman can confirm receiving the payment" });
-    }
-
-    if (order.status !== "completed") {
-      return res
-        .status(400)
-        .json({ msg: "Order must be completed before confirming payment" });
-    }
-
-    if (order.paymentStatus === "paid") {
-      return res.status(400).json({ msg: "Payment already confirmed" });
-    }
-
-    order.paymentStatus = "paid";
-    order.paidAt = new Date();
-    await order.save();
-
-    // BUG FIX (C8): collect the penalty that was snapshotted onto this
-    // order at creation time — this is the point the debt is actually
-    // being paid in cash alongside the job, so this is when it should
-    // come off the customer's outstanding balance (not at order creation).
-    if (order.penaltyAmount > 0) {
-      const customer = await User.findById(order.customerId);
-      if (customer) {
-        customer.penaltyAmount = Math.max(
-          0,
-          (customer.penaltyAmount || 0) - order.penaltyAmount,
-        );
-        await customer.save();
-      }
-    }
-
-    // The customer paid the handyman in cash directly, so the platform's
-    // commission on this order hasn't actually been collected — track it as
-    // a debt on the handyman's wallet.
-    const WALLET_SUSPENSION_THRESHOLD = 500; // EGP
-    const handyman = await Handyman.findOne({ userId: order.handymanId });
-    let justSuspended = false;
-    if (handyman) {
-      handyman.walletBalance =
-        (handyman.walletBalance || 0) + (order.commissionAmount || 0);
-      if (
-        handyman.walletBalance >= WALLET_SUSPENSION_THRESHOLD &&
-        !handyman.isSuspended
-      ) {
-        handyman.isSuspended = true;
-        handyman.suspendedReason =
-          "رصيد العمولة المستحقة للمنصة تجاوز الحد المسموح";
-        justSuspended = true;
-      }
-      await handyman.save();
-    }
-
-    const io = req.app.get("io");
-    await createNotification(
-      io,
-      order.customerId,
-      "payment_confirmed",
-      " Payment Confirmed",
-      `${req.user.name} confirmed receiving the payment for your order`,
-      { orderId: order._id },
-    );
-
-    if (justSuspended) {
-      await createNotification(
-        io,
-        order.handymanId,
-        "account_blocked",
-        " Account Suspended",
-        `تم إيقاف حسابك مؤقتاً لتجاوز رصيد العمولة المستحقة ${WALLET_SUSPENSION_THRESHOLD} ج.م. يرجى التواصل مع الدعم للتسوية.`,
-        { walletBalance: handyman.walletBalance },
-      );
-    }
-
-    res
-      .status(200)
-      .json({
-        msg: "Payment confirmed",
-        order,
-        walletBalance: handyman?.walletBalance,
-      });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ msg: "Server error", error: error.message });
-  }
-};
-
 // ========== Handyman marks "on the way" ==========
 // Separate from status transitions on purpose: it doesn't change the order
 // status, it only flips the flag that unlocks the live map for the customer.
@@ -963,6 +850,5 @@ module.exports = {
   confirmPrice,
   respondReschedule,
   requestReschedule,
-  confirmCashPayment,
   markOnTheWay,
 };

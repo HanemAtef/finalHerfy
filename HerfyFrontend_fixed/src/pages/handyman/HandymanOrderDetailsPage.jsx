@@ -15,7 +15,6 @@ import {
 import {
   fetchOrderById,
   updateOrderStatus,
-  confirmOrderPayment,
   markOrderOnTheWay,
 } from "../../store/slices/orderSlice";
 import { uploadService, reportService } from "../../services/api";
@@ -119,9 +118,6 @@ export default function HandymanOrderDetailsPage() {
     handleStatus("completed", { completionImage });
   };
 
-  const handleConfirmPayment = () => {
-    dispatch(confirmOrderPayment(id));
-  };
 
   const handleOnTheWay = () => {
     dispatch(markOrderOnTheWay(id));
@@ -393,59 +389,6 @@ export default function HandymanOrderDetailsPage() {
           <FaComments /> محادثة
         </Link>
       </div>
-
-      {/* Cash payment: after finishing the job the handyman collects cash
-          from the customer, then confirms it in the app. */}
-      {currentOrder.status === "completed" && (
-        <div className="card mt-4">
-          {currentOrder.completionImage && (
-            <div className="mb-4">
-              <p className="mb-2 text-sm font-bold text-textDark">
-                صورة إثبات إتمام العمل
-              </p>
-              <img
-                src={currentOrder.completionImage}
-                alt=""
-                className="h-40 w-40 rounded-lg object-cover"
-              />
-            </div>
-          )}
-          <div className="mb-2 flex items-center justify-between">
-            <span className="font-bold text-textDark">الدفع</span>
-            <span
-              className={`rounded-lg px-3 py-1 text-sm font-bold ${
-                currentOrder.paymentStatus === "paid"
-                  ? "bg-secondary/10 text-secondary"
-                  : "bg-emergency/10 text-emergency"
-              }`}
-            >
-              {currentOrder.paymentStatus === "paid"
-                ? "تم الدفع"
-                : "لم يتم الدفع بعد"}
-            </span>
-          </div>
-          {currentOrder.paymentStatus !== "paid" ? (
-            <>
-              <p className="mb-3 text-sm text-textGray">
-                استلم المبلغ نقداً من العميل ({formatPrice(currentOrder.price)})
-                ثم أكّد الاستلام هنا.
-              </p>
-              <button
-                type="button"
-                onClick={handleConfirmPayment}
-                disabled={isLoading}
-                className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                تأكيد استلام الدفع نقداً
-              </button>
-            </>
-          ) : (
-            <p className="text-sm text-textGray">
-              تم استلام المبلغ بتاريخ {formatDate(currentOrder.paidAt)}
-            </p>
-          )}
-        </div>
-      )}
       {["completed", "cancelled", "in-progress", "price_confirmed"].includes(
         currentOrder.status,
       ) && (

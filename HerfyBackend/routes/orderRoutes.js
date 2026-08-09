@@ -19,7 +19,6 @@ const {
   confirmPrice,
   respondReschedule,
   requestReschedule,
-  confirmCashPayment,
   markOnTheWay,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
@@ -54,7 +53,6 @@ router.get("/:id", getOrder);
 // ========== Update order status (controller handles permissions) ==========
 router.patch("/:id/status", validate(updateOrderSchema), updateOrderStatus);
 router.patch("/:id/confirm-price", authMiddleware, confirmPrice);
-router.patch("/:id/confirm-payment", authMiddleware, confirmCashPayment);
 router.patch("/:id/on-the-way", authMiddleware, markOnTheWay);
 router.post("/:id/reschedule-request", authMiddleware, requestReschedule);
 router.post("/:id/reschedule-response", authMiddleware, respondReschedule);

@@ -39,6 +39,7 @@ const publicUser = (user) => ({
   penaltyCount: user.penaltyCount,
   penaltyAmount: user.penaltyAmount,
 });
+
 // console.log({
 //   penaltyCount: user.penaltyCount,
 //   penaltyAmount: user.penaltyAmount,
