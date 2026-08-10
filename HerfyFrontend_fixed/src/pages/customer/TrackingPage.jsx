@@ -34,6 +34,7 @@ export default function TrackingPage() {
   const { location, loading: locationLoading } = useCurrentLocation();
   
   const [handymanLoc, setHandymanLoc] = useState(null);
+  const [routeGeometry, setRouteGeometry] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
   const [distance, setDistance] = useState(null);
@@ -54,30 +55,34 @@ export default function TrackingPage() {
   useEffect(() => {
     if (!orderId || !token) return;
 
-    // connectSocket() is idempotent (returns the existing socket if already
-    // connected). We call it here too — instead of relying solely on
-    // AuthInit's useSocket() — because React fires child effects before
-    // parent effects. On a hard reload of /customer/tracking/:orderId this
-    // effect used to run before AuthInit's useSocket() had called
-    // connectSocket(), so getSocket() returned null, the room was never
-    // joined, and every 'locationUpdate' the handyman sent was missed — the
-    // live map never appeared (it only ever showed a stale snapshot via the
-    // 8s REST poll).
     const socket = connectSocket(token);
 
     socket.emit('joinOrderRoom', orderId);
 
-    socket.on('locationUpdate', ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime }) => {
-      setHandymanLoc({ latitude: lat, longitude: lng });
-      
+    socket.on('locationUpdate', ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime, geometry }) => {
+      const numLat = Number(lat);
+      const numLng = Number(lng);
+      if (Number.isFinite(numLat) && Number.isFinite(numLng)) {
+        console.log(`📍 [TrackingPage] Real-time handyman location received: ${numLat}, ${numLng}`);
+        setHandymanLoc({ latitude: numLat, longitude: numLng });
+      }
+
+      if (Array.isArray(geometry) && geometry.length >= 2) {
+        console.log('🗺️ [Step 2 Customer Geometry Audit]', {
+          isArray: Array.isArray(geometry),
+          length: geometry.length,
+          firstPoint: geometry[0],
+          lastPoint: geometry[geometry.length - 1],
+        });
+        setRouteGeometry(geometry);
+      }
+
       if (distanceRemaining !== undefined) setDistance(distanceRemaining);
       if (eta !== undefined) setEta(eta);
       if (trafficDelay !== undefined) setTrafficDelay(trafficDelay);
       if (arrivalTime !== undefined) setArrivalTime(arrivalTime);
     });
 
-    // FIX: الباك اند بيعمل emit باسم 'trackingStarted' (camelCase) مش
-    // 'tracking-started'، فكان الحدث ده مبيتستقبلش أبدًا.
     socket.on('trackingStarted', () => {
       dispatch(fetchOrderById(orderId));
     });
@@ -90,9 +95,13 @@ export default function TrackingPage() {
   }, [orderId, dispatch, token]);
 
   useEffect(() => {
-    if (currentOrder?.handymanLiveLocation?.coordinates) {
+    if (Array.isArray(currentOrder?.handymanLiveLocation?.coordinates) && currentOrder.handymanLiveLocation.coordinates.length === 2) {
       const [lng, lat] = currentOrder.handymanLiveLocation.coordinates;
-      if (lat || lng) setHandymanLoc({ latitude: lat, longitude: lng });
+      const numLat = Number(lat);
+      const numLng = Number(lng);
+      if (Number.isFinite(numLat) && Number.isFinite(numLng)) {
+        setHandymanLoc({ latitude: numLat, longitude: numLng });
+      }
     }
   }, [currentOrder]);
 
@@ -386,7 +395,16 @@ export default function TrackingPage() {
 
   // ===== ✅ LIVE TRACKING (All other statuses: price_confirmed + on way, in-progress) =====
   
-  if (locationLoading) {
+  const effectiveLocation =
+    location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
+      ? location
+      : (Array.isArray(currentOrder?.customerLocation?.coordinates) &&
+         Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
+         Number.isFinite(currentOrder.customerLocation.coordinates[0]))
+        ? { latitude: currentOrder.customerLocation.coordinates[1], longitude: currentOrder.customerLocation.coordinates[0] }
+        : null;
+
+  if (!effectiveLocation && locationLoading) {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <Header title="تتبع الطلب" />
@@ -397,35 +415,38 @@ export default function TrackingPage() {
     );
   }
 
-  if (!location) {
-    return (
-      <div className="fixed inset-0 flex flex-col bg-white">
-        <Header title="تتبع الطلب" />
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
-          <FaClock className="text-emergency" size={48} />
-          <h2 className="text-xl font-bold text-textDark">تعذر تحديد موقعك</h2>
-          <p className="text-sm text-textGray">الرجاء تفعيل خدمة تحديد الموقع في المتصفح</p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="btn-primary"
-          >
-            إعادة المحاولة
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="fixed inset-0 flex flex-col bg-white">
       <Header title="تتبع الطلب" />
 
       <div className="relative flex-1">
-        {handymanLoc ? (
+        {handymanLoc && Number.isFinite(handymanLoc.latitude) && Number.isFinite(handymanLoc.longitude) ? (
           <TrackingMap
-            customerLocation={location}
+            customerLocation={
+              location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
+                ? location
+                : (Array.isArray(currentOrder?.customerLocation?.coordinates) &&
+                   Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
+                   Number.isFinite(currentOrder.customerLocation.coordinates[0]))
+                  ? { latitude: currentOrder.customerLocation.coordinates[1], longitude: currentOrder.customerLocation.coordinates[0] }
+                  : null
+            }
             handymanLocation={handymanLoc}
+            routeGeometry={routeGeometry}
+            pickupLocation={
+              Array.isArray(currentOrder?.customerLocation?.coordinates) &&
+              Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
+              Number.isFinite(currentOrder.customerLocation.coordinates[0])
+                ? { latitude: currentOrder.customerLocation.coordinates[1], longitude: currentOrder.customerLocation.coordinates[0] }
+                : null
+            }
+            destinationLocation={
+              Array.isArray(currentOrder?.destinationLocation?.coordinates) &&
+              Number.isFinite(currentOrder.destinationLocation.coordinates[1]) &&
+              Number.isFinite(currentOrder.destinationLocation.coordinates[0])
+                ? { latitude: currentOrder.destinationLocation.coordinates[1], longitude: currentOrder.destinationLocation.coordinates[0] }
+                : null
+            }
             className="absolute inset-0"
           />
         ) : (

@@ -2,6 +2,7 @@
 const User = require("../models/User");
 const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
+const Review = require("../models/Review");
 const AuditLog = require("../models/AuditLog");
 const RefreshToken = require("../models/RefreshToken");
 const { createNotification } = require("./notificationController");
@@ -450,10 +451,16 @@ const settleWallet = async (req, res) => {
       return res.status(404).json({ msg: "Handyman not found" });
     }
 
+    const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
     const settledAmount = handyman.walletBalance;
     handyman.walletBalance = 0;
-    handyman.isSuspended = false;
-    handyman.suspendedReason = null;
+    
+    let suspensionCleared = false;
+    if (handyman.isSuspended && handyman.suspendedReason === WALLET_DEBT_SUSPENSION_REASON) {
+      handyman.isSuspended = false;
+      handyman.suspendedReason = null;
+      suspensionCleared = true;
+    }
     await handyman.save();
 
     await logAction(
@@ -471,11 +478,17 @@ const settleWallet = async (req, res) => {
       handyman.userId,
       "system_alert",
       "Wallet Settled",
-      `تم تسوية رصيد العمولة (${settledAmount} ج.م) وتفعيل حسابك مجدداً`,
+      suspensionCleared 
+        ? `تم تسوية رصيد العمولة (${settledAmount} ج.م) وتفعيل حسابك مجدداً`
+        : `تم تسوية رصيد العمولة (${settledAmount} ج.م)`,
       { settledAmount }
     );
 
-    res.status(200).json({ msg: "Wallet settled", handyman });
+    res.status(200).json({ 
+      msg: "Wallet settled", 
+      handyman, 
+      walletSettledButStillSuspended: handyman.isSuspended 
+    });
   } catch (error) {
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });
@@ -595,6 +608,81 @@ const broadcastAnnouncement = async (req, res) => {
     res.status(200).json({
       msg: "تم نشر التنبيه بنجاح",
       recipientCount: recipients.length,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
+// ========== 11b. Get full profile for one user (customer or handyman) ==========
+// Powers the admin "click a name -> profile page" screen: basic info,
+// the handyman's portfolio/gallery, stats, and every order they were
+// ever part of on the platform (their job history).
+const getUserDetail = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      return res.status(404).json({ msg: "المستخدم غير موجود" });
+    }
+
+    const isHandyman = user.role === "handyman";
+
+    const handymanProfile = isHandyman
+      ? await Handyman.findOne({ userId: user._id }).lean()
+      : null;
+
+    const orderFilter = isHandyman ? { handymanId: user._id } : { customerId: user._id };
+    const orders = await Order.find(orderFilter)
+      .populate("customerId", "name")
+      .populate("handymanId", "name")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const ordersOut = orders.map((o) => ({
+      _id: o._id,
+      serviceType: o.profession,
+      customerId: o.customerId,
+      handymanId: o.handymanId,
+      finalPrice: o.totalPrice || o.price || o.estimatedPrice || 0,
+      createdAt: o.createdAt,
+      status: o.status,
+    }));
+
+    const totalOrders = await Order.countDocuments(orderFilter);
+    const completedOrders = await Order.countDocuments({ ...orderFilter, status: "completed" });
+    const cancelledOrders = await Order.countDocuments({ ...orderFilter, status: "cancelled" });
+
+    let reviews = [];
+    if (isHandyman) {
+      reviews = await Review.find({ handymanId: user._id })
+        .populate("customerId", "name")
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean();
+    }
+
+    const stats = {
+      totalOrders,
+      completedOrders,
+      cancelledOrders,
+      rating: handymanProfile?.rating || 0,
+      walletBalance: handymanProfile?.walletBalance || 0,
+      gallery: handymanProfile?.gallery || [],
+    };
+
+    res.status(200).json({
+      success: true,
+      data: {
+        user,
+        handymanProfile,
+        stats,
+        orders: ordersOut,
+        reviews,
+      },
     });
   } catch (error) {
     console.log(error);
@@ -850,6 +938,7 @@ module.exports = {
   
   // Announcements
   broadcastAnnouncement,
+  getUserDetail,
   
   // Registration Request Management (NEW)
   getPendingRegistrationRequests,

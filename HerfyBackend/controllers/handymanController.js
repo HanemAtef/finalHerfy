@@ -33,7 +33,7 @@ function haversineDistanceMeters([lng1, lat1], [lng2, lat2]) {
  */
 const getNearbyHandymen = async (req, res) => {
   try {
-    const { lat, lng, radius = 5000, profession, sort } = req.query;
+    const { lat, lng, radius = 50000000, profession, sort } = req.query;
 
     if (!lat || !lng) {
       return res.status(400).json({
@@ -97,8 +97,6 @@ const getNearbyHandymen = async (req, res) => {
         return {
           id: user._id,
           name: user.name,
-          email: user.email,
-          phone: user.phone,
           location: user.location,
           profileImage: user.profileImage,
           profession: details.profession,
@@ -182,8 +180,6 @@ const getHandymanDetails = async (req, res) => {
     res.status(200).json({
       id: user._id,
       name: user.name,
-      email: user.email,
-      phone: user.phone,
       location: user.location,
       profileImage: user.profileImage,
       profession: details.profession,
@@ -554,6 +550,39 @@ const getHandymanAnalytics = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get handyman monthly target stats
+ * @route   GET /api/handymen/monthly-stats
+ * @access  Private (Handyman only)
+ */
+const getHandymanMonthlyStats = async (req, res) => {
+  try {
+    const handymanId = req.user.id;
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const monthlyCompleted = await Order.countDocuments({
+      handymanId,
+      status: "completed",
+      createdAt: { $gte: monthStart, $lt: nextMonthStart },
+    });
+
+    const target = Number(process.env.HANDYMAN_MONTHLY_TARGET) || 10;
+
+    res.status(200).json({
+      monthlyCompleted,
+      target,
+    });
+  } catch (error) {
+    console.error("Error getting monthly stats:", error);
+    res.status(500).json({
+      msg: "Server error",
+      error: error.message,
+    });
+  }
+};
+
 // =====================================================
 // ========== EXPORTS ==========
 // =====================================================
@@ -566,5 +595,6 @@ module.exports = {
   toggleAvailability,
   getHandymanStatus,
   getHandymanFullProfile,
+  getHandymanMonthlyStats,
   updateAvailability,
 };

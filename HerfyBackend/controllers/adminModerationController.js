@@ -10,67 +10,6 @@ const { createNotification } = require("./notificationController");
 const logAction = (adminId, action, targetType, targetId, reason, meta = {}) =>
   AuditLog.create({ adminId, action, targetType, targetId, reason, meta });
 
-// ========== Approve a handyman's verification ==========
-const approveHandyman = async (req, res) => {
-  try {
-    const { handymanId } = req.params;
-    const { reason = "" } = req.body;
-
-    const handyman = await Handyman.findOne({ userId: handymanId });
-    if (!handyman) return res.status(404).json({ msg: "Handyman not found" });
-
-    handyman.verified = true;
-    handyman.rejected = false;
-    handyman.rejectedReason = null;
-    await handyman.save();
-
-    await logAction(req.user._id, "handyman.approve", "Handyman", handyman._id, reason);
-
-    const io = req.app.get("io");
-    await createNotification(
-      io, handymanId, "handyman_verified",
-      "تم توثيق الحساب", "تمت الموافقة على حسابك كحرفي موثق ✓",
-      { handymanId }
-    );
-
-    res.status(200).json({ msg: "تم توثيق الحرفي", handyman });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ msg: "Server error", error: error.message });
-  }
-};
-
-// ========== Reject a handyman's verification (with a reason) ==========
-const rejectHandyman = async (req, res) => {
-  try {
-    const { handymanId } = req.params;
-    const { reason } = req.body;
-    if (!reason) return res.status(400).json({ msg: "سبب الرفض مطلوب" });
-
-    const handyman = await Handyman.findOne({ userId: handymanId });
-    if (!handyman) return res.status(404).json({ msg: "Handyman not found" });
-
-    handyman.verified = false;
-    handyman.rejected = true;
-    handyman.rejectedReason = reason;
-    await handyman.save();
-
-    await logAction(req.user._id, "handyman.reject", "Handyman", handyman._id, reason);
-
-    const io = req.app.get("io");
-    await createNotification(
-      io, handymanId, "handyman_rejected",
-      "تم رفض طلب التوثيق", `تم رفض طلب توثيق حسابك: ${reason}`,
-      { handymanId, reason }
-    );
-
-    res.status(200).json({ msg: "تم رفض الحرفي", handyman });
-  } catch (error) {
-    console.log(error);
-    res.status(500).json({ msg: "Server error", error: error.message });
-  }
-};
-
 // ========== Suspend / unsuspend a handyman (with a reason) ==========
 const suspendHandyman = async (req, res) => {
   try {
@@ -213,8 +152,6 @@ const getAuditLogs = async (req, res) => {
 };
 
 module.exports = {
-  approveHandyman,
-  rejectHandyman,
   suspendHandyman,
   deleteUserAccount,
   banUserWithReason,

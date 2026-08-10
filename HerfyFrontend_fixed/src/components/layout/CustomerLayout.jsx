@@ -91,7 +91,7 @@ export default function CustomerLayout() {
 
         <div className="hidden border-t border-borderGray px-4 py-2 lg:block">
           <form onSubmit={handleHeaderSearch} className="mx-auto flex max-w-container-max items-center gap-2">
-            <div className="relative flex-1">
+            {/* <div className="relative flex-1">
               <FaSearch className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
               <input
                 type="search"
@@ -100,7 +100,7 @@ export default function CustomerLayout() {
                 placeholder="ابحث عن حرفي..."
                 className="input-field pr-10"
               />
-            </div>
+            </div> */}
           </form>
         </div>
       </header>

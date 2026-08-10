@@ -20,8 +20,8 @@ const {
   confirmPrice,
   respondReschedule,
   requestReschedule,
-  confirmCashPayment,
   markOnTheWay,
+  confirmCashPayment,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
 
@@ -29,7 +29,7 @@ const { createReport } = require("../controllers/reportController");
 router.use(authMiddleware);
 
 // ========== Customer only ==========
-router.post("/create", idempotency, validate(createOrderSchema), createOrder);
+router.post("/create", allowedToMiddleware("customer", "admin"), idempotency, validate(createOrderSchema), createOrder);
 
 // ========== Customer, Handyman, or Admin (controller handles) ==========
 // NOTE: keep this AFTER the more specific /customer/:id and /handyman/:id
@@ -53,9 +53,11 @@ router.get("/handyman/:handymanId/pending", getPendingOrders);
 router.get("/:id", getOrder);
 
 // ========== Update order status (controller handles permissions) ==========
+router.patch("/:id/status", validate(updateOrderSchema), updateOrderStatus);
+router.patch("/:id/confirm-price", authMiddleware, confirmPrice);
 router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrderStatus);
 router.patch("/:id/confirm-price", idempotency, authMiddleware, confirmPrice);
-router.patch("/:id/confirm-payment", idempotency, authMiddleware, confirmCashPayment);
+// router.patch("/:id/confirm-payment", idempotency, authMiddleware, confirmCashPayment);
 router.patch("/:id/on-the-way", authMiddleware, markOnTheWay);
 router.post("/:id/reschedule-request", authMiddleware, requestReschedule);
 router.post("/:id/reschedule-response", authMiddleware, respondReschedule);

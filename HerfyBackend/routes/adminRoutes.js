@@ -14,10 +14,9 @@ const {
   settleWallet,
   getDashboardChart,
   broadcastAnnouncement,
+  getUserDetail,
 } = require("../controllers/adminControllers");
 const {
-  approveHandyman,
-  rejectHandyman,
   suspendHandyman,
   deleteUserAccount,
   banUserWithReason,
@@ -54,6 +53,7 @@ router.get("/dashboard/chart", getDashboardChart);
 // ========== USER MANAGEMENT ==========
 // =====================================================
 router.get("/users", getAllUsers);
+router.get("/users/:userId", getUserDetail);
 router.patch("/users/:userId/ban", toggleUserBan); // legacy, kept for compatibility
 router.patch("/users/:userId/ban-with-reason", banUserWithReason);
 router.delete("/users/:userId", deleteUserAccount);
@@ -85,8 +85,6 @@ router.patch("/handymen/auto-verify-all", autoVerifyAll);
 // =====================================================
 // ========== HANDYMAN MODERATION (Manual) ==========
 // =====================================================
-router.patch("/handymen/:handymanId/approve", approveHandyman);
-router.patch("/handymen/:handymanId/reject", rejectHandyman);
 router.patch("/handymen/:handymanId/suspend", suspendHandyman);
 
 // =====================================================

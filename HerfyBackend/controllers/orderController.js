@@ -5,7 +5,8 @@ const Handyman = require("../models/Handyman");
 const axios = require("axios");
 const mongoose = require("mongoose");
 const { createNotification } = require("./notificationController");
-
+const { cleanupThrottle } = require("../socket/liveTrackingThrottle");
+const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
 // ========== 1. create order ==========
 const createOrder = async (req, res) => {
   try {
@@ -42,6 +43,10 @@ const createOrder = async (req, res) => {
       return res.status(404).json({ msg: "Handyman not found" });
     }
 
+
+    if (handymanId === req.user.id) {
+      return res.status(400).json({ msg: "You cannot create an order for yourself" });
+    }
 
     const handymanProfile = await Handyman.findOne({
       userId: handymanId,
@@ -324,6 +329,7 @@ const updateOrderStatus = async (req, res) => {
       if (currentStatus === "completed") {
         return res.status(400).json({ msg: "Cannot cancel a completed order" });
       }
+      cleanupThrottle(id);
       // ========== NOTIFICATION: Order cancelled ==========
       const io = req.app.get('io');
       const recipientId = isCustomer ? order.handymanId : order.customerId;
@@ -424,7 +430,7 @@ const updateOrderStatus = async (req, res) => {
       );
 
       try {
-        io.to(id).emit('tracking-started', {
+        io.to(id).emit('trackingStarted', {
           orderId: id,
           handymanName: req.user.name,
           message: 'Handyman is on the way!',
@@ -480,7 +486,6 @@ const updateOrderStatus = async (req, res) => {
         return res.status(400).json({ msg: "Completion proof image is required" });
       }
       order.completionImage = completionImage;
-      order.paymentStatus = "unpaid";
 
       const commissionRate = order.commissionRate || 10;
       const commissionAmount = (order.price * commissionRate) / 100;
@@ -494,12 +499,15 @@ const updateOrderStatus = async (req, res) => {
         status: "in-progress",
       });
 
+      const updateQuery = { $inc: { completedOrders: 1 } };
       if (inProgressCount < 3) {
-        await Handyman.findOneAndUpdate(
-          { userId: order.handymanId },
-          { isAvailable: true }
-        );
+        updateQuery.isAvailable = true;
       }
+      await Handyman.findOneAndUpdate(
+        { userId: order.handymanId },
+        updateQuery
+      );
+      cleanupThrottle(id);
       // ========== NOTIFICATION: Order completed ==========
       const io = req.app.get('io');
       await createNotification(
@@ -752,7 +760,7 @@ const confirmCashPayment = async (req, res) => {
       handyman.walletBalance = (handyman.walletBalance || 0) + (order.commissionAmount || 0);
       if (handyman.walletBalance >= WALLET_SUSPENSION_THRESHOLD && !handyman.isSuspended) {
         handyman.isSuspended = true;
-        handyman.suspendedReason = "رصيد العمولة المستحقة للمنصة تجاوز الحد المسموح";
+        handyman.suspendedReason = WALLET_DEBT_SUSPENSION_REASON;
         justSuspended = true;
       }
       await handyman.save();
@@ -815,7 +823,7 @@ const markOnTheWay = async (req, res) => {
 
     const io = req.app.get('io');
     if (io) {
-      io.to(id).emit('tracking-started', {
+      io.to(id).emit('trackingStarted', {
         orderId: id,
         handymanName: req.user.name,
         message: 'Handyman is on the way!',
@@ -847,6 +855,6 @@ module.exports = {
   confirmPrice,
   respondReschedule,
   requestReschedule,
-  confirmCashPayment,
   markOnTheWay,
+  confirmCashPayment,
 };

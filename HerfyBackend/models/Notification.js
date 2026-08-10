@@ -33,7 +33,6 @@ const notificationSchema = new mongoose.Schema(
         "system_alert",
         "promotion",
         "handyman_on_the_way",
-        "payment_confirmed",
       ],
       required: true,
     },

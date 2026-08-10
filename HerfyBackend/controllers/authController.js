@@ -7,7 +7,8 @@ const crypto = require("crypto");
 const sendEmail = require("../utils/sendEmail");
 const sendVerificationEmail = require("../utils/sendVerificationEmail");
 const generateToken = require("../utils/generateToken");
-const { generateAccessToken, generateRefreshTokenValue, hashToken } = generateToken;
+const { generateAccessToken, generateRefreshTokenValue, hashToken } =
+  generateToken;
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -38,14 +39,32 @@ const publicUser = (user) => ({
   city: user.city,
   profileImage: user.profileImage,
   isVerified: user.isVerified,
+  penaltyCount: user.penaltyCount,
+  penaltyAmount: user.penaltyAmount,
 });
+
+// console.log({
+//   penaltyCount: user.penaltyCount,
+//   penaltyAmount: user.penaltyAmount,
+// });
 
 /********* register user - مع دعم الملفات وحالة pending *********/
 const registerUser = async (req, res) => {
   try {
     let {
-      email, name, password, role, phone, location, city,
-      profession, price, experienceYears, bio, gallery, address
+      email,
+      name,
+      password,
+      role,
+      phone,
+      location,
+      city,
+      profession,
+      price,
+      experienceYears,
+      bio,
+      gallery,
+      address,
     } = req.body;
 
     // Normalize email
@@ -66,7 +85,11 @@ const registerUser = async (req, res) => {
 
     // Handle location
     let coordinates = null;
-    if (location && location.coordinates && Array.isArray(location.coordinates)) {
+    if (
+      location &&
+      location.coordinates &&
+      Array.isArray(location.coordinates)
+    ) {
       coordinates = location.coordinates;
     } else if (Array.isArray(location)) {
       coordinates = location;
@@ -87,9 +110,15 @@ const registerUser = async (req, res) => {
     if (role === "handyman") {
       try {
         // Get uploaded files from multer (if any)
-        const nationalId = req.files?.nationalId ? req.files.nationalId[0].path : null;
-        const certificate = req.files?.certificate ? req.files.certificate[0].path : null;
-        const profileImage = req.files?.profileImage ? req.files.profileImage[0].path : null;
+        const nationalId = req.files?.nationalId
+          ? req.files.nationalId[0].path
+          : null;
+        const certificate = req.files?.certificate
+          ? req.files.certificate[0].path
+          : null;
+        const profileImage = req.files?.profileImage
+          ? req.files.profileImage[0].path
+          : null;
 
         // Check if handyman already exists (shouldn't happen, but just in case)
         const existingHandyman = await HandyMan.findOne({ userId: user._id });
@@ -98,14 +127,19 @@ const registerUser = async (req, res) => {
           existingHandyman.profession = profession;
           existingHandyman.price = parseFloat(price);
           existingHandyman.experienceYears = parseInt(experienceYears) || 0;
-          existingHandyman.bio = bio || '';
+          existingHandyman.bio = bio || "";
           existingHandyman.gallery = gallery || [];
-          existingHandyman.nationalId = nationalId || existingHandyman.nationalId;
-          existingHandyman.certificate = certificate || existingHandyman.certificate;
-          existingHandyman.profileImage = profileImage || existingHandyman.profileImage;
+          existingHandyman.nationalId =
+            nationalId || existingHandyman.nationalId;
+          existingHandyman.certificate =
+            certificate || existingHandyman.certificate;
+          existingHandyman.profileImage =
+            profileImage || existingHandyman.profileImage;
           existingHandyman.address = address || existingHandyman.address;
-          existingHandyman.location = coordinates ? { type: 'Point', coordinates } : existingHandyman.location;
-          existingHandyman.registrationStatus = 'pending';
+          existingHandyman.location = coordinates
+            ? { type: "Point", coordinates }
+            : existingHandyman.location;
+          existingHandyman.registrationStatus = "pending";
           existingHandyman.registeredAt = new Date();
           existingHandyman.verified = false;
           await existingHandyman.save();
@@ -116,42 +150,43 @@ const registerUser = async (req, res) => {
             profession,
             price: parseFloat(price),
             experienceYears: parseInt(experienceYears) || 0,
-            bio: bio || '',
+            bio: bio || "",
             gallery: gallery || [],
             nationalId,
             certificate,
             profileImage,
-            address: address || '',
-            location: coordinates ? { type: 'Point', coordinates } : undefined,
-            registrationStatus: 'pending',
+            address: address || "",
+            location: coordinates ? { type: "Point", coordinates } : undefined,
+            registrationStatus: "pending",
 
             registeredAt: new Date(),
             verified: false,
             isAvailable: true,
             rating: 0,
-            completedOrders: 0
+            completedOrders: 0,
           });
         }
 
         // Send notification to admin via Socket.io
-        const io = req.app?.get('io');
+        const io = req.app?.get("io");
         if (io) {
-          io.emit('newRegistrationRequest', {
+          io.emit("newRegistrationRequest", {
             handymanId: user._id,
             userId: user._id,
             name: user.name,
             profession: profession,
             email: user.email,
-            phone: user.phone
+            phone: user.phone,
           });
         }
 
-        console.log(`✅ New handyman registration: ${user.name} (${user.email}) - pending approval`);
-
+        console.log(
+          `✅ New handyman registration: ${user.name} (${user.email}) - pending approval`,
+        );
       } catch (handymanErr) {
         // Rollback: delete user if handyman creation fails
         await User.deleteOne({ _id: user._id });
-        console.error('❌ Handyman creation failed:', handymanErr);
+        console.error("❌ Handyman creation failed:", handymanErr);
         throw handymanErr;
       }
     }
@@ -174,20 +209,24 @@ const registerUser = async (req, res) => {
     };
 
     // Add handyman specific info
-    if (role === 'handyman') {
-      response.registrationStatus = 'pending';
+    if (role === "handyman") {
+      response.registrationStatus = "pending";
       response.handymanId = user._id;
-      response.message = 'تم تسجيل حسابك كحرفي. في انتظار موافقة الأدمن.';
+      response.message = "تم تسجيل حسابك كحرفي. في انتظار موافقة الأدمن.";
     }
 
     res.status(201).json(response);
-
   } catch (err) {
     console.log(err);
     if (err.code === 11000) {
       const field = Object.keys(err.keyPattern)[0];
-      const messages = { email: 'البريد الإلكتروني مسجل بالفعل', phone: 'رقم الهاتف مسجل بالفعل' };
-      return res.status(400).json({ msg: messages[field] || 'البيانات مسجلة بالفعل' });
+      const messages = {
+        email: "البريد الإلكتروني مسجل بالفعل",
+        phone: "رقم الهاتف مسجل بالفعل",
+      };
+      return res
+        .status(400)
+        .json({ msg: messages[field] || "البيانات مسجلة بالفعل" });
     }
     res.status(500).json({ msg: "حدث خطأ في الخادم", error: err.message });
   }
@@ -204,7 +243,9 @@ const verifyEmail = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
+      return res
+        .status(400)
+        .json({ msg: "رمز التحقق غير صحيح أو منتهي الصلاحية" });
     }
 
     if (user.isVerified) {
@@ -226,15 +267,18 @@ const verifyEmail = async (req, res) => {
 
     // Check if user is handyman and get registration status
     let registrationStatus = null;
-    if (user.role === 'handyman') {
+    if (user.role === "handyman") {
       const handyman = await HandyMan.findOne({ userId: user._id });
       if (handyman) {
         registrationStatus = handyman.registrationStatus;
       }
     }
 
-    const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
-    
+    const { accessToken, refreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
+
     const response = {
       msg: "تم توثيق الحساب بنجاح",
       token: accessToken,
@@ -244,9 +288,9 @@ const verifyEmail = async (req, res) => {
 
     if (registrationStatus) {
       response.registrationStatus = registrationStatus;
-      if (registrationStatus === 'pending') {
+      if (registrationStatus === "pending") {
         response.msg = "تم توثيق الحساب. حسابك في انتظار موافقة الأدمن.";
-      } else if (registrationStatus === 'approved') {
+      } else if (registrationStatus === "approved") {
         response.msg = "تم توثيق الحساب. حسابك مفعل بالكامل!";
       }
     }
@@ -273,7 +317,11 @@ const resendVerificationOtp = async (req, res) => {
       sendVerificationEmail(email, otp);
     }
 
-    res.status(200).json({ msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد" });
+    res
+      .status(200)
+      .json({
+        msg: "إذا كان هذا البريد مسجلاً وغير موثق، تم إرسال رمز تحقق جديد",
+      });
   } catch (err) {
     console.log(err);
     res.status(500).json({ msg: "Server error" });
@@ -288,22 +336,30 @@ const loginUser = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
+      return res
+        .status(400)
+        .json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(400).json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
+      return res
+        .status(400)
+        .json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
     if (user.isBanned) {
-      return res.status(403).json({ 
-        msg: user.banReason ? `تم حظر هذا الحساب: ${user.banReason}` : "تم حظر هذا الحساب. تواصل مع الدعم الفني." 
+      return res.status(403).json({
+        msg: user.banReason
+          ? `تم حظر هذا الحساب: ${user.banReason}`
+          : "تم حظر هذا الحساب. تواصل مع الدعم الفني.",
       });
     }
 
     if (user.deletedAt) {
-      return res.status(400).json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
+      return res
+        .status(400)
+        .json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
     if (!user.isVerified) {
@@ -316,26 +372,26 @@ const loginUser = async (req, res) => {
 
     // Check handyman status if role is handyman
     let handymanStatus = null;
-    if (user.role === 'handyman') {
+    if (user.role === "handyman") {
       const handyman = await HandyMan.findOne({ userId: user._id });
       if (handyman) {
         handymanStatus = handyman.registrationStatus;
-        
+
         // If handyman registration is rejected
-        if (handymanStatus === 'rejected') {
+        if (handymanStatus === "rejected") {
           return res.status(403).json({
-            msg: `تم رفض طلب التسجيل الخاص بك. السبب: ${handyman.adminNote || handyman.rejectedReason || 'غير محدد'}`,
-            status: 'rejected',
-            note: handyman.adminNote || handyman.rejectedReason
+            msg: `تم رفض طلب التسجيل الخاص بك. السبب: ${handyman.adminNote || handyman.rejectedReason || "غير محدد"}`,
+            status: "rejected",
+            note: handyman.adminNote || handyman.rejectedReason,
           });
         }
-        
+
         // If handyman registration is pending
-        if (handymanStatus === 'pending') {
+        if (handymanStatus === "pending") {
           return res.status(403).json({
             msg: "حسابك في انتظار موافقة الأدمن. يرجى التحقق من بريدك الإلكتروني للإشعارات.",
-            status: 'pending',
-            email: user.email
+            status: "pending",
+            email: user.email,
           });
         }
       } else {
@@ -346,7 +402,10 @@ const loginUser = async (req, res) => {
       }
     }
 
-    const { accessToken, refreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
+    const { accessToken, refreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
 
     const response = {
       msg: "تم تسجيل الدخول بنجاح",
@@ -378,7 +437,9 @@ const refreshAccessToken = async (req, res) => {
     const stored = await RefreshToken.findOne({ tokenHash });
 
     if (!stored || stored.revoked || stored.expiresAt < new Date()) {
-      return res.status(401).json({ msg: "جلسة غير صالحة، من فضلك سجل الدخول مرة أخرى" });
+      return res
+        .status(401)
+        .json({ msg: "جلسة غير صالحة، من فضلك سجل الدخول مرة أخرى" });
     }
 
     const user = await User.findById(stored.userId);
@@ -389,7 +450,10 @@ const refreshAccessToken = async (req, res) => {
     stored.revoked = true;
     await stored.save();
 
-    const { accessToken, refreshToken: newRefreshToken } = await issueTokenPair(user, req.headers["user-agent"]);
+    const { accessToken, refreshToken: newRefreshToken } = await issueTokenPair(
+      user,
+      req.headers["user-agent"],
+    );
 
     res.status(200).json({
       token: accessToken,
@@ -409,7 +473,7 @@ const logoutUser = async (req, res) => {
     if (refreshToken) {
       await RefreshToken.updateOne(
         { tokenHash: hashToken(refreshToken) },
-        { revoked: true }
+        { revoked: true },
       );
     }
     res.status(200).json({ msg: "تم تسجيل الخروج" });
@@ -423,17 +487,18 @@ const logoutUser = async (req, res) => {
 const getMe = async (req, res) => {
   try {
     const user = req.user;
-    
+
     let handymanData = null;
-    if (user.role === 'handyman') {
-      handymanData = await HandyMan.findOne({ userId: user._id })
-        .select('profession price rating verified isAvailable registrationStatus adminNote experienceYears bio gallery');
+    if (user.role === "handyman") {
+      handymanData = await HandyMan.findOne({ userId: user._id }).select(
+        "profession price rating verified isAvailable registrationStatus adminNote experienceYears bio gallery",
+      );
     }
 
     res.status(200).json({
       msg: "User profile",
       user: publicUser(user),
-      ...(handymanData && { handyman: handymanData })
+      ...(handymanData && { handyman: handymanData }),
     });
   } catch (err) {
     console.log(err);
@@ -490,7 +555,10 @@ const resetPassword = async (req, res) => {
     user.otpExpire = null;
     await user.save();
 
-    await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
+    await RefreshToken.updateMany(
+      { userId: user._id, revoked: false },
+      { revoked: true },
+    );
 
     res.status(200).json({
       msg: "Password reset successfully",
@@ -537,22 +605,26 @@ const changePassword = async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const user = await User.findById(req.user.id);
 
-    if (!user) return res.status(404).json({ msg: 'User not found' });
+    if (!user) return res.status(404).json({ msg: "User not found" });
 
     const matches = await user.matchPassword(currentPassword);
-    if (!matches) return res.status(400).json({ msg: 'Current password is incorrect' });
+    if (!matches)
+      return res.status(400).json({ msg: "Current password is incorrect" });
     if (currentPassword === newPassword) {
-      return res.status(400).json({ msg: 'New password must be different' });
+      return res.status(400).json({ msg: "New password must be different" });
     }
 
     user.password = newPassword;
     await user.save();
-    await RefreshToken.updateMany({ userId: user._id, revoked: false }, { revoked: true });
+    await RefreshToken.updateMany(
+      { userId: user._id, revoked: false },
+      { revoked: true },
+    );
 
-    res.status(200).json({ msg: 'Password changed successfully' });
+    res.status(200).json({ msg: "Password changed successfully" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ msg: 'Server error' });
+    res.status(500).json({ msg: "Server error" });
   }
 };
 

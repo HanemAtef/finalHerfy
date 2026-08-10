@@ -28,15 +28,19 @@ import HandymanSettingsPage from './pages/handyman/HandymanSettingsPage';
 
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
+import AdminUserDetailPage from './pages/admin/AdminUserDetailPage';
 import AdminVerificationsPage from './pages/admin/AdminVerificationsPage';
 import AdminReportsPage from './pages/admin/AdminReportsPage';
 import AdminWalletsPage from './pages/admin/AdminWalletsPage';
 import AdminReferenceDataPage from './pages/admin/AdminReferenceDataPage';
 import AdminAnalyticsPage from './pages/admin/AdminAnalyticsPage';
 import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
+import AdminProfilePage from './pages/admin/AdminProfilePage';
+import AdminNotificationsPage from './pages/admin/AdminNotificationsPage';
 
 import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
+
 
 
 function App() {
@@ -103,14 +107,17 @@ function App() {
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<AdminDashboard />} />
             <Route path="users" element={<AdminUsersPage />} />
+            <Route path="users/:userId" element={<AdminUserDetailPage />} />
             <Route path="verifications" element={<AdminVerificationsPage />} />
             <Route path="reports" element={<AdminReportsPage />} />
             <Route path="wallets" element={<AdminWalletsPage />} />
             <Route path="reference-data" element={<AdminReferenceDataPage />} />
             <Route path="analytics" element={<AdminAnalyticsPage />} />
             <Route path="audit-log" element={<AdminAuditLogPage />} />
+            <Route path="profile" element={<AdminProfilePage />} />
+            <Route path="notifications" element={<AdminNotificationsPage />} />
           </Route>
-
+            
           {/* Chat (customer & handyman) */}
           <Route
             path="/chat/:orderId"
@@ -128,5 +135,5 @@ function App() {
     </BrowserRouter>
   );
 }
-
+        
 export default App;

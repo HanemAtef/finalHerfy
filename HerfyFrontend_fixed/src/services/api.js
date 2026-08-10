@@ -66,7 +66,6 @@ export const orderService = {
   getPendingOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}/pending`),
   updateStatus: (id, data) => api.patch(`/orders/${id}/status`, data),
   confirmPrice: (id, data) => api.patch(`/orders/${id}/confirm-price`, data),
-  confirmPayment: (id) => api.patch(`/orders/${id}/confirm-payment`),
   markOnTheWay: (id) => api.patch(`/orders/${id}/on-the-way`),
   dispute: (id, data) => api.patch(`/orders/${id}/dispute`, data),
 };
@@ -104,9 +103,10 @@ export const adminService = {
   getStats: () => api.get('/admin/stats'),
   getDashboardChart: () => api.get('/admin/dashboard/chart'),
   getUsers: () => api.get('/admin/users'),
+  getUserDetail: (userId) => api.get(`/admin/users/${userId}`),
   banUser: (userId, data) => api.patch(`/admin/users/${userId}/ban`, data),
   banUserWithReason: (userId, data) => api.patch(`/admin/users/${userId}/ban-with-reason`, data),
-  liftSuspension: (userId, data) => api.patch(`/admin/users/${userId}/lift-suspension`, data),
+  liftSuspension: (handymanId) => api.patch(`/admin/handymen/${handymanId}/suspend`, { suspended: false }),
   deleteUser: (userId, reason) => api.delete(`/admin/users/${userId}`, { data: { reason } }),
   getPendingVerification: () => api.get('/admin/pending-registrations'),
   autoVerify: (handymanId) => api.patch(`/admin/handymen/${handymanId}/auto-verify`),
@@ -139,4 +139,7 @@ export const adminService = {
     link.remove();
     window.URL.revokeObjectURL(url);
   },
+  broadcastAnnouncement: (data) => api.post('/admin/broadcast', data),
+  getWallets: () => api.get('/admin/wallets'),
+  settleWallet: (handymanId) => api.patch(`/admin/wallets/${handymanId}/settle`),
 };
