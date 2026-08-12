@@ -168,15 +168,15 @@ export default function TrackingPage() {
     }) => {
       console.log('[CUSTOMER] locationUpdate | handyman =', { lat, lng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
 
-      if (handymanArrivedRef.current) return;
-
       const numLat = Number(lat);
       const numLng = Number(lng);
-      if (Number.isFinite(numLat) && Number.isFinite(numLng)) {
+      if (Number.isFinite(numLat) && Number.isFinite(numLng) && isValidGpsCoord(numLat, numLng)) {
         const handy = { latitude: numLat, longitude: numLng };
         handymanLocRef.current = handy;
         setHandymanLoc(handy);
       }
+
+      if (handymanArrivedRef.current) return;
 
       const customer = customerLocRef.current;
       const handyman = handymanLocRef.current;
@@ -662,79 +662,16 @@ export default function TrackingPage() {
     );
   }
 
-  // ===== ✅ ARRIVED STATE (Uber-style — map disappears) =====
-  if (handymanArrived) {
-    return (
-      <div className="fixed inset-0 flex flex-col bg-white">
-        <Header title="الطلب" />
-        <div className="flex flex-1 flex-col items-center justify-center gap-6 p-6 text-center">
-          {/* Arrival card */}
-          <div className="flex h-24 w-24 items-center justify-center rounded-full bg-tertiary/10">
-            <FaCheckCircle className="text-tertiary" size={48} />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold text-textDark">الحرفي وصل!</h2>
-            <p className="mt-1 text-sm text-textGray">
-              {handyman.name || 'الحرفي'} وصل إلى موقعك
-            </p>
-          </div>
-
-          <div className="card w-full max-w-sm text-right">
-            <div className="mb-3 flex items-center gap-3">
-              <img
-                src={getDefaultAvatar(handyman.name)}
-                alt=""
-                className="h-12 w-12 rounded-lg object-cover"
-              />
-              <div>
-                <p className="font-bold text-textDark">{handyman.name || 'الحرفي'}</p>
-                <p className="text-xs text-textGray">خبير {currentOrder.profession} معتمد</p>
-              </div>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-textGray">رسوم الخدمة</span>
-              <span className="font-bold text-textDark">
-                {formatPrice(currentOrder.price || currentOrder.estimatedPrice)}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex w-full max-w-sm gap-4">
-            <a
-              href={handyman.phone ? `tel:${handyman.phone}` : undefined}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-primary py-3 text-sm font-medium text-primary"
-            >
-              <FaPhone /> الاتصال بالحرفي
-            </a>
-            <Link
-              to={`/chat/${orderId}`}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-primary py-3 text-sm font-medium text-primary"
-            >
-              <FaComments /> محادثة
-            </Link>
-          </div>
-
-          <div className="mt-2 text-center">
-            <ReportButton />
-          </div>
-        </div>
-        {reportOpen && (
-          <ReasonModal
-            title="سبب الإبلاغ عن هذا الطلب"
-            confirmLabel="إرسال البلاغ"
-            danger
-            onConfirm={handleReport}
-            onClose={() => setReportOpen(false)}
-          />
-        )}
-      </div>
-    );
-  }
-
   // ===== ✅ LIVE TRACKING (price_confirmed on-way / in-progress) =====
 
   const liveCustomerLocation =
     location && isValidGpsCoord(location.latitude, location.longitude) ? location : null;
+
+  const hasValidHandymanLoc =
+    handymanLoc &&
+    isValidGpsCoord(handymanLoc.latitude, handymanLoc.longitude);
+
+  const canShowMap = !!(liveCustomerLocation || hasValidHandymanLoc);
 
   if (!liveCustomerLocation && locationLoading) {
     return (
@@ -771,25 +708,31 @@ export default function TrackingPage() {
       <Header title="تتبع الطلب" />
 
       <div className="relative flex-1">
-        {handymanLoc && Number.isFinite(handymanLoc.latitude) && Number.isFinite(handymanLoc.longitude) ? (
+        {canShowMap ? (
           <TrackingMap
             customerLocation={liveCustomerLocation}
-            handymanLocation={handymanLoc}
-            routeGeometry={routeGeometry}
+            handymanLocation={hasValidHandymanLoc ? handymanLoc : null}
+            routeGeometry={handymanArrived ? null : routeGeometry}
             routeCalcTimestamp={routeCalcTimestamp}
             className="absolute inset-0"
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-neutral">
-            <div className="text-center">
-              <FaClock className="mx-auto text-4xl text-primary" />
-              <p className="mt-2 text-textGray">في انتظار وصول الحرفي...</p>
-            </div>
+            <LoadingSpinner text="جاري تحديد موقعك..." />
+          </div>
+        )}
+
+        {handymanArrived && (
+          <div className="absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-2xl border border-tertiary/30 bg-white px-5 py-3 shadow-lg">
+            <span className="flex items-center gap-2 text-sm font-bold text-tertiary">
+              <FaCheckCircle />
+              الحرفي وصل إلى موقعك
+            </span>
           </div>
         )}
 
         {/* ETA + Distance floating pill */}
-        {handymanLoc && (formattedEta || formattedDistance) && (
+        {!handymanArrived && hasValidHandymanLoc && (formattedEta || formattedDistance) && (
           <div className="absolute bottom-32 left-1/2 -translate-x-1/2 rounded-2xl border border-primary/20 bg-white px-5 py-3 shadow-lg">
             {formattedEta && (
               <span className="flex items-center gap-2 text-sm font-medium text-primary">
@@ -821,9 +764,13 @@ export default function TrackingPage() {
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-borderGray" />
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-primary">
-            <FaCheckCircle className="text-tertiary" />
+            <FaCheckCircle className={handymanArrived ? 'text-tertiary' : 'text-tertiary'} />
             <span className="font-bold">
-              {status === 'in-progress' ? 'الحرفي يعمل على طلبك' : 'تم تأكيد السعر — الحرفي في الطريق'}
+              {handymanArrived
+                ? 'الحرفي وصل!'
+                : status === 'in-progress'
+                  ? 'الحرفي يعمل على طلبك'
+                  : 'تم تأكيد السعر — الحرفي في الطريق'}
             </span>
           </div>
           <span className="rounded-lg bg-primary/10 px-3 py-1 text-sm font-bold text-primary">

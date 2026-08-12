@@ -113,6 +113,18 @@ export default function TrackingMap({
     !geometryValid &&
     (showRouteLoading || sanitizedRoute.length < 2);
 
+  const hasAnyLocation = !!(handymanLngLat || customerLngLat);
+  const hasBothLocations = !!(handymanLngLat && customerLngLat);
+
+  console.log('[TRACKING MAP] customerLocation', customerLocation);
+  console.log('[TRACKING MAP] handymanLocation', handymanLocation);
+  console.log('[TRACKING MAP] rendering', {
+    customerLngLat,
+    handymanLngLat,
+    hasAnyLocation,
+    hasBothLocations,
+  });
+
   devGroup('[TRACKING MAP]', () => {
     console.log('current handyman =', handymanLocation);
     console.log('current customer =', customerLocation);
@@ -282,26 +294,25 @@ export default function TrackingMap({
     );
   }
 
-  const locationsReady = handymanLngLat && customerLngLat;
-
   return (
     <div className={`relative ${className}`} style={{ width: '100%', height: '100%', minHeight: '300px' }}>
       <div ref={mapRef} className="absolute inset-0" />
 
-      {!locationsReady && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-neutral/95 text-center p-6">
+      {!hasAnyLocation && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center bg-neutral/80 text-center p-6">
           <p className="text-primary font-bold">🔄 جاري تحميل الموقع...</p>
-          <p className="mt-2 text-sm text-textGray">يرجى الانتظار حتى يتم تحديد موقعك</p>
-        {!handymanLngLat && (
-          <p className="mt-1 text-xs text-textGray">في انتظار موقع الحرفي (GPS)...</p>
-        )}
-        {!customerLngLat && (
-          <p className="mt-1 text-xs text-textGray">موقع العميل غير متوفر — جاري تحديد موقع العميل...</p>
-        )}
+          <p className="mt-2 text-sm text-textGray">في انتظار إحداثيات GPS صالحة</p>
         </div>
       )}
 
-      {showRouteLoading && locationsReady && (
+      {hasAnyLocation && !hasBothLocations && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-white/95 px-4 py-1.5 text-xs font-medium text-primary shadow-md">
+          {!handymanLngLat && 'في انتظار موقع الحرفي...'}
+          {!customerLngLat && 'في انتظار موقع العميل...'}
+        </div>
+      )}
+
+      {showRouteLoading && hasBothLocations && (
         <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-white/95 px-4 py-1.5 text-xs font-medium text-primary shadow-md">
           جاري حساب المسار...
         </div>

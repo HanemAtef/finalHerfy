@@ -145,6 +145,7 @@ export default function HandymanOrderDetailsPage() {
   // ===== GPS INIT: getCurrentPosition FIRST, then watchPosition =====
   const hasArrivedRef = useRef(false);
   const watchIdRef = useRef(null);
+  const gpsInitGenRef = useRef(0);
 
   const queueOrSendLocation = (socket, lat, lng) => {
     if (!initialGpsReadyRef.current) {
@@ -230,11 +231,11 @@ export default function HandymanOrderDetailsPage() {
     }
 
     console.log('📍 [GPS INIT] Requesting initial handyman location...');
-    let cancelled = false;
+    const gen = ++gpsInitGenRef.current;
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        if (cancelled) return;
+        if (gen !== gpsInitGenRef.current) return;
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
 
@@ -263,7 +264,7 @@ export default function HandymanOrderDetailsPage() {
         startWatchAfterInitialFix(lat, lng);
       },
       (err) => {
-        if (cancelled) return;
+        if (gen !== gpsInitGenRef.current) return;
         console.error('❌ [GPS INIT] Location error');
         console.error('❌ [GPS INIT] code =', err.code);
         console.error('❌ [GPS INIT] message =', err.message);
@@ -282,7 +283,7 @@ export default function HandymanOrderDetailsPage() {
     );
 
     return () => {
-      cancelled = true;
+      gpsInitGenRef.current += 1;
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
@@ -491,6 +492,20 @@ export default function HandymanOrderDetailsPage() {
       currentOrder.status === 'in-progress');
 
   const showTrackingMap = isTrackingLive || handymanArrived || arrivalPending;
+
+  const hasValidHandymanMapLoc =
+    handymanLoc &&
+    isValidHandymanCoord(handymanLoc.latitude, handymanLoc.longitude);
+
+  const hasValidCustomerMapLoc =
+    customerTrackingLoc &&
+    isValidGpsCoord(customerTrackingLoc.latitude, customerTrackingLoc.longitude);
+
+  const hasMapLocation = !!(hasValidHandymanMapLoc || hasValidCustomerMapLoc);
+
+  const showMapSpinner =
+    !hasMapLocation &&
+    (gpsStatus === 'initializing' || (arrivalPending && !handymanArrived));
 
   // Finalize arrival only when both live GPS markers are available
   useEffect(() => {
@@ -958,7 +973,7 @@ export default function HandymanOrderDetailsPage() {
 
         {showTrackingMap && (
             <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
-              {(gpsStatus === 'initializing' && !handymanLoc) || arrivalPending ? (
+              {showMapSpinner ? (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90">
                   <LoadingSpinner
                     text={
