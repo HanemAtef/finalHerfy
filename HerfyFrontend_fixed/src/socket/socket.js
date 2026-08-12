@@ -8,6 +8,8 @@ let socketInstanceSeq = 0;
 let activeSocketInstanceId = null;
 /** Increments whenever the singleton is created or destroyed — lets tracking pages re-bind */
 let socketGeneration = 0;
+/** Token used for the active server handshake — detect stale auth on reuse */
+let lastHandshakeToken = null;
 
 export const getSocket = () => socket;
 
@@ -17,21 +19,29 @@ export const getSocketGeneration = () => socketGeneration;
 
 export const connectSocket = (token) => {
   if (socket) {
+    const tokenChanged = lastHandshakeToken != null && lastHandshakeToken !== token;
     socket.auth = { token };
     console.log('[SOCKET AUDIT] connectSocket REUSE', {
       socketInstanceId: activeSocketInstanceId,
       socketId: socket.id ?? null,
       connected: socket.connected,
       url: SOCKET_URL,
+      tokenChanged,
     });
-    if (!socket.connected) {
+    if (tokenChanged && socket.connected) {
+      console.log('[SOCKET AUDIT] connectSocket RECONNECT — token changed while connected');
+      socket.disconnect();
+      socket.connect();
+    } else if (!socket.connected) {
       socket.connect();
     }
+    lastHandshakeToken = token;
     return socket;
   }
 
   activeSocketInstanceId = `sock-${++socketInstanceSeq}-${Date.now()}`;
   socketGeneration += 1;
+  lastHandshakeToken = token;
   socket = io(SOCKET_URL, {
     auth: { token },
     transports: ['websocket'],
@@ -77,6 +87,7 @@ export const disconnectSocket = () => {
     socket.disconnect();
     socket = null;
     activeSocketInstanceId = null;
+    lastHandshakeToken = null;
     socketGeneration += 1;
   }
 };

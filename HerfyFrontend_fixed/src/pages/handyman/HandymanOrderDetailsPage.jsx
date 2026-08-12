@@ -15,7 +15,7 @@ import {
 
 import { fetchOrderById, updateOrderStatus, markOrderOnTheWay } from '../../store/slices/orderSlice';
 import { uploadService, reportService } from '../../services/api';
-import { connectSocket, getSocketInstanceId, getSocketGeneration } from '../../socket/socket';
+import { connectSocket, getSocketInstanceId } from '../../socket/socket';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import LocationLabel from '../../components/common/LocationLabel';
 import ReasonModal from '../../components/common/ReasonModal';
@@ -107,6 +107,7 @@ export default function HandymanOrderDetailsPage() {
   const pendingLocationRef = useRef(null);
   const flushTimeoutRef = useRef(null);
   const SEND_INTERVAL_MS = 5000;
+  const isHandymanJoinedRef = useRef(false);
   const customerLocSourceRef = useRef(null); // 'live-gps' when customer socket received
   const pendingArrivalRef = useRef(false);
   const [arrivalPending, setArrivalPending] = useState(false);
@@ -158,6 +159,15 @@ export default function HandymanOrderDetailsPage() {
 
   const emitSendLocation = (socket, lat, lng) => {
     if (!socket?.connected) return false;
+
+    console.log('[HANDYMAN SOCKET AUDIT] SEND_LOCATION PRE-CHECK', {
+      socketId: socket.id,
+      orderId: id,
+      isHandymanJoined: isHandymanJoinedRef.current,
+      connected: socket.connected,
+      isLive: isLiveRef.current,
+      initialGpsReady: initialGpsReadyRef.current,
+    });
 
     console.log('[HANDYMAN SOCKET AUDIT] SEND_LOCATION EMIT', {
       socketId: socket.id,
@@ -342,43 +352,6 @@ export default function HandymanOrderDetailsPage() {
     queueOrSendLocation(socketRef.current, lat, lng);
   };
 
-  const [socketConnectTick, setSocketConnectTick] = useState(0);
-  const [socketGeneration, setSocketGeneration] = useState(() => getSocketGeneration());
-
-  // Re-bind tracking when the singleton socket is recreated (e.g. after useSocket disconnectSocket)
-  useEffect(() => {
-    if (!token) return;
-    const syncGeneration = () => {
-      const gen = getSocketGeneration();
-      setSocketGeneration((prev) => (prev !== gen ? gen : prev));
-    };
-    syncGeneration();
-    const interval = setInterval(syncGeneration, 250);
-    return () => clearInterval(interval);
-  }, [token]);
-
-  // Bump when the singleton socket (re)connects so tracking effect can re-join the room
-  useEffect(() => {
-    if (!token) return;
-    const socket = connectSocket(token);
-    const onSocketConnect = () => {
-      console.log('[HANDYMAN SOCKET AUDIT] SOCKET CONNECT EVENT', {
-        socketId: socket.id,
-        connected: socket.connected,
-        socketInstanceId: getSocketInstanceId(),
-      });
-      setSocketConnectTick((t) => t + 1);
-      if (pendingLocationRef.current) {
-        flushPendingLocation(socketRef.current, { immediate: true });
-      }
-    };
-    socket.on('connect', onSocketConnect);
-    if (socket.connected) onSocketConnect();
-    return () => {
-      socket.off('connect', onSocketConnect);
-    };
-  }, [token]);
-
   useEffect(() => {
     const isLive =
       currentOrder &&
@@ -396,8 +369,9 @@ export default function HandymanOrderDetailsPage() {
       socketId: socket?.id ?? null,
       currentOrderId: currentOrder?._id ?? null,
       orderIdMatches: currentOrder?._id != null && String(currentOrder._id) === String(id),
+      isHandymanJoined: isHandymanJoinedRef.current,
     });
-  }, [currentOrder?.status, currentOrder?.isHandymanOnTheWay, currentOrder, gpsStatus, id, socketConnectTick]);
+  }, [currentOrder?.status, currentOrder?.isHandymanOnTheWay, currentOrder, gpsStatus, id]);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -635,14 +609,28 @@ export default function HandymanOrderDetailsPage() {
     };
 
     const onJoinOrderRoomAck = (ack) => {
-      console.log('[SOCKET AUDIT][HANDYMAN joinOrderRoom ACK]', {
-        socketInstanceId: getSocketInstanceId(),
+      console.log('[HANDYMAN SOCKET AUDIT] JOIN ACK', {
+        success: ack?.success ?? false,
+        reason: ack?.reason ?? null,
+        orderId: ack?.orderId ?? id,
         socketId: socket.id,
-        ack,
+        role: ack?.role ?? null,
+        roomStr: ack?.roomStr ?? null,
       });
+      if (ack?.success) {
+        isHandymanJoinedRef.current = true;
+      } else {
+        isHandymanJoinedRef.current = false;
+        console.error('[HANDYMAN SOCKET AUDIT] JOIN FAILED', {
+          reason: ack?.reason ?? 'unknown',
+          orderId: ack?.orderId ?? id,
+          socketId: socket.id,
+          userId: user?._id ?? null,
+        });
+      }
     };
 
-    const joinRoom = () => {
+    const emitJoin = () => {
       console.log('[HANDYMAN SOCKET AUDIT] JOIN ATTEMPT', {
         socketId: socket.id ?? null,
         orderId: id,
@@ -654,27 +642,21 @@ export default function HandymanOrderDetailsPage() {
         socketId: socket.id ?? null,
         orderId: id,
       });
+      isHandymanJoinedRef.current = false;
       socket.emit('joinOrderRoom', id);
-      // Send handyman location only when live GPS send is allowed
-      if (
-        isLiveRef.current &&
-        gpsStatus === 'ready' &&
-        initialGpsReadyRef.current &&
-        handymanLocRef.current
-      ) {
-        flushPendingLocation(socket, { immediate: true });
-        const loc = handymanLocRef.current;
-        queueOrSendLocation(socket, loc.latitude, loc.longitude);
-      }
     };
 
     const onConnect = () => {
       devLog('✅ SOCKET CONNECTED', socket.id);
-      joinRoom();
+      emitJoin();
+      if (pendingLocationRef.current) {
+        flushPendingLocation(socket, { immediate: true });
+      }
     };
 
     const onDisconnect = (reason) => {
       devLog('🔴 Socket Disconnected:', reason);
+      isHandymanJoinedRef.current = false;
     };
 
     // Listeners FIRST (customer → handyman route → arrival), then join room
@@ -696,7 +678,9 @@ export default function HandymanOrderDetailsPage() {
     socket.off('disconnect', onDisconnect);
     socket.on('disconnect', onDisconnect);
 
-    if (socket.connected) joinRoom();
+    if (socket.connected) {
+      emitJoin();
+    }
 
     return () => {
       console.log('[HANDYMAN SOCKET AUDIT] SOCKET EFFECT CLEANUP', {
@@ -704,22 +688,24 @@ export default function HandymanOrderDetailsPage() {
         socketId: socket.id ?? null,
       });
       clearFlushTimeout();
+      isHandymanJoinedRef.current = false;
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('customerLocationUpdate', onCustomerLocationUpdate);
       socket.off('locationUpdate', onLocationUpdate);
       socket.off('handymanArrived', onHandymanArrived);
       socket.off('joinOrderRoomAck', onJoinOrderRoomAck);
+      console.log('[HANDYMAN SOCKET AUDIT] LEAVE EMITTED', {
+        socketId: socket.id ?? null,
+        orderId: id,
+      });
       socket.emit('leaveOrderRoom', id);
     };
   }, [
     id,
     token,
-    user?._id,
     currentOrder?._id,
     currentOrder?.status,
-    socketConnectTick,
-    socketGeneration,
   ]);
 
   // Send location + flush queue when GPS becomes ready (avoid re-registering socket listeners)
