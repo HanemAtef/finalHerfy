@@ -18,7 +18,7 @@ import {
   FaWalking,
 } from 'react-icons/fa';
 import { fetchOrderById, updateOrderStatus, confirmOrderPrice } from '../../store/slices/orderSlice';
-import { connectSocket } from '../../socket/socket';
+import { connectSocket, getSocketInstanceId } from '../../socket/socket';
 import { reportService } from '../../services/api';
 import TrackingMap from '../../components/Map/TrackingMap';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -128,6 +128,23 @@ export default function TrackingPage() {
     const socket = connectSocket(token);
     customerSocketRef.current = socket;
 
+    console.log('[SOCKET AUDIT] CUSTOMER SOCKET', {
+      socketInstanceId: getSocketInstanceId(),
+      socketId: socket.id,
+      connected: socket.connected,
+      orderId,
+      room: String(orderId),
+      sameRefAsCustomerSocketRef: socket === customerSocketRef.current,
+    });
+
+    console.log('[SOCKET AUDIT] CUSTOMER TRACKING STATE', {
+      status: currentOrder?.status ?? null,
+      isHandymanOnTheWay: currentOrder?.isHandymanOnTheWay ?? null,
+      canSendGps: canSendCustomerGps(currentOrder),
+      socketConnected: socket.connected,
+      socketInstanceId: getSocketInstanceId(),
+    });
+
     const emitCustomerLocation = () => {
       const loc = locationRef.current ?? pendingCustomerLocationRef.current;
       if (!loc || !isValidGpsCoord(loc.latitude, loc.longitude)) return;
@@ -149,8 +166,11 @@ export default function TrackingPage() {
         return;
       }
 
-      console.log('📡 [CUSTOMER SOCKET] sendCustomerLocation', {
+      console.log('[SOCKET AUDIT][CUSTOMER SEND]', {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
         orderId,
+        room: String(orderId),
         lat: loc.latitude,
         lng: loc.longitude,
       });
@@ -158,6 +178,11 @@ export default function TrackingPage() {
     };
 
     const onLocationUpdate = (payload) => {
+      console.log('[SOCKET AUDIT][CUSTOMER HANDYMAN LOCATION RECEIVED]', {
+        socketId: socket.id,
+        orderId,
+        payload,
+      });
       console.log('[FRONTEND HANDYMAN LOCATION RECEIVED]', {
         event: 'locationUpdate',
         payload,
@@ -304,15 +329,33 @@ export default function TrackingPage() {
       dispatch(fetchOrderById(orderId));
     };
 
+    const onJoinOrderRoomAck = (ack) => {
+      console.log('[SOCKET AUDIT][CUSTOMER joinOrderRoom ACK]', {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
+        ack,
+      });
+    };
+
     const onConnect = () => {
-      console.log('🚪 [CUSTOMER] joinOrderRoom orderId =', orderId);
+      console.log('[SOCKET AUDIT] customer joining room =', String(orderId), {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
+      });
       socket.emit('joinOrderRoom', orderId);
       emitCustomerLocation();
     };
 
+    console.log('[SOCKET AUDIT] CUSTOMER locationUpdate LISTENER REGISTERED', {
+      socketInstanceId: getSocketInstanceId(),
+      socketId: socket.id,
+      orderId,
+      listenerBeforeJoin: true,
+    });
     socket.on('locationUpdate', onLocationUpdate);
     socket.on('handymanArrived', onHandymanArrived);
     socket.on('trackingStarted', onTrackingStarted);
+    socket.on('joinOrderRoomAck', onJoinOrderRoomAck);
     socket.on('connect', onConnect);
 
     if (socket.connected) {
@@ -322,14 +365,16 @@ export default function TrackingPage() {
     }
 
     return () => {
+      console.log('[SOCKET AUDIT] CUSTOMER locationUpdate LISTENER REMOVED', { orderId });
       customerSocketRef.current = null;
       socket.emit('leaveOrderRoom', orderId);
       socket.off('connect', onConnect);
       socket.off('locationUpdate', onLocationUpdate);
       socket.off('handymanArrived', onHandymanArrived);
       socket.off('trackingStarted', onTrackingStarted);
+      socket.off('joinOrderRoomAck', onJoinOrderRoomAck);
     };
-  }, [orderId, token, currentOrder?.status, currentOrder?.isHandymanOnTheWay]);
+  }, [orderId, token, currentOrder?.status]);
 
   // Emit when live GPS arrives or updates (fixes GPS-before-socket race)
   useEffect(() => {
@@ -353,10 +398,15 @@ export default function TrackingPage() {
       latitude: location.latitude,
       longitude: location.longitude,
     };
-    console.log('📡 [CUSTOMER SOCKET] sendCustomerLocation', {
+    console.log('[SOCKET AUDIT][CUSTOMER SEND]', {
+      socketInstanceId: getSocketInstanceId(),
+      socketId: socket.id,
       orderId,
+      room: String(orderId),
       lat: location.latitude,
       lng: location.longitude,
+      viaEffect: 'gps-location-effect',
+      socketRefMatches: socket === customerSocketRef.current,
     });
     socket.emit('sendCustomerLocation', payload);
   }, [
@@ -365,7 +415,6 @@ export default function TrackingPage() {
     location?.latitude,
     location?.longitude,
     currentOrder?.status,
-    currentOrder?.isHandymanOnTheWay,
   ]);
 
 

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { connectSocket, disconnectSocket, getSocket } from '../socket/socket';
+import { connectSocket, disconnectSocket, getSocket, getSocketInstanceId } from '../socket/socket';
 import { addNotification, setUnreadCount, fetchUnreadCount } from '../store/slices/notificationSlice';
 
 export default function useSocket() {
@@ -25,6 +25,10 @@ export default function useSocket() {
     });
 
     return () => {
+      console.log('[SOCKET AUDIT] useSocket cleanup', {
+        socketInstanceId: getSocketInstanceId(),
+        userId: user?._id,
+      });
       socket.off('new-notification');
       socket.off('unread-count');
       disconnectSocket();
