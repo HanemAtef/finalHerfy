@@ -105,6 +105,8 @@ export default function HandymanOrderDetailsPage() {
   const socketRef = useRef(null);
   const lastSentRef = useRef(0);
   const pendingLocationRef = useRef(null);
+  const flushTimeoutRef = useRef(null);
+  const SEND_INTERVAL_MS = 5000;
   const customerLocSourceRef = useRef(null); // 'live-gps' when customer socket received
   const pendingArrivalRef = useRef(false);
   const [arrivalPending, setArrivalPending] = useState(false);
@@ -147,7 +149,96 @@ export default function HandymanOrderDetailsPage() {
   const watchIdRef = useRef(null);
   const gpsInitGenRef = useRef(0);
 
+  const clearFlushTimeout = () => {
+    if (flushTimeoutRef.current != null) {
+      clearTimeout(flushTimeoutRef.current);
+      flushTimeoutRef.current = null;
+    }
+  };
+
+  const emitSendLocation = (socket, lat, lng) => {
+    if (!socket?.connected) return false;
+
+    console.log('[HANDYMAN SOCKET AUDIT] SEND_LOCATION EMIT', {
+      socketId: socket.id,
+      orderId: id,
+      lat,
+      lng,
+    });
+    socket.emit('sendLocation', { orderId: id, lat, lng });
+    lastSentRef.current = Date.now();
+    pendingLocationRef.current = null;
+    console.log('[HANDYMAN SOCKET AUDIT] LOCATION SENT', {
+      socketId: socket.id,
+      orderId: id,
+      lat,
+      lng,
+    });
+    return true;
+  };
+
+  const schedulePendingFlush = (delayMs) => {
+    if (flushTimeoutRef.current != null) return;
+    flushTimeoutRef.current = setTimeout(() => {
+      flushTimeoutRef.current = null;
+      const socket = socketRef.current;
+      const pending = pendingLocationRef.current;
+      if (!pending || !socket?.connected) return;
+      if (!initialGpsReadyRef.current) return;
+      if (!isValidHandymanCoord(pending.lat, pending.lng)) return;
+      if (hasArrivedRef.current || !isLiveRef.current) return;
+
+      console.log('[HANDYMAN SOCKET AUDIT] FLUSH PENDING LOCATION', {
+        orderId: id,
+        lat: pending.lat,
+        lng: pending.lng,
+        socketId: socket.id,
+      });
+      emitSendLocation(socket, pending.lat, pending.lng);
+    }, Math.max(0, delayMs));
+  };
+
+  const flushPendingLocation = (socket, { immediate = false } = {}) => {
+    const pending = pendingLocationRef.current;
+    if (!pending || !socket?.connected) return;
+
+    const { lat, lng } = pending;
+
+    if (!initialGpsReadyRef.current) return;
+    if (!isValidHandymanCoord(lat, lng)) return;
+    if (hasArrivedRef.current || !isLiveRef.current) return;
+
+    console.log('[HANDYMAN SOCKET AUDIT] FLUSH PENDING LOCATION', {
+      orderId: id,
+      lat,
+      lng,
+      socketId: socket.id,
+    });
+
+    if (!immediate) {
+      const msSinceLastSend = Date.now() - lastSentRef.current;
+      if (lastSentRef.current > 0 && msSinceLastSend < SEND_INTERVAL_MS) {
+        schedulePendingFlush(SEND_INTERVAL_MS - msSinceLastSend);
+        return;
+      }
+    }
+
+    emitSendLocation(socket, lat, lng);
+  };
+
   const queueOrSendLocation = (socket, lat, lng) => {
+    const logReturn = (reason) => {
+      console.log('[HANDYMAN SOCKET AUDIT] QUEUE/SEND RETURN', {
+        reason,
+        orderId: id,
+        socketId: socket?.id ?? null,
+        connected: !!socket?.connected,
+        isLive: isLiveRef.current,
+        initialGpsReady: initialGpsReadyRef.current,
+        hasArrived: hasArrivedRef.current,
+      });
+    };
+
     console.log('[HANDYMAN SOCKET AUDIT] QUEUE/SEND', {
       orderId: id,
       lat,
@@ -161,73 +252,64 @@ export default function HandymanOrderDetailsPage() {
       socketInstanceId: getSocketInstanceId(),
     });
 
-    const blockReasons = [];
-    if (!initialGpsReadyRef.current) blockReasons.push('gps_not_ready');
-    if (!isValidHandymanCoord(lat, lng)) blockReasons.push('invalid_coords');
-    if (hasArrivedRef.current) blockReasons.push('already_arrived');
-    if (!isLiveRef.current) blockReasons.push('isLive_false');
-    if (!socket?.connected) blockReasons.push('socket_not_connected');
-
-    if (blockReasons.length > 0) {
-      console.warn('[SOCKET AUDIT][HANDYMAN SEND BLOCKED]', {
-        reasons: blockReasons,
-        socketInstanceId: getSocketInstanceId(),
-        socketId: socket?.id ?? null,
-        isLive: isLiveRef.current,
-        orderId: id,
-      });
-    }
-
     if (!initialGpsReadyRef.current) {
       devLog('🚫 [TRACKING BLOCKED] Current GPS location not ready');
+      logReturn('initial_gps_not_ready');
       return;
     }
     if (!isValidHandymanCoord(lat, lng)) {
       console.error('❌ [GPS ERROR] Invalid coordinates — not sending', { lat, lng });
+      logReturn('invalid_coordinates');
       return;
     }
-    if (hasArrivedRef.current || !isLiveRef.current) return;
+    if (hasArrivedRef.current || !isLiveRef.current) {
+      logReturn(hasArrivedRef.current ? 'already_arrived' : 'is_live_false');
+      return;
+    }
 
     const payload = { orderId: id, lat, lng };
 
     if (!socket?.connected) {
       pendingLocationRef.current = payload;
       devLog('📦 [SOCKET QUEUE] Location queued — socket disconnected', payload);
+      logReturn('socket_not_connected');
       return;
     }
 
     const now = Date.now();
-    if (now - lastSentRef.current < 5000) {
+    const msSinceLastSend = lastSentRef.current > 0 ? now - lastSentRef.current : SEND_INTERVAL_MS;
+    const willThrottle = lastSentRef.current > 0 && msSinceLastSend < SEND_INTERVAL_MS;
+
+    console.log('[HANDYMAN SOCKET AUDIT] THROTTLE CHECK', {
+      lastSentAt: lastSentRef.current,
+      now,
+      msSinceLastSend,
+      sendInterval: SEND_INTERVAL_MS,
+      willThrottle,
+    });
+
+    if (willThrottle) {
       pendingLocationRef.current = payload;
-      console.log('[SOCKET AUDIT][HANDYMAN SEND THROTTLED]', {
-        socketInstanceId: getSocketInstanceId(),
-        socketId: socket?.id,
+      const msUntilSend = SEND_INTERVAL_MS - msSinceLastSend;
+      console.log('[HANDYMAN SOCKET AUDIT] LOCATION QUEUED', {
         orderId: id,
-        msUntilNext: 5000 - (now - lastSentRef.current),
+        lat,
+        lng,
+        msUntilSend,
       });
+      schedulePendingFlush(msUntilSend);
+      logReturn('throttled');
       return;
     }
 
-    lastSentRef.current = now;
-    pendingLocationRef.current = null;
-    console.log('[HANDYMAN SOCKET AUDIT] SEND_LOCATION EMIT', {
-      socketId: socket?.id,
+    console.log('[HANDYMAN SOCKET AUDIT] PASSED SEND GATE', {
       orderId: id,
+      socketId: socket?.id ?? null,
       lat,
       lng,
-      socketInstanceId: getSocketInstanceId(),
-      sameAsStoredRef: socket === socketRef.current,
     });
-    devLog('[SOCKET SEND] sendLocation', payload);
-    socket.emit('sendLocation', payload);
-  };
 
-  const flushPendingLocation = (socket) => {
-    const pending = pendingLocationRef.current;
-    if (!pending || !socket?.connected) return;
-    devLog('📤 [SOCKET FLUSH] Sending queued location after reconnect');
-    lastSentRef.current = 0;
-    queueOrSendLocation(socket, pending.lat, pending.lng);
+    emitSendLocation(socket, lat, lng);
   };
 
   const startWatchAfterInitialFix = (lat, lng) => {
@@ -286,6 +368,9 @@ export default function HandymanOrderDetailsPage() {
         socketInstanceId: getSocketInstanceId(),
       });
       setSocketConnectTick((t) => t + 1);
+      if (pendingLocationRef.current) {
+        flushPendingLocation(socketRef.current, { immediate: true });
+      }
     };
     socket.on('connect', onSocketConnect);
     if (socket.connected) onSocketConnect();
@@ -375,12 +460,16 @@ export default function HandymanOrderDetailsPage() {
 
     return () => {
       gpsInitGenRef.current += 1;
+      clearFlushTimeout();
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
     };
   }, [id]);
+
+  // Clear throttle flush timer on unmount / order change
+  useEffect(() => () => clearFlushTimeout(), [id]);
 
   // ===== Socket listeners — join room when THIS order is loaded and trackable =====
   useEffect(() => {
@@ -573,7 +662,7 @@ export default function HandymanOrderDetailsPage() {
         initialGpsReadyRef.current &&
         handymanLocRef.current
       ) {
-        flushPendingLocation(socket);
+        flushPendingLocation(socket, { immediate: true });
         const loc = handymanLocRef.current;
         queueOrSendLocation(socket, loc.latitude, loc.longitude);
       }
@@ -614,6 +703,7 @@ export default function HandymanOrderDetailsPage() {
         orderId: id,
         socketId: socket.id ?? null,
       });
+      clearFlushTimeout();
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('customerLocationUpdate', onCustomerLocationUpdate);
