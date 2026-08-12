@@ -1,291 +1,274 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState, useMemo } from 'react';
 import tt from '@tomtom-international/web-sdk-maps';
 import '@tomtom-international/web-sdk-maps/dist/maps.css';
+import {
+  isValidGpsCoord,
+  sanitizeRouteCoords,
+  getDirectDistanceMeters,
+  isGeometryConsistent,
+} from '../../utils/routeValidation';
+import { devGroup } from '../../utils/devLog';
 
-const isValidCoord = (lat, lng) =>
-  typeof lat === 'number' &&
-  typeof lng === 'number' &&
-  Number.isFinite(lat) &&
-  Number.isFinite(lng) &&
-  lat >= -90 &&
-  lat <= 90 &&
-  lng >= -180 &&
-  lng <= 180 &&
-  !(lat === 0 && lng === 0);
+/** Returns [lng, lat] or null — never pass null/NaN to TomTom APIs */
+const toLngLat = (location) => {
+  if (!location) return null;
+  const lat = Number(location.latitude);
+  const lng = Number(location.longitude);
+  if (!isValidGpsCoord(lat, lng)) return null;
+  return [lng, lat];
+};
+
+const removeLayerAndSource = (map, layerId, sourceId) => {
+  if (!map) return;
+  try {
+    if (map.getLayer(layerId)) map.removeLayer(layerId);
+    if (map.getSource(sourceId)) map.removeSource(sourceId);
+  } catch (e) {
+    /* map may be destroyed */
+  }
+};
+
+const upsertLineLayer = (map, sourceId, layerId, coordinates, color, opacity = 0.85, dash = null) => {
+  if (!map || !Array.isArray(coordinates)) return;
+
+  const safeCoords = coordinates.filter(
+    ([lng, lat]) =>
+      Number.isFinite(lng) &&
+      Number.isFinite(lat) &&
+      isValidGpsCoord(lat, lng)
+  );
+
+  if (safeCoords.length < 2) {
+    removeLayerAndSource(map, layerId, sourceId);
+    return;
+  }
+
+  const geojsonFeature = {
+    type: 'Feature',
+    geometry: { type: 'LineString', coordinates: safeCoords },
+  };
+  const existingSource = map.getSource(sourceId);
+  if (existingSource) {
+    existingSource.setData(geojsonFeature);
+  } else {
+    map.addSource(sourceId, { type: 'geojson', data: geojsonFeature });
+    map.addLayer({
+      id: layerId,
+      type: 'line',
+      source: sourceId,
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': color,
+        'line-width': dash ? 4 : 6,
+        'line-opacity': opacity,
+        ...(dash ? { 'line-dasharray': dash } : {}),
+      },
+    });
+  }
+};
 
 export default function TrackingMap({
   customerLocation,
   handymanLocation,
-  pickupLocation,
-  destinationLocation,
   routeGeometry,
-  center,
+  routeCalcTimestamp = null,
+  routeLoading = false,
   zoom = 13,
   className = 'h-full w-full',
 }) {
- const mapRef = useRef(null);
-const mapInstance = useRef(null);
-const markersRef = useRef([]);
-const mapLoaded = useRef(false);
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const markersRef = useRef([]);
+  const [mapReady, setMapReady] = useState(false);
 
-  // Log coordinates audit before rendering
-  console.group('🗺️ [TrackingMap Coordinates Audit]');
-  console.log('📍 customerLocation:', customerLocation);
-  console.log('📍 handymanLocation:', handymanLocation);
-  console.log('📍 pickupLocation:', pickupLocation);
-  console.log('📍 destinationLocation:', destinationLocation);
-  console.log('📍 routeGeometry points count:', routeGeometry?.length || 0);
-  console.log('📍 center:', center);
-  
-  const nullCheck = {
-    customerLocation: customerLocation ? (isValidCoord(customerLocation.latitude, customerLocation.longitude) ? 'VALID' : 'CONTAINS NULL/INVALID') : 'NULL/UNDEFINED',
-    handymanLocation: handymanLocation ? (isValidCoord(handymanLocation.latitude, handymanLocation.longitude) ? 'VALID' : 'CONTAINS NULL/INVALID') : 'NULL/UNDEFINED',
-    pickupLocation: pickupLocation ? (isValidCoord(pickupLocation.latitude, pickupLocation.longitude) ? 'VALID' : 'CONTAINS NULL/INVALID') : 'NULL/UNDEFINED',
-    destinationLocation: destinationLocation ? (isValidCoord(destinationLocation.latitude, destinationLocation.longitude) ? 'VALID' : 'CONTAINS NULL/INVALID') : 'NULL/UNDEFINED',
-    center: center ? (isValidCoord(center[1], center[0]) ? 'VALID' : 'CONTAINS NULL/INVALID') : 'NULL/UNDEFINED',
-  };
-  console.table(nullCheck);
-  console.groupEnd();
+  const handymanLngLat = useMemo(() => toLngLat(handymanLocation), [
+    handymanLocation?.latitude,
+    handymanLocation?.longitude,
+  ]);
+  const customerLngLat = useMemo(() => toLngLat(customerLocation), [
+    customerLocation?.latitude,
+    customerLocation?.longitude,
+  ]);
 
-  // ✅ Map initialization
+  const sanitizedRoute = useMemo(
+    () => sanitizeRouteCoords(routeGeometry),
+    [routeGeometry]
+  );
+
+  const geometryValid =
+    sanitizedRoute.length >= 2 &&
+    handymanLngLat &&
+    customerLngLat &&
+    isGeometryConsistent(sanitizedRoute, handymanLocation, customerLocation);
+
+  const showRouteLoading =
+    routeLoading &&
+    handymanLngLat &&
+    customerLngLat &&
+    !geometryValid;
+
+  const showTempRoute =
+    handymanLngLat &&
+    customerLngLat &&
+    !geometryValid &&
+    (showRouteLoading || sanitizedRoute.length < 2);
+
+  devGroup('[TRACKING MAP]', () => {
+    console.log('current handyman =', handymanLocation);
+    console.log('current customer =', customerLocation);
+    console.log('route points =', sanitizedRoute.length);
+    console.log('geometry valid =', geometryValid);
+    console.log('temp straight line =', showTempRoute);
+    console.log('route loading =', showRouteLoading);
+  });
+
+  // Map init — once; no Cairo/user fallback — neutral world center until markers arrive
   useEffect(() => {
     const apiKey = import.meta.env.VITE_TOMTOM_API_KEY;
     if (!apiKey || !mapRef.current) return;
 
-    let defaultCenter = [31.2357, 30.0444];
-    if (Array.isArray(center) && center.length === 2 && isValidCoord(center[1], center[0])) {
-      defaultCenter = center;
-    } else if (center && typeof center === 'object' && isValidCoord(center.latitude, center.longitude)) {
-      defaultCenter = [center.longitude, center.latitude];
-    } else if (handymanLocation && isValidCoord(handymanLocation.latitude, handymanLocation.longitude)) {
-      defaultCenter = [handymanLocation.longitude, handymanLocation.latitude];
-    } else if (customerLocation && isValidCoord(customerLocation.latitude, customerLocation.longitude)) {
-      defaultCenter = [customerLocation.longitude, customerLocation.latitude];
-    } else if (pickupLocation && isValidCoord(pickupLocation.latitude, pickupLocation.longitude)) {
-      defaultCenter = [pickupLocation.longitude, pickupLocation.latitude];
-    }
-
-    console.log('📍 [SDK Call] tt.map initializing with center:', defaultCenter);
-    if (!isValidCoord(defaultCenter[1], defaultCenter[0])) {
-      console.error('❌ [SDK Error Guard] Invalid defaultCenter detected, falling back to Cairo:', defaultCenter);
-      defaultCenter = [31.2357, 30.0444];
-    }
+    const center = handymanLngLat || customerLngLat || [0, 20];
+    const initialZoom = handymanLngLat || customerLngLat ? zoom : 2;
 
     try {
-      // Step 11: Print DOM container metrics before map creation
-      const domContainer = mapRef.current;
-      const rect = domContainer?.getBoundingClientRect();
-      console.log('📐 [Step 11 DOM Metrics before tt.map]', {
-        offsetWidth: domContainer?.offsetWidth,
-        offsetHeight: domContainer?.offsetHeight,
-        clientWidth: domContainer?.clientWidth,
-        clientHeight: domContainer?.clientHeight,
-        rect: rect ? { top: rect.top, left: rect.left, width: rect.width, height: rect.height } : null,
+      const map = tt.map({
+        key: apiKey,
+        container: mapRef.current,
+        center,
+        zoom: initialZoom,
       });
 
-mapInstance.current = tt.map({
-  key: apiKey,
-  container: mapRef.current,
-  center: defaultCenter,
-  zoom,
-});
+      mapInstance.current = map;
 
-mapInstance.current.on("load", () => {
-  console.log("✅ TomTom Style Loaded");
-  mapLoaded.current = true;
-  // Step 12: Print DOM container metrics after map load
-   mapInstance.current.resize();
-});
-      const sdkContainer = mapInstance.current.getContainer();
-      console.log('📐 [TrackingMap SDK Container Metrics]', {
-        sdkClientWidth: sdkContainer?.clientWidth,
-        sdkClientHeight: sdkContainer?.clientHeight,
+      map.on('load', () => {
+        setMapReady(true);
+        try {
+          map.resize();
+        } catch (e) {}
       });
 
       setTimeout(() => {
         try {
-          mapInstance.current?.resize();
-          console.log('📐 [TrackingMap SDK] mapInstance.resize() executed successfully');
+          map.resize();
         } catch (e) {}
       }, 150);
     } catch (err) {
-      console.warn('❌ [TrackingMap] Failed to initialize TomTom map:', err);
+      console.warn('[TRACKING MAP] Init failed:', err);
     }
 
     return () => {
-      mapInstance.current?.remove();
+      setMapReady(false);
+      try {
+        mapInstance.current?.remove();
+      } catch (e) {}
       mapInstance.current = null;
     };
   }, []);
 
-  // ✅ Markers and route bounds update (Uber-style tracking: Handyman -> Customer)
+  // Markers + routes — only after map is ready; never pass null to TomTom
   useEffect(() => {
-   if (!mapInstance.current) return;
+    const map = mapInstance.current;
+    if (!map || !mapReady) return;
 
-if (!mapLoaded.current) {
-  console.log("⏳ Waiting for TomTom style...");
-  return;
-}
-
-    // Clear old markers
     markersRef.current.forEach((m) => {
       try { m.remove(); } catch (e) {}
     });
     markersRef.current = [];
 
-    // Define Trip Origin (Handyman) & Target Destination (Customer / Job Site)
-    const handyOrigin = handymanLocation && isValidCoord(handymanLocation.latitude, handymanLocation.longitude)
-      ? handymanLocation
-      : null;
-
-    const custDestination = customerLocation && isValidCoord(customerLocation.latitude, customerLocation.longitude)
-      ? customerLocation
-      : (pickupLocation && isValidCoord(pickupLocation.latitude, pickupLocation.longitude)
-        ? pickupLocation
-        : (destinationLocation && isValidCoord(destinationLocation.latitude, destinationLocation.longitude)
-          ? destinationLocation
-          : null));
-
-    console.log('📍 [Uber Tracking Model State]', { handyOrigin, custDestination });
-
-    // 1. Add Customer / Job Site Destination Marker (Blue)
-    if (custDestination) {
-      const coord = [custDestination.longitude, custDestination.latitude];
-      console.log('📍 [SDK Call] Adding Customer Destination Marker:', coord);
+    if (customerLngLat) {
       try {
         const marker = new tt.Marker({ color: '#0F4C75' })
-          .setLngLat(coord)
-          .addTo(mapInstance.current);
+          .setLngLat(customerLngLat)
+          .addTo(map);
         markersRef.current.push(marker);
       } catch (error) {
-        console.warn('Could not add customer destination marker:', error);
+        console.warn('[TRACKING MAP] Customer marker error:', error);
       }
     }
 
-    // 2. Add Handyman Origin Marker (Green)
-    if (handyOrigin) {
-      const coord = [handyOrigin.longitude, handyOrigin.latitude];
-      console.log('📍 [SDK Call] Adding Handyman Origin Marker:', coord);
+    if (handymanLngLat) {
       try {
         const marker = new tt.Marker({ color: '#28A745' })
-          .setLngLat(coord)
-          .addTo(mapInstance.current);
+          .setLngLat(handymanLngLat)
+          .addTo(map);
         markersRef.current.push(marker);
       } catch (error) {
-        console.warn('Could not add handyman origin marker:', error);
+        console.warn('[TRACKING MAP] Handyman marker error:', error);
       }
     }
 
-    // 3. Render Uber Driving Route Layer
-    const routeCoords = Array.isArray(routeGeometry) && routeGeometry.length >= 2
-      ? routeGeometry.filter((c) => Array.isArray(c) && c.length === 2 && isValidCoord(c[1], c[0]))
-      : (handyOrigin && custDestination
-        ? [[handyOrigin.longitude, handyOrigin.latitude], [custDestination.longitude, custDestination.latitude]]
-        : []);
-console.log("🛣 routeCoords =", JSON.stringify(routeCoords, null, 2));
-    if (routeCoords.length >= 2) {
-      const geojsonFeature = {
-        type: 'Feature',
-        geometry: {
-          type: 'LineString',
-          coordinates: routeCoords,
-        },
-      };
+    if (geometryValid) {
+      removeLayerAndSource(map, 'temp-route-layer', 'temp-route-source');
+      upsertLineLayer(map, 'uber-route-source', 'uber-route-layer', sanitizedRoute, '#0F4C75');
+    } else {
+      removeLayerAndSource(map, 'uber-route-layer', 'uber-route-source');
+      if (sanitizedRoute.length >= 2 && !geometryValid) {
+        console.warn('[TRACKING MAP] Stale geometry rejected —', sanitizedRoute.length, 'points');
+      }
+    }
 
-      // Step 4: Log immediately before addSource / setData
-      console.log('🗺️ [Step 4 Pre-Source Audit]', {
-        routeGeometry,
-        geojsonFeature,
-        coordinatesLength: routeCoords.length,
-        firstPoint: routeCoords[0],
-        lastPoint: routeCoords[routeCoords.length - 1],
-      });
+    if (showTempRoute && handymanLngLat && customerLngLat) {
+      upsertLineLayer(
+        map,
+        'temp-route-source',
+        'temp-route-layer',
+        [handymanLngLat, customerLngLat],
+        '#0F4C75',
+        0.45,
+        [2, 2]
+      );
+    } else {
+      removeLayerAndSource(map, 'temp-route-layer', 'temp-route-source');
+    }
 
-      try {
-        const existingSource = mapInstance.current.getSource('uber-route-source');
-        if (existingSource) {
-          existingSource.setData(geojsonFeature);
-          // Step 7: Verification after setData
-          console.log('🗺️ [Step 7 setData Verification] Source data updated with coordinates count:', routeCoords.length);
-        } else {
-          mapInstance.current.addSource('uber-route-source', {
-            type: 'geojson',
-            data: geojsonFeature,
-          });
+    const points = [handymanLngLat, customerLngLat].filter(Boolean);
+    if (points.length === 0) return;
 
-          // Step 5: Verify source exists after addSource
-          const addedSource = mapInstance.current.getSource('uber-route-source');
-          console.log('🗺️ [Step 5 Source Verification]', {
-            sourceExists: !!addedSource,
-            sourceType: addedSource?.type,
-          });
+    try {
+      if (points.length === 1) {
+        map.setCenter(points[0]);
+        map.setZoom(15);
+        return;
+      }
 
-          mapInstance.current.addLayer({
-            id: 'uber-route-layer',
-            type: 'line',
-            source: 'uber-route-source',
-            layout: {
-              'line-join': 'round',
-              'line-cap': 'round',
-            },
-            paint: {
-              'line-color': '#0F4C75',
-              'line-width': 6,
-              'line-opacity': 0.85,
-            },
-          });
-
-          // Step 6: Verify layer exists after addLayer
-          const addedLayer = mapInstance.current.getLayer('uber-route-layer');
-          console.log('🗺️ [Step 6 Layer Verification]', {
-            layerExists: !!addedLayer,
-            layerId: addedLayer?.id,
-            layerType: addedLayer?.type,
-          });
+      const directM = getDirectDistanceMeters(handymanLocation, customerLocation);
+      if (directM < 80) {
+        const centerLng = (points[0][0] + points[1][0]) / 2;
+        const centerLat = (points[0][1] + points[1][1]) / 2;
+        if (Number.isFinite(centerLng) && Number.isFinite(centerLat)) {
+          map.setCenter([centerLng, centerLat]);
+          map.setZoom(16);
         }
-      } catch (err) {
-        console.warn('Could not render route layer:', err);
+        return;
       }
+
+      const bounds = new tt.LngLatBounds();
+      points.forEach((p) => {
+        if (Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])) {
+          bounds.extend(p);
+        }
+      });
+      map.fitBounds(bounds, { padding: 80, maxZoom: 17 });
+    } catch (error) {
+      console.warn('[TRACKING MAP] Camera update failed:', error);
     }
 
-    // 4. Adjust Map Bounds between Origin (Handyman) & Destination (Customer)
-    const activeCoords = routeCoords.length >= 2 ? routeCoords : [];
-    if (activeCoords.length === 0) {
-      if (handyOrigin) activeCoords.push([handyOrigin.longitude, handyOrigin.latitude]);
-      if (custDestination) activeCoords.push([custDestination.longitude, custDestination.latitude]);
-    }
-
-    const validActiveCoords = activeCoords.filter(
-      (c) => Array.isArray(c) && c.length === 2 && isValidCoord(c[1], c[0])
-    );
-
-    if (validActiveCoords.length >= 2) {
-      try {
-        console.log('📍 [SDK Call] Fitting map bounds between Handyman & Customer:', validActiveCoords);
-        const bounds = new tt.LngLatBounds();
-        validActiveCoords.forEach((coord) => {
-          bounds.extend(coord);
-        });
-        mapInstance.current.fitBounds(bounds, { padding: 60 });
-      } catch (error) {
-        console.warn('Could not fit bounds:', error);
-      }
-    } else if (validActiveCoords.length === 1) {
-      try {
-        console.log('📍 [SDK Call] Setting map center to active coordinate:', validActiveCoords[0]);
-        mapInstance.current.setCenter(validActiveCoords[0]);
-      } catch (e) {}
-    }
+    try {
+      map.resize();
+    } catch (e) {}
   }, [
-    customerLocation?.latitude,
-    customerLocation?.longitude,
-    handymanLocation?.latitude,
-    handymanLocation?.longitude,
-    pickupLocation?.latitude,
-    pickupLocation?.longitude,
-    destinationLocation?.latitude,
-    destinationLocation?.longitude,
-    routeGeometry,
+    mapReady,
+    handymanLngLat?.[0],
+    handymanLngLat?.[1],
+    customerLngLat?.[0],
+    customerLngLat?.[1],
+    sanitizedRoute,
+    geometryValid,
+    showTempRoute,
+    showRouteLoading,
+    routeCalcTimestamp,
+    handymanLocation,
+    customerLocation,
   ]);
 
   if (!import.meta.env.VITE_TOMTOM_API_KEY) {
@@ -299,11 +282,30 @@ console.log("🛣 routeCoords =", JSON.stringify(routeCoords, null, 2));
     );
   }
 
+  const locationsReady = handymanLngLat && customerLngLat;
+
   return (
-    <div
-      ref={mapRef}
-      className={className}
-      style={{ width: '100%', height: '100%', minHeight: '300px' }}
-    />
+    <div className={`relative ${className}`} style={{ width: '100%', height: '100%', minHeight: '300px' }}>
+      <div ref={mapRef} className="absolute inset-0" />
+
+      {!locationsReady && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-neutral/95 text-center p-6">
+          <p className="text-primary font-bold">🔄 جاري تحميل الموقع...</p>
+          <p className="mt-2 text-sm text-textGray">يرجى الانتظار حتى يتم تحديد موقعك</p>
+        {!handymanLngLat && (
+          <p className="mt-1 text-xs text-textGray">في انتظار موقع الحرفي (GPS)...</p>
+        )}
+        {!customerLngLat && (
+          <p className="mt-1 text-xs text-textGray">موقع العميل غير متوفر — جاري تحديد موقع العميل...</p>
+        )}
+        </div>
+      )}
+
+      {showRouteLoading && locationsReady && (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full bg-white/95 px-4 py-1.5 text-xs font-medium text-primary shadow-md">
+          جاري حساب المسار...
+        </div>
+      )}
+    </div>
   );
 }

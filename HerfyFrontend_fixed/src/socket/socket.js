@@ -8,8 +8,8 @@ export const getSocket = () => socket;
 
 export const connectSocket = (token) => {
   if (socket) {
+    socket.auth = { token };
     if (!socket.connected) {
-      socket.auth = { token };
       socket.connect();
     }
     return socket;

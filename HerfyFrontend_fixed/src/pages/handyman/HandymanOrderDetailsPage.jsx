@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 
@@ -12,6 +12,7 @@ import {
   FaFlag,
   FaBan,
 } from "react-icons/fa";
+
 import { fetchOrderById, updateOrderStatus, markOrderOnTheWay } from '../../store/slices/orderSlice';
 import { uploadService, reportService } from '../../services/api';
 import { connectSocket } from '../../socket/socket';
@@ -20,8 +21,47 @@ import LocationLabel from '../../components/common/LocationLabel';
 import ReasonModal from '../../components/common/ReasonModal';
 import AlertMessage from '../../components/common/AlertMessage';
 import TrackingMap from '../../components/Map/TrackingMap';
-import useCurrentLocation from '../../hooks/useCurrentLocation';
+// NOTE: useCurrentLocation is intentionally NOT imported here.
+// Live tracking must use ONLY navigator.geolocation.watchPosition
+// inside the live tracking useEffect. Using the hook would risk
+// seeding the map with a cached/Wi-Fi/login location before the
+// first real GPS fix.
 import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
+import {
+  isRouteConsistentWithPositions,
+  isRouteGeometryValid,
+  isValidGpsCoord,
+} from '../../utils/routeValidation';
+import { devLog } from '../../utils/devLog';
+
+const GPS_OPTIONS = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 20000,
+};
+/** Stricter options for initial fix — prefer GPS chip over Wi-Fi */
+const GPS_INIT_OPTIONS = {
+  enableHighAccuracy: true,
+  maximumAge: 0,
+  timeout: 25000,
+};
+
+/** Valid live handyman GPS — never accept 0,0 or out-of-range values */
+const isValidHandymanCoord = (lat, lng) =>
+  typeof lat === 'number' &&
+  typeof lng === 'number' &&
+  isValidGpsCoord(lat, lng);
+
+const clearRouteState = (refs, setters) => {
+  refs.lastTrustedEtaRef.current = null;
+  refs.etaTimestampRef.current = null;
+  setters.setRouteGeometry(null);
+  setters.setDistance(null);
+  setters.setLastTrustedEta(null);
+  setters.setEtaTimestamp(null);
+  setters.setDisplayedEta(null);
+};
+
 
 export default function HandymanOrderDetailsPage() {
   const { id } = useParams();
@@ -34,24 +74,53 @@ export default function HandymanOrderDetailsPage() {
 
   const { token } = useSelector((state) => state.auth);
 
-  const { location: currentDeviceLocation } = useCurrentLocation();
-
+  // ── LIVE GPS state — ONLY updated by navigator.geolocation.watchPosition ──
+  // This is NEVER seeded from: login response, DB, currentOrder,
+  // stored profile, localStorage, or any cached value.
   const [handymanLoc, setHandymanLoc] = useState(null);
+  /** Live customer GPS only — used for map marker + route validation (never DB) */
+  const [customerTrackingLoc, setCustomerTrackingLoc] = useState(null);
   const [routeGeometry, setRouteGeometry] = useState(null);
+  const [routeCalcTimestamp, setRouteCalcTimestamp] = useState(null);
+  const [distance, setDistance] = useState(null);
+  const [lastTrustedEta, setLastTrustedEta] = useState(null);
+  const [etaTimestamp, setEtaTimestamp] = useState(null);
+  const [displayedEta, setDisplayedEta] = useState(null);
+  const [handymanArrived, setHandymanArrived] = useState(false);
   const [price, setPrice] = useState("");
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
+  const [gpsPermissionDenied, setGpsPermissionDenied] = useState(false);
+  // initializing → waiting for getCurrentPosition | ready | denied | error
+  const [gpsStatus, setGpsStatus] = useState('initializing');
 
-  console.log("📍 [HandymanOrderDetails Render]", {
+  const lastTrustedEtaRef = useRef(null);
+  const etaTimestampRef = useRef(null);
+  const handymanLocRef = useRef(null);
+  const customerLocRef = useRef(null);
+  const initialGpsReadyRef = useRef(false);
+  const isLiveRef = useRef(false);
+  const socketRef = useRef(null);
+  const lastSentRef = useRef(0);
+  const pendingLocationRef = useRef(null);
+  const customerLocSourceRef = useRef(null); // 'live-gps' when customer socket received
+  const pendingArrivalRef = useRef(false);
+  const [arrivalPending, setArrivalPending] = useState(false);
+
+  devLog('📍 [HandymanOrderDetails Render]', {
     orderId: id,
     hasCurrentOrder: !!currentOrder,
     handymanLoc,
-    currentDeviceLocation,
-    customerLocation: currentOrder?.customerLocation,
+    distance,
+    displayedEta,
     routePoints: routeGeometry?.length || 0,
+    staticProfileLocation: currentOrder?.handymanLiveLocation ?? 'N/A',
   });
+
+
+
 
   // Fetch order
   useEffect(() => {
@@ -65,129 +134,337 @@ export default function HandymanOrderDetailsPage() {
     }
   }, [currentOrder?.estimatedPrice]);
 
-  // ===== Live GPS emitter & socket listener =====
+  // DB address is for LocationLabel display ONLY — never for map/tracking
+  useEffect(() => {
+    const coords = currentOrder?.customerLocation?.coordinates;
+    if (coords && Number.isFinite(coords[1]) && Number.isFinite(coords[0])) {
+      devLog('📦 [DISPLAY ONLY] Customer static DB address lat =', coords[1], 'lng =', coords[0]);
+    }
+  }, [currentOrder?.customerLocation]);
+
+  // ===== GPS INIT: getCurrentPosition FIRST, then watchPosition =====
+  const hasArrivedRef = useRef(false);
+  const watchIdRef = useRef(null);
+
+  const queueOrSendLocation = (socket, lat, lng) => {
+    if (!initialGpsReadyRef.current) {
+      devLog('🚫 [TRACKING BLOCKED] Current GPS location not ready');
+      return;
+    }
+    if (!isValidHandymanCoord(lat, lng)) {
+      console.error('❌ [GPS ERROR] Invalid coordinates — not sending', { lat, lng });
+      return;
+    }
+    if (hasArrivedRef.current || !isLiveRef.current) return;
+
+    const payload = { orderId: id, lat, lng };
+
+    if (!socket?.connected) {
+      pendingLocationRef.current = payload;
+      devLog('📦 [SOCKET QUEUE] Location queued — socket disconnected', payload);
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastSentRef.current < 5000) {
+      pendingLocationRef.current = payload;
+      return;
+    }
+
+    lastSentRef.current = now;
+    pendingLocationRef.current = null;
+    devLog('[SOCKET SEND] sendLocation', payload);
+    socket.emit('sendLocation', payload);
+  };
+
+  const flushPendingLocation = (socket) => {
+    const pending = pendingLocationRef.current;
+    if (!pending || !socket?.connected) return;
+    devLog('📤 [SOCKET FLUSH] Sending queued location after reconnect');
+    lastSentRef.current = 0;
+    queueOrSendLocation(socket, pending.lat, pending.lng);
+  };
+
+  const startWatchAfterInitialFix = (lat, lng) => {
+    if (watchIdRef.current !== null) return;
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const wLat = position.coords.latitude;
+        const wLng = position.coords.longitude;
+        if (!isValidHandymanCoord(wLat, wLng)) return;
+        console.log('📍 [GPS UPDATE] latitude =', wLat, '| longitude =', wLng);
+        const wLoc = { latitude: wLat, longitude: wLng };
+        handymanLocRef.current = wLoc;
+        setHandymanLoc(wLoc);
+        // Keep sending until arrival is finalized (not just pending)
+        if (!hasArrivedRef.current) {
+          queueOrSendLocation(socketRef.current, wLat, wLng);
+        }
+      },
+      (err) => {
+        console.error('❌ [GPS ERROR] watchPosition |', err.message);
+        if (err.code === 1) {
+          setGpsPermissionDenied(true);
+          setGpsStatus('denied');
+        }
+      },
+      GPS_OPTIONS
+    );
+    watchIdRef.current = watchId;
+    queueOrSendLocation(socketRef.current, lat, lng);
+  };
+
   useEffect(() => {
     const isLive =
       currentOrder &&
-      ((currentOrder.status === "price_confirmed" &&
-        currentOrder.isHandymanOnTheWay) ||
-        currentOrder.status === "in-progress");
+      ((currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
+        currentOrder.status === 'in-progress');
+    isLiveRef.current = !!isLive;
+  }, [currentOrder?.status, currentOrder?.isHandymanOnTheWay, currentOrder]);
 
-    console.log("🚦 LIVE STATUS =", isLive);
-
+  useEffect(() => {
     if (!navigator.geolocation) {
-      console.log("❌ Browser doesn't support Geolocation");
+      console.error('❌ [GPS ERROR] Geolocation not supported');
+      setGpsStatus('error');
       return;
     }
 
-    if (!token) {
-      console.log("❌ No token");
-      return;
-    }
+    console.log('📍 [GPS INIT] Requesting initial handyman location...');
+    let cancelled = false;
 
-    const socket = connectSocket(token);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (cancelled) return;
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
 
-    console.log("🔌 socket.connected =", socket.connected);
+        console.log('📍 [GPS INIT] Location received');
+        console.log('📍 [GPS INIT] latitude =', lat);
+        console.log('📍 [GPS INIT] longitude =', lng);
+        console.log('📍 [GPS INIT] accuracy =', pos.coords.accuracy, 'm');
 
-    const onConnect = () => {
-      console.log("✅ SOCKET CONNECTED");
-
-      if (isLive) {
-        console.log("📥 JOIN ROOM", id);
-        socket.emit("joinOrderRoom", id);
-      }
-    };
-
-    socket.off("connect", onConnect);
-    socket.on("connect", onConnect);
-
-    if (socket.connected && isLive) {
-      console.log("📥 JOIN ROOM", id);
-      socket.emit("joinOrderRoom", id);
-    }
-
-    const onLocationUpdate = (payload) => {
-      console.log("📩 LOCATION UPDATE RECEIVED", payload);
-
-      if (
-        Number.isFinite(payload?.lat) &&
-        Number.isFinite(payload?.lng)
-      ) {
-        setHandymanLoc({
-          latitude: payload.lat,
-          longitude: payload.lng,
-        });
-      }
-
-      if (Array.isArray(payload?.geometry)) {
-        setRouteGeometry(payload.geometry);
-      }
-    };
-
-    socket.off("locationUpdate", onLocationUpdate);
-    socket.on("locationUpdate", onLocationUpdate);
-
-    let lastSent = 0;
-
-    const watchId = navigator.geolocation.watchPosition(
-      (position) => {
-        console.log("📍 GPS CALLBACK", position.coords);
-
-        const lat = position.coords.latitude;
-        const lng = position.coords.longitude;
-
-        setHandymanLoc({
-          latitude: lat,
-          longitude: lng,
-        });
-
-        if (!isLive) {
-          console.log("⛔ Not live yet");
+        if (!isValidHandymanCoord(lat, lng)) {
+          console.error('❌ [GPS ERROR] Invalid coordinates');
+          setGpsStatus('error');
           return;
         }
 
-        if (!socket.connected) {
-          console.log("❌ Socket disconnected");
-          return;
+        if (pos.coords.accuracy > 115) {
+          console.warn('⚠️ [GPS INIT] Low accuracy =', pos.coords.accuracy, 'm — enableHighAccuracy active; mobile GPS improves outdoors');
         }
 
-        const now = Date.now();
+        console.log('✅ [GPS INIT] Valid initial location');
+        const loc = { latitude: lat, longitude: lng };
+        handymanLocRef.current = loc;
+        setHandymanLoc(loc);
+        initialGpsReadyRef.current = true;
+        setGpsStatus('ready');
 
-        if (now - lastSent < 5000) return;
-
-        lastSent = now;
-
-        console.log("📤 EMIT sendLocation", {
-          orderId: id,
-          lat,
-          lng,
-        });
-
-        socket.emit("sendLocation", {
-          orderId: id,
-          lat,
-          lng,
-        });
+        startWatchAfterInitialFix(lat, lng);
       },
       (err) => {
-        console.log("❌ GPS ERROR", err);
+        if (cancelled) return;
+        console.error('❌ [GPS INIT] Location error');
+        console.error('❌ [GPS INIT] code =', err.code);
+        console.error('❌ [GPS INIT] message =', err.message);
+        if (err.code === 1) {
+          console.error('❌ [GPS INIT] Location permission denied');
+          setGpsPermissionDenied(true);
+          setGpsStatus('denied');
+        } else if (err.code === 2) {
+          console.error('❌ [GPS INIT] Position unavailable');
+          setGpsStatus('error');
+        } else {
+          setGpsStatus('error');
+        }
       },
-      {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 10000,
-      }
+      GPS_INIT_OPTIONS
     );
 
     return () => {
-      navigator.geolocation.clearWatch(watchId);
-
-      socket.off("connect", onConnect);
-      socket.off("locationUpdate", onLocationUpdate);
-
-      if (isLive) {
-        socket.emit("leaveOrderRoom", id);
+      cancelled = true;
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
       }
+    };
+  }, [id]);
+
+  // ===== Socket listeners — register as soon as live tracking starts (don't wait for GPS) =====
+  useEffect(() => {
+    const isLive =
+      currentOrder &&
+      ((currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
+        currentOrder.status === 'in-progress');
+
+    if (!token || !isLive) return;
+
+    devLog('🔌 [SOCKET] Registering tracking listeners for order', id);
+
+    const socket = connectSocket(token);
+    socketRef.current = socket;
+
+    const applyCustomerLoc = (lat, lng, source = 'live-gps') => {
+      const numLat = Number(lat);
+      const numLng = Number(lng);
+      if (!Number.isFinite(numLat) || !Number.isFinite(numLng) || !isValidGpsCoord(numLat, numLng)) return;
+      const loc = { latitude: numLat, longitude: numLng };
+      customerLocSourceRef.current = source;
+      customerLocRef.current = loc;
+      setCustomerTrackingLoc(loc);
+      devLog('[HANDYMAN] ✅ customer location updated =', loc, '| source =', source);
+    };
+
+    const onCustomerLocationUpdate = (data) => {
+      console.log('📡 [HANDYMAN] customerLocationUpdate RECEIVED', data);
+      const lat = data?.lat ?? data?.latitude;
+      const lng = data?.lng ?? data?.longitude;
+      console.log('📍 [HANDYMAN] customer GPS =', { latitude: lat, longitude: lng });
+      applyCustomerLoc(lat, lng, data?.source || 'live-gps');
+    };
+
+    const onLocationUpdate = (payload) => {
+      devLog('[HANDYMAN] locationUpdate received', payload);
+
+      if (hasArrivedRef.current) return;
+
+      // ── 1. Live customer GPS from payload (live-gps only — never order-db) ──
+      if (
+        payload?.destinationSource === 'live-gps' &&
+        Number.isFinite(payload?.customerLat) &&
+        Number.isFinite(payload?.customerLng)
+      ) {
+        applyCustomerLoc(payload.customerLat, payload.customerLng, 'live-gps');
+      }
+
+      const liveHandyman = handymanLocRef.current;
+      const customerLoc = customerLocRef.current;
+      const routeKm = payload?.distanceRemaining;
+
+      // Route / distance / ETA require both live GPS markers
+      if (!liveHandyman || !customerLoc || customerLocSourceRef.current !== 'live-gps') {
+        devLog('[HANDYMAN] Skipping route/distance — waiting for live handyman + customer GPS');
+        return;
+      }
+      let routeIsStale = false;
+
+      if (
+        payload?.destinationSource === 'order-db' &&
+        customerLocSourceRef.current === 'live-gps'
+      ) {
+        console.warn('[HANDYMAN] Stale route — TomTom used order-db while live GPS available');
+        routeIsStale = true;
+      }
+
+      if (
+        payload?.directDistanceMeters != null &&
+        payload.directDistanceMeters <= 50 &&
+        routeKm != null &&
+        routeKm > 0.5
+      ) {
+        console.warn('[HANDYMAN] Stale route — direct =', payload.directDistanceMeters, 'm but route =', routeKm, 'km');
+        routeIsStale = true;
+      }
+
+      if (customerLoc && !isRouteConsistentWithPositions(routeKm, liveHandyman, customerLoc)) {
+        console.warn('[HANDYMAN] Stale route rejected | route =', routeKm, 'km');
+        routeIsStale = true;
+      }
+
+      if (routeIsStale) {
+        clearRouteState(
+          { lastTrustedEtaRef, etaTimestampRef },
+          { setRouteGeometry, setDistance, setLastTrustedEta, setEtaTimestamp, setDisplayedEta }
+        );
+        setRouteGeometry(null);
+        setRouteCalcTimestamp(null);
+        console.warn('[HANDYMAN] Cleared stale route data — routeGeometry = null');
+        return;
+      }
+
+      // ── 3. Apply valid route geometry + distance + ETA ──
+      if (payload?.routeCalcTimestamp) setRouteCalcTimestamp(payload.routeCalcTimestamp);
+
+      const incomingGeometry = payload?.geometry ?? payload?.routeGeometry;
+      const geometryIsValid =
+        Array.isArray(incomingGeometry) &&
+        incomingGeometry.length >= 2 &&
+        isRouteGeometryValid(incomingGeometry, liveHandyman, customerLoc) &&
+        isRouteConsistentWithPositions(routeKm, liveHandyman, customerLoc);
+
+      if (geometryIsValid) {
+        devLog('[HANDYMAN] ✅ route geometry received | points =', incomingGeometry.length);
+        setRouteGeometry(incomingGeometry);
+      } else if (Array.isArray(incomingGeometry) && incomingGeometry.length >= 2) {
+        console.warn('[HANDYMAN] Stale geometry rejected — clearing routeGeometry');
+        setRouteGeometry(null);
+        setRouteCalcTimestamp(null);
+      }
+
+      if (payload?.distanceRemaining !== undefined && payload?.distanceRemaining !== null) {
+        setDistance(payload.distanceRemaining);
+      }
+
+      if (payload?.eta !== undefined && payload?.eta !== null) {
+        const now = payload.etaTimestamp || Date.now();
+        lastTrustedEtaRef.current = payload.eta;
+        etaTimestampRef.current = now;
+        setLastTrustedEta(payload.eta);
+        setEtaTimestamp(now);
+        setDisplayedEta(payload.eta);
+      }
+    };
+
+    const onHandymanArrived = (payload) => {
+      console.log('✅ HANDYMAN ARRIVED | received from backend', payload);
+      if (hasArrivedRef.current) return;
+      // Defer UI until handyman + customer markers are available for the map
+      pendingArrivalRef.current = true;
+      setArrivalPending(true);
+      devLog('[HANDYMAN] Arrival pending — waiting for GPS markers before UI lock');
+    };
+
+    const joinRoom = () => {
+      console.log('🚪 [HANDYMAN] joinOrderRoom orderId =', id);
+      socket.emit('joinOrderRoom', id);
+      // Send handyman location only when GPS is ready
+      if (gpsStatus === 'ready' && initialGpsReadyRef.current && handymanLocRef.current) {
+        flushPendingLocation(socket);
+        const loc = handymanLocRef.current;
+        queueOrSendLocation(socket, loc.latitude, loc.longitude);
+      }
+    };
+
+    const onConnect = () => {
+      devLog('✅ SOCKET CONNECTED', socket.id);
+      joinRoom();
+    };
+
+    const onDisconnect = (reason) => {
+      devLog('🔴 Socket Disconnected:', reason);
+    };
+
+    // Listeners FIRST (customer → handyman route → arrival), then join room
+    socket.off('customerLocationUpdate', onCustomerLocationUpdate);
+    socket.on('customerLocationUpdate', onCustomerLocationUpdate);
+    socket.off('locationUpdate', onLocationUpdate);
+    socket.on('locationUpdate', onLocationUpdate);
+    socket.off('handymanArrived', onHandymanArrived);
+    socket.on('handymanArrived', onHandymanArrived);
+    socket.off('connect', onConnect);
+    socket.on('connect', onConnect);
+    socket.off('disconnect', onDisconnect);
+    socket.on('disconnect', onDisconnect);
+
+    if (socket.connected) joinRoom();
+
+    return () => {
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('customerLocationUpdate', onCustomerLocationUpdate);
+      socket.off('locationUpdate', onLocationUpdate);
+      socket.off('handymanArrived', onHandymanArrived);
+      socket.emit('leaveOrderRoom', id);
     };
   }, [
     id,
@@ -195,6 +472,88 @@ export default function HandymanOrderDetailsPage() {
     currentOrder?.status,
     currentOrder?.isHandymanOnTheWay,
   ]);
+
+  // Send location + flush queue when GPS becomes ready (avoid re-registering socket listeners)
+  useEffect(() => {
+    if (gpsStatus !== 'ready' || !initialGpsReadyRef.current || !isLiveRef.current) return;
+    const socket = socketRef.current;
+    if (!socket?.connected || hasArrivedRef.current) return;
+    flushPendingLocation(socket);
+    const loc = handymanLocRef.current;
+    if (loc) {
+      queueOrSendLocation(socket, loc.latitude, loc.longitude);
+    }
+  }, [gpsStatus, handymanLoc]);
+
+  const isTrackingLive =
+    currentOrder &&
+    ((currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
+      currentOrder.status === 'in-progress');
+
+  const showTrackingMap = isTrackingLive || handymanArrived || arrivalPending;
+
+  // Finalize arrival only when both live GPS markers are available
+  useEffect(() => {
+    if (!pendingArrivalRef.current || hasArrivedRef.current) return;
+    if (!handymanLoc || !customerTrackingLoc) return;
+
+    pendingArrivalRef.current = false;
+    setArrivalPending(false);
+    hasArrivedRef.current = true;
+    lastTrustedEtaRef.current = null;
+    etaTimestampRef.current = null;
+    setHandymanArrived(true);
+    setRouteGeometry(null);
+    setDistance(0);
+    setLastTrustedEta(null);
+    setEtaTimestamp(null);
+    setDisplayedEta(0);
+    devLog('✅ HANDYMAN ARRIVED | finalized after live GPS ready', {
+      handyman: handymanLoc,
+      customer: customerTrackingLoc,
+    });
+
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+  }, [
+    handymanLoc?.latitude,
+    handymanLoc?.longitude,
+    customerTrackingLoc?.latitude,
+    customerTrackingLoc?.longitude,
+  ]);
+
+  const routeGeometryValid =
+    !!routeGeometry &&
+    !!handymanLoc &&
+    !!customerTrackingLoc &&
+    isRouteGeometryValid(routeGeometry, handymanLoc, customerTrackingLoc);
+
+  const routeLoading =
+    isTrackingLive &&
+    !handymanArrived &&
+    !arrivalPending &&
+    gpsStatus === 'ready' &&
+    !!handymanLoc &&
+    !!customerTrackingLoc &&
+    !routeGeometryValid;
+
+  // ── Local ETA countdown (timestamp-based) ──────────────────────────────────
+  useEffect(() => {
+    if (lastTrustedEta === null || etaTimestamp === null || handymanArrived) return;
+
+    const tick = () => {
+      const elapsedMin = (Date.now() - etaTimestamp) / 60000;
+      const current = Math.max(0, lastTrustedEta - elapsedMin);
+      setDisplayedEta(current);
+    };
+
+    tick(); // run immediately
+    const timer = setInterval(tick, 30000);
+    return () => clearInterval(timer);
+  }, [lastTrustedEta, etaTimestamp, handymanArrived]);
+
 
   // Update order status
   const handleStatus = (status, extra = {}) => {
@@ -246,9 +605,55 @@ export default function HandymanOrderDetailsPage() {
     });
   };
 
-  // On the way
+  // On the way — blocked until valid initial GPS fix
   const handleOnTheWay = () => {
+    if (!initialGpsReadyRef.current || gpsStatus !== 'ready' || !handymanLocRef.current) {
+      console.log('🚫 [TRACKING BLOCKED] Current GPS location not ready — cannot start tracking');
+      return;
+    }
+    if (!isValidHandymanCoord(handymanLocRef.current.latitude, handymanLocRef.current.longitude)) {
+      console.error('❌ [GPS ERROR] Invalid coordinates — cannot start tracking');
+      return;
+    }
+    console.log('🚀 [TRACKING] Handyman confirmed on the way with GPS =', handymanLocRef.current);
     dispatch(markOrderOnTheWay(id));
+  };
+
+  const retryGpsInit = () => {
+    initialGpsReadyRef.current = false;
+    setGpsStatus('initializing');
+    setGpsPermissionDenied(false);
+    console.log('📍 [GPS INIT] Retrying initial location request...');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        console.log('📍 [GPS INIT] Location received (retry)');
+        if (!isValidHandymanCoord(lat, lng)) {
+          console.error('❌ [GPS ERROR] Invalid coordinates');
+          setGpsStatus('error');
+          return;
+        }
+        const loc = { latitude: lat, longitude: lng };
+        handymanLocRef.current = loc;
+        setHandymanLoc(loc);
+        initialGpsReadyRef.current = true;
+        setGpsStatus('ready');
+        console.log('✅ [GPS INIT] Valid initial location (retry)');
+        startWatchAfterInitialFix(lat, lng);
+      },
+      (err) => {
+        if (err.code === 1) {
+          console.error('❌ [GPS ERROR] Location permission denied');
+          setGpsPermissionDenied(true);
+          setGpsStatus('denied');
+        } else {
+          console.error('❌ [GPS ERROR]', err.message);
+          setGpsStatus('error');
+        }
+      },
+      GPS_INIT_OPTIONS
+    );
   };
 
   // Report
@@ -470,41 +875,115 @@ export default function HandymanOrderDetailsPage() {
           )}
         </p>
 
-        {currentOrder.customerLocation?.coordinates &&
-          Number.isFinite(
-            currentOrder.customerLocation.coordinates[1]
-          ) &&
-          Number.isFinite(
-            currentOrder.customerLocation.coordinates[0]
-          ) && (
+        {gpsPermissionDenied && (
+          <AlertMessage
+            type="error"
+            message="يرجى السماح بالوصول إلى موقعك لتفعيل التتبع المباشر."
+            className="mt-3"
+          />
+        )}
+
+        {/* Handyman Arrival Notification & Trip Navigation Data */}
+        {arrivalPending && !handymanArrived && (
+          <AlertMessage
+            type="info"
+            message="جاري تأكيد موقعك على الخريطة..."
+            className="mt-3"
+          />
+        )}
+
+        {handymanArrived ? (
+          <div className="mt-3 space-y-3">
+            <div className="flex items-center gap-3 rounded-2xl border-2 border-emerald-500 bg-emerald-50 p-4">
+              <FaCheck className="shrink-0 text-emerald-600" size={20} />
+              <div>
+                <p className="font-bold text-emerald-900">🎉 الحرفي وصل إلى موقع العميل</p>
+                <p className="text-xs text-emerald-700">تم تسجيل الوصول بنجاح وتوقف التتبع المباشر.</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                  🛣️
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-textGray">المسافة المتبقية</p>
+                  <p className="text-base font-bold text-emerald-900">0 كم</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                  ⏱️
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-textGray">الوقت المتبقي</p>
+                  <p className="text-base font-bold text-emerald-900">وصل</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          (distance !== null || displayedEta !== null) && (
+            <div className="mt-4 grid grid-cols-2 gap-3 rounded-2xl border border-borderGray bg-neutral/50 p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  🛣️
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-textGray">المسافة المتبقية</p>
+                  <p className="text-base font-bold text-textDark">
+                    {distance !== null ? `${distance} كم` : "جاري الحساب..."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary/10 text-secondary">
+                  ⏱️
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-textGray">الوقت المتبقي</p>
+                  <p className="text-base font-bold text-textDark">
+                    {displayedEta !== null
+                      ? `${displayedEta < 1 ? "أقل من دقيقة" : `${Math.round(displayedEta)} دقيقة`}`
+                      : "جاري الحساب..."}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )
+        )}
+
+
+
+        {showTrackingMap && (
             <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
+              {(gpsStatus === 'initializing' && !handymanLoc) || arrivalPending ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90">
+                  <LoadingSpinner
+                    text={
+                      arrivalPending
+                        ? 'جاري تأكيد الموقع على الخريطة...'
+                        : 'جاري تحديد موقعك...'
+                    }
+                  />
+                </div>
+              ) : null}
+
+              {isTrackingLive && !customerTrackingLoc && !handymanArrived && (
+                <p className="absolute bottom-2 left-0 right-0 z-10 text-center text-xs text-textGray">
+                  جاري تحديد موقع العميل...
+                </p>
+              )}
 
               <TrackingMap
-                customerLocation={{
-                  latitude:
-                    currentOrder.customerLocation.coordinates[1],
-                  longitude:
-                    currentOrder.customerLocation.coordinates[0],
-                }}
-                handymanLocation={
-                  handymanLoc &&
-                  Number.isFinite(handymanLoc.latitude) &&
-                  Number.isFinite(handymanLoc.longitude)
-                    ? handymanLoc
-                    : currentDeviceLocation &&
-                        Number.isFinite(
-                          currentDeviceLocation.latitude
-                        ) &&
-                        Number.isFinite(
-                          currentDeviceLocation.longitude
-                        )
-                      ? currentDeviceLocation
-                      : null
-                }
+                customerLocation={customerTrackingLoc}
+                handymanLocation={handymanLoc}
                 routeGeometry={routeGeometry}
+                routeCalcTimestamp={routeCalcTimestamp}
+                routeLoading={routeLoading}
                 className="absolute inset-0 h-full w-full"
               />
-
             </div>
           )}
       </div>
@@ -576,13 +1055,44 @@ export default function HandymanOrderDetailsPage() {
           )}
 
           {!currentOrder.isHandymanOnTheWay ? (
-            <button
-              type="button"
-              onClick={handleOnTheWay}
-              className="btn-primary w-full"
-            >
-              أنا قادم للعميل
-            </button>
+            <>
+              {gpsStatus === 'initializing' && (
+                <p className="mb-3 text-center text-sm text-textGray">
+                  جاري تحديد موقعك...
+                </p>
+              )}
+              {(gpsStatus === 'denied' || gpsPermissionDenied) && (
+                <AlertMessage
+                  type="error"
+                  message="يرجى السماح بالوصول إلى موقعك للمتابعة."
+                  className="mb-3"
+                />
+              )}
+              {gpsStatus === 'error' && (
+                <AlertMessage
+                  type="error"
+                  message="تعذر تحديد موقعك الحالي، حاول مرة أخرى."
+                  className="mb-3"
+                />
+              )}
+              {gpsStatus === 'error' && (
+                <button
+                  type="button"
+                  onClick={retryGpsInit}
+                  className="btn-outline mb-3 w-full"
+                >
+                  إعادة محاولة تحديد الموقع
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleOnTheWay}
+                disabled={gpsStatus !== 'ready' || !handymanLoc}
+                className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {gpsStatus === 'initializing' ? 'جاري تحديد موقعك...' : 'أنا قادم للعميل'}
+              </button>
+            </>
           ) : (
             <>
               <p className="mb-3 text-center text-sm text-textGray">

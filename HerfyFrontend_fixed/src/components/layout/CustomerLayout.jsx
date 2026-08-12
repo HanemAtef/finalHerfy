@@ -75,7 +75,7 @@ export default function CustomerLayout() {
           <div className="flex items-center gap-3">
             <div className="hidden text-left sm:block">
               <p className="text-sm font-bold text-textDark">أهلاً {user?.name?.split(' ')[0]}</p>
-              <p className="text-xs text-textGray">القاهرة، مصر</p>
+              {/* <p className="text-xs text-textGray">القاهرة، مصر</p> */}
             </div>
             <img
               src={`https://ui-avatars.com/api/?name=${encodeURIComponent(user?.name || 'U')}&background=0F4C75&color=fff`}

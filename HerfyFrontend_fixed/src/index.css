@@ -82,4 +82,217 @@
     background-image: radial-gradient(circle at 2px 2px, #e1e8eb 1px, transparent 0);
     background-size: 24px 24px;
   }
+
+  /* Auth pages — scoped UI only (Login / Register) */
+  .auth-card {
+    @apply w-full rounded-3xl border border-white/20 bg-white/90 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-md;
+    animation: auth-slide-up 0.55s ease-out both;
+  }
+
+  .auth-input {
+    @apply w-full rounded-xl border border-borderGray bg-white py-3.5 pr-11 pl-4 text-textDark placeholder:text-textGray transition-all duration-200;
+    @apply focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent;
+  }
+
+  .auth-logo-badge {
+    @apply flex h-16 w-16 items-center justify-center rounded-xl bg-primary text-white shadow-lg;
+  }
+
+  @keyframes auth-slide-up {
+    0% { opacity: 0; transform: translateY(24px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes auth-fade-in {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  .auth-fade-in {
+    animation: auth-fade-in 0.6s ease-out both;
+  }
+
+  /* Register page — modern wide layout */
+  .register-page {
+    @apply relative flex flex-1 items-center justify-center px-4 py-5 lg:px-8;
+    max-height: 100vh;
+    overflow-y: auto;
+    background-size: cover;
+    background-position: center;
+    background-image:
+      linear-gradient(rgba(248, 249, 250, 0.88), rgba(248, 249, 250, 0.92)),
+      url(https://images.unsplash.com/photo-1504148455328-c376907d081c?w=1600);
+  }
+
+  @media (min-width: 1024px) {
+    .register-page {
+      overflow-y: hidden;
+    }
+  }
+
+  .register-card {
+    @apply relative w-full overflow-hidden rounded-3xl border border-white/60 bg-white/90 shadow-[0_20px_60px_-15px_rgba(15,76,117,0.25)] backdrop-blur-xl;
+    max-width: min(780px, calc(100vw - 2rem));
+    padding: 1.5rem 1.65rem 1.35rem;
+    animation: auth-slide-up 0.55s ease-out both;
+  }
+
+  .register-card::before {
+    content: '';
+    @apply absolute inset-x-0 top-0 h-1 bg-gradient-to-l from-secondary via-primary to-primary;
+  }
+
+  .register-back {
+    @apply mb-3 inline-flex items-center gap-1.5 rounded-full border border-borderGray/80 bg-white/80 px-3 py-1 text-xs font-medium text-textGray shadow-sm transition-all hover:border-primary/30 hover:text-primary;
+  }
+
+  .register-hero {
+    @apply mb-4 flex flex-wrap items-center justify-between gap-3;
+  }
+
+  .register-hero-main {
+    @apply flex items-center gap-3;
+  }
+
+  .register-logo {
+    @apply flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary text-white shadow-lg shadow-primary/25;
+  }
+
+  .register-header h1 {
+    @apply font-bold leading-tight text-textDark;
+    font-size: 1.45rem;
+  }
+
+  .register-header p {
+    @apply mt-0.5 text-textGray;
+    font-size: 0.875rem;
+  }
+
+  .register-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem 1rem;
+  }
+
+  .register-grid--3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .register-grid-span-2 {
+    grid-column: span 2;
+  }
+
+  @media (max-width: 639px) {
+    .register-grid,
+    .register-grid--3 {
+      grid-template-columns: 1fr;
+    }
+
+    .register-grid-span-2 {
+      grid-column: span 1;
+    }
+  }
+
+  .register-form {
+    @apply flex flex-col gap-3;
+  }
+
+  .register-field label {
+    @apply mb-1 block text-xs font-semibold text-textDark;
+  }
+
+  .register-input-wrap {
+    @apply flex items-center gap-2.5 rounded-xl border border-borderGray bg-neutral/70 px-3 transition-all duration-200;
+    @apply focus-within:border-primary focus-within:bg-white focus-within:ring-4 focus-within:ring-primary/10;
+  }
+
+  .register-input-icon {
+    @apply flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary;
+    font-size: 0.75rem;
+  }
+
+  .register-input {
+    @apply min-w-0 flex-1 border-0 bg-transparent py-2.5 text-textDark placeholder:text-textGray outline-none;
+    font-size: 0.9rem;
+  }
+
+  .register-input:focus {
+    @apply outline-none ring-0;
+  }
+
+  select.register-input {
+    @apply cursor-pointer appearance-none;
+    background-image: none;
+  }
+
+  .register-section {
+    @apply rounded-2xl border border-borderGray/70 bg-gradient-to-br from-neutral/80 to-white p-3.5;
+  }
+
+  .register-section-title {
+    @apply mb-2.5 flex items-center gap-2 text-sm font-bold text-primary;
+  }
+
+  .register-section-title::before {
+    content: '';
+    @apply h-4 w-1 rounded-full bg-secondary;
+  }
+
+  .register-actions {
+    @apply mt-1 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-borderGray/60 bg-neutral/40 px-3 py-2.5;
+  }
+
+  .register-actions-main {
+    @apply flex flex-wrap items-center gap-3;
+  }
+
+  .register-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-secondary font-semibold text-white shadow-lg shadow-secondary/30 transition-all duration-200 hover:-translate-y-0.5 hover:bg-secondary/90 hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0;
+    padding: 0.65rem 1.5rem;
+    font-size: 0.925rem;
+    min-width: 10rem;
+  }
+
+  .register-footer {
+    @apply text-textGray;
+    font-size: 0.85rem;
+  }
+
+  .register-role-tabs {
+    @apply flex shrink-0 rounded-full bg-neutral p-1 shadow-inner;
+    min-width: 12rem;
+  }
+
+  .register-role-tabs button {
+    @apply flex flex-1 items-center justify-center gap-1.5 rounded-full px-4 py-2 text-xs font-bold text-textGray transition-all duration-200;
+  }
+
+  .register-role-tabs button[aria-selected='true'] {
+    @apply bg-white text-primary shadow-md;
+  }
+
+  .register-role-tabs button[aria-selected='true'].is-handyman {
+    @apply text-secondary;
+  }
+
+  .register-upload {
+    @apply flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/25 bg-white px-3 py-2.5 text-xs font-medium text-textGray shadow-sm transition-all duration-200 hover:border-secondary hover:bg-secondary/5 hover:text-secondary hover:shadow-md;
+  }
+
+  .register-sidebar {
+    @apply relative hidden flex-1 flex-col justify-center overflow-hidden px-12 text-white lg:flex;
+  }
+
+  .register-sidebar-overlay {
+    @apply absolute inset-0;
+    background: linear-gradient(160deg, rgba(15, 76, 117, 0.94) 0%, rgba(15, 104, 177, 0.88) 100%);
+  }
+
+  .register-sidebar-content {
+    @apply relative z-10;
+  }
+
+  .register-feature {
+    @apply flex items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur-sm transition-transform duration-200 hover:-translate-y-0.5;
+  }
 }

@@ -6,6 +6,197 @@ const { getThrottle, setThrottle } = require('./liveTrackingThrottle');
 
 const isValidId = (id) => typeof id === "string" && mongoose.isValidObjectId(id);
 
+/** Reject invalid / zero handyman GPS — never store fallback coordinates */
+const isValidHandymanGps = (lat, lng) =>
+  Number.isFinite(lat) &&
+  Number.isFinite(lng) &&
+  lat >= -90 &&
+  lat <= 90 &&
+  lng >= -180 &&
+  lng <= 180 &&
+  !(lat === 0 && lng === 0);
+
+// In-memory Set: tracks orders where handymanArrived has already been emitted.
+// Prevents duplicate arrival events per server lifecycle.
+const arrivedOrders = new Set();
+
+// In-memory Map: stores the last successful TomTom route per order.
+// Keyed by orderId string. Cleared on arrival to prevent memory leaks.
+// Structure: { eta, distance, geometry, trafficDelay, arrivalTime, etaTimestamp,
+//              origin, destination, routeCalcTimestamp }
+//
+// Purpose: When TomTom is throttled (60s interval) or temporarily fails,
+// the last trusted route is re-emitted ONLY if it still matches the current
+// origin/destination. Stale routes are never reused after the handyman moves.
+const lastTrustedRouteData = new Map();
+
+// In-memory Map: live customer GPS sent from the customer app during tracking.
+// Keyed by orderId string. Used as route destination when available.
+// Alias: customerLocations (same Map — per product requirements)
+const liveCustomerLocations = new Map();
+const customerLocations = liveCustomerLocations;
+
+// In-memory Map: latest handyman GPS per order (for arrival when customer location arrives second).
+const lastHandymanLocations = new Map();
+
+
+// Haversine distance in meters between two { lat, lng } points
+const haversineMeters = (a, b) => {
+  const R = 6371000; // Earth radius in meters
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const chord =
+    sinLat * sinLat +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinLng * sinLng;
+  return R * 2 * Math.atan2(Math.sqrt(chord), Math.sqrt(1 - chord));
+};
+
+const ARRIVAL_THRESHOLD_METERS = 50;
+// Reuse cached TomTom route only when origin/destination haven't moved beyond this.
+const ROUTE_CACHE_TOLERANCE_METERS = 100;
+
+const resolveCustomerDestination = (order, roomStr) => {
+  const live = liveCustomerLocations.get(roomStr);
+  if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
+    return { lat: live.lat, lng: live.lng, source: 'live-gps' };
+  }
+
+  if (
+    order.customerLocation &&
+    Array.isArray(order.customerLocation.coordinates) &&
+    order.customerLocation.coordinates.length === 2
+  ) {
+    const [customerLng, customerLat] = order.customerLocation.coordinates;
+    if (Number.isFinite(customerLat) && Number.isFinite(customerLng)) {
+      return { lat: customerLat, lng: customerLng, source: 'order-db' };
+    }
+  }
+
+  return null;
+};
+
+const isRouteCacheValid = (trusted, origin, destination, destinationSource) => {
+  if (!trusted?.origin || !trusted?.destination) return false;
+  // Never reuse a route calculated against a different destination source (DB vs live GPS)
+  if (trusted.destinationSource && destinationSource && trusted.destinationSource !== destinationSource) {
+    console.log('[ROUTE] Cache INVALID — destination source changed:', trusted.destinationSource, '→', destinationSource);
+    return false;
+  }
+  const originDrift = haversineMeters(trusted.origin, origin);
+  const destDrift = haversineMeters(trusted.destination, destination);
+  const valid =
+    originDrift <= ROUTE_CACHE_TOLERANCE_METERS &&
+    destDrift <= ROUTE_CACHE_TOLERANCE_METERS;
+  if (!valid) {
+    console.log('[ROUTE] Cache INVALID — origin drift =', Math.round(originDrift), 'm | dest drift =', Math.round(destDrift), 'm');
+  }
+  return valid;
+};
+
+const buildTrustedRouteEntry = (routeData, origin, destination, now, destinationSource) => ({
+  eta: routeData.eta,
+  distance: routeData.distance,
+  trafficDelay: routeData.trafficDelay,
+  arrivalTime: routeData.arrivalTime,
+  geometry: Array.isArray(routeData.geometry) && routeData.geometry.length >= 2
+    ? routeData.geometry
+    : null,
+  etaTimestamp: now,
+  routeCalcTimestamp: now,
+  origin: { lat: origin.lat, lng: origin.lng },
+  destination: { lat: destination.lat, lng: destination.lng },
+  destinationSource,
+});
+
+const emitArrival = (io, roomStr) => {
+  if (arrivedOrders.has(roomStr)) return;
+  arrivedOrders.add(roomStr);
+  lastTrustedRouteData.delete(roomStr);
+  liveCustomerLocations.delete(roomStr);
+  customerLocations.delete(roomStr);
+  lastHandymanLocations.delete(roomStr);
+  io.to(roomStr).emit('handymanArrived', {
+    orderId: roomStr,
+    msg: 'الحرفي وصل إلى موقع العميل',
+    distanceRemaining: 0,
+    eta: 0,
+  });
+  console.log('[ARRIVAL CHECK] arrived = true | Emitted handymanArrived to room', roomStr);
+  console.log('🧹 [BACKEND] Cleared customerLocations + route cache for order', roomStr);
+};
+
+/** Store live customer GPS in memory */
+const storeCustomerLocation = (roomStr, lat, lng) => {
+  const entry = { lat, lng, updatedAt: Date.now() };
+  liveCustomerLocations.set(roomStr, entry);
+  customerLocations.set(roomStr, entry);
+  console.log('📍 [BACKEND] Customer live GPS stored | orderId =', roomStr, '| lat =', lat, '| lng =', lng);
+  console.log('[BACKEND CUSTOMER GPS] orderId =', roomStr, '| lat =', lat, '| lng =', lng, '| source = live-gps');
+};
+
+/** Broadcast customer GPS to everyone in the order room (handyman + customer) */
+const broadcastCustomerLocationUpdate = (io, roomStr, lat, lng) => {
+  const payload = {
+    orderId: roomStr,
+    lat,
+    lng,
+    latitude: lat,
+    longitude: lng,
+    source: 'live-gps',
+  };
+  console.log('📡 [BACKEND] customerLocationUpdate broadcast | room =', roomStr, '| payload =', payload);
+  io.to(roomStr).emit('customerLocationUpdate', payload);
+};
+
+/** Send stored customer location to a single socket (e.g. handyman joining late) */
+const replayCustomerLocationToSocket = (socket, roomStr) => {
+  const stored = liveCustomerLocations.get(roomStr);
+  if (!stored) return;
+  const payload = {
+    orderId: roomStr,
+    lat: stored.lat,
+    lng: stored.lng,
+    latitude: stored.lat,
+    longitude: stored.lng,
+    source: 'live-gps',
+  };
+  socket.emit('customerLocationUpdate', payload);
+  console.log('📤 [BACKEND] Replayed stored customer location to socket', socket.id, '| orderId =', roomStr);
+};
+
+/** Base customer fields always attached to locationUpdate when destination is known */
+const buildCustomerFields = (customerDest, origin) => {
+  if (!customerDest) return {};
+  const directMeters = origin ? haversineMeters(origin, customerDest) : null;
+  return {
+    customerLat: customerDest.lat,
+    customerLng: customerDest.lng,
+    destinationSource: customerDest.source,
+    directDistanceMeters: directMeters != null ? Math.round(directMeters) : null,
+  };
+};
+
+/** Attach geometry under both keys for frontend compatibility */
+const withRouteGeometryAliases = (payload, geometry) => {
+  if (!Array.isArray(geometry) || geometry.length < 2) return payload;
+  return { ...payload, geometry, routeGeometry: geometry };
+};
+
+const checkAndEmitArrival = (io, roomStr, handyman, customer, context) => {
+  if (!handyman || !customer || arrivedOrders.has(roomStr)) return false;
+  const directMeters = haversineMeters(handyman, customer);
+  console.log(`[ARRIVAL CHECK] ${context} | directDistanceMeters = ${Math.round(directMeters)} | threshold = ${ARRIVAL_THRESHOLD_METERS}m`);
+  if (directMeters <= ARRIVAL_THRESHOLD_METERS) {
+    emitArrival(io, roomStr);
+    return true;
+  }
+  console.log(`[ARRIVAL CHECK] arrived = false | ${(directMeters / 1000).toFixed(2)} km direct remaining`);
+  return false;
+};
+
 const liveTrackingSocket = (io) => {
   io.on('connection', (socket) => {
     console.log('⚡ [Backend Socket Audit] New client connected:', socket.id);
@@ -35,7 +226,17 @@ const liveTrackingSocket = (io) => {
 
         const roomStr = orderId.toString();
         socket.join(roomStr);
-        console.log(`✅ [Backend Socket Audit] Socket ${socket.id} (user ${userId}) joined room: ${roomStr}`);
+        console.log(`🚪 [BACKEND] socket joined order room | socket = ${socket.id} | room = ${roomStr}`);
+
+        // Handyman joining late? Replay last known live customer GPS immediately.
+        replayCustomerLocationToSocket(socket, roomStr);
+
+        // If this order has already been marked as arrived (e.g. after reconnect),
+        // re-emit arrival so customer rejoining can get the state.
+        if (arrivedOrders.has(roomStr)) {
+          socket.emit('handymanArrived', { orderId: roomStr });
+          console.log(`✅ [Arrival] Re-emitted handymanArrived to rejoining socket for order ${roomStr}`);
+        }
       } catch (err) {
         console.error("joinOrderRoom failed:", err.message);
       }
@@ -53,6 +254,120 @@ const liveTrackingSocket = (io) => {
       }
     });
 
+    // Customer sends live GPS so route destination matches the map marker
+    socket.on('sendCustomerLocation', async (data) => {
+      try {
+        const { orderId, lat, lng, latitude, longitude } = data || {};
+        const numLat = Number(lat ?? latitude);
+        const numLng = Number(lng ?? longitude);
+
+        console.log('📥 [BACKEND] sendCustomerLocation received | orderId =', orderId, '| lat =', numLat, '| lng =', numLng);
+
+        if (!isValidId(orderId)) {
+          return socket.emit('error', { msg: 'Invalid order id' });
+        }
+        if (!Number.isFinite(numLat) || !Number.isFinite(numLng)) {
+          return socket.emit('error', { msg: 'Invalid customer location data' });
+        }
+
+        const order = await Order.findById(orderId);
+        if (!order) {
+          console.warn('📍 [BACKEND] sendCustomerLocation — order not found:', orderId);
+          return;
+        }
+
+        const userId = socket.user?._id?.toString();
+        const isCustomer = userId && order.customerId.toString() === userId;
+        if (!isCustomer && !socket.user?.isAdmin) {
+          console.warn('📍 [BACKEND] sendCustomerLocation unauthorized | userId =', userId, '| orderId =', orderId);
+          return;
+        }
+
+        const roomStr = orderId.toString();
+        if (arrivedOrders.has(roomStr)) {
+          console.log('📍 [BACKEND] sendCustomerLocation ignored — order already arrived:', roomStr);
+          return;
+        }
+
+        // Ensure customer socket is in the room (TrackingPage may emit before joinOrderRoom)
+        socket.join(roomStr);
+
+        const customerPoint = { lat: numLat, lng: numLng };
+        storeCustomerLocation(roomStr, numLat, numLng);
+
+        // Invalidate any route cached against old DB destination
+        lastTrustedRouteData.delete(roomStr);
+
+        // ── 1. Broadcast live customer GPS to handyman (and others in room) ──
+        broadcastCustomerLocationUpdate(io, roomStr, numLat, numLng);
+
+        const handymanPoint = lastHandymanLocations.get(roomStr) ?? null;
+        console.log('[ROUTE INPUT] handyman =', handymanPoint ?? 'not yet received');
+        console.log('[ROUTE INPUT] customer =', customerPoint, '(live-gps)');
+
+        if (handymanPoint) {
+          const directMeters = haversineMeters(handymanPoint, customerPoint);
+          console.log('[ROUTE INPUT] directDistanceMeters =', Math.round(directMeters));
+
+          if (checkAndEmitArrival(io, roomStr, handymanPoint, customerPoint, 'sendCustomerLocation')) {
+            return;
+          }
+
+          // ── 2. Push locationUpdate with live customer coords ──
+          const customerDest = { lat: numLat, lng: numLng, source: 'live-gps' };
+          let routePayload = {};
+          const now = Date.now();
+          const lastCalc = getThrottle(orderId);
+          const intervalSec = parseInt(process.env.ETA_RECALCULATION_INTERVAL_SEC) || 60;
+          const throttleExpired = now - lastCalc > intervalSec * 1000;
+
+          if (directMeters <= ARRIVAL_THRESHOLD_METERS) {
+            console.log('[ROUTE] Skipping TomTom on sendCustomerLocation — within arrival threshold');
+          } else if (throttleExpired) {
+            console.log('[ROUTE] TomTom recalc triggered by sendCustomerLocation');
+            setThrottle(orderId, now);
+            try {
+              const routeData = await calculateRoute(handymanPoint, customerDest);
+              if (routeData?.distance != null) {
+                const routeMeters = routeData.distance * 1000;
+                if (!(directMeters < 500 && routeMeters > directMeters * 10 + 500)) {
+                  const trusted = buildTrustedRouteEntry(routeData, handymanPoint, customerDest, now, 'live-gps');
+                  lastTrustedRouteData.set(roomStr, trusted);
+                  routePayload = withRouteGeometryAliases({
+                    distanceRemaining: routeData.distance,
+                    eta: routeData.eta,
+                    trafficDelay: routeData.trafficDelay,
+                    arrivalTime: routeData.arrivalTime,
+                    etaTimestamp: now,
+                    routeCalcTimestamp: now,
+                  }, routeData.geometry);
+                } else {
+                  console.warn('[ROUTE] TomTom rejected on sendCustomerLocation — inconsistent with direct distance');
+                }
+              }
+            } catch (err) {
+              console.error('[ROUTE] TomTom error on sendCustomerLocation:', err.message);
+            }
+          }
+
+          const updateData = {
+            lat: handymanPoint.lat,
+            lng: handymanPoint.lng,
+            ...buildCustomerFields(customerDest, handymanPoint),
+            ...routePayload,
+          };
+
+          io.to(roomStr).emit('locationUpdate', updateData);
+          console.log('📍 [BACKEND] Sending locationUpdate with customer location | orderId =', roomStr);
+          console.log('  customerLat =', updateData.customerLat, '| customerLng =', updateData.customerLng);
+          console.log('  distanceRemaining =', updateData.distanceRemaining ?? 'N/A');
+          console.log('  geometry points =', Array.isArray(updateData.geometry) ? updateData.geometry.length : 0);
+        }
+      } catch (err) {
+        console.error('sendCustomerLocation failed:', err.message);
+      }
+    });
+
     // sendLocation
     socket.on('sendLocation', async (data) => {
       try {
@@ -60,15 +375,28 @@ const liveTrackingSocket = (io) => {
         const numLat = Number(lat);
         const numLng = Number(lng);
 
-        console.log(`📥 [Backend Socket Audit] sendLocation received for order ${orderId}: lat=${lat}, lng=${lng}`);
+        console.log(`📍 [BACKEND RECEIVE] sendLocation | orderId = ${orderId} | lat = ${numLat} | lng = ${numLng}`);
 
         if (!isValidId(orderId)) {
            return socket.emit('error', { msg: 'Invalid order id' });
         }
 
         if (!Number.isFinite(numLat) || !Number.isFinite(numLng)) {
-          console.warn(`❌ [Backend Socket Audit] Rejected invalid location data for order ${orderId}: lat=${lat}, lng=${lng}`);
+          console.warn(`❌ [BACKEND REJECT] sendLocation invalid numbers | order ${orderId}`);
           return socket.emit('error', { msg: 'Invalid location data. Latitude and longitude must be valid numbers.' });
+        }
+
+        if (!isValidHandymanGps(numLat, numLng)) {
+          console.warn(`❌ [BACKEND REJECT] sendLocation invalid GPS | order ${orderId} | lat=${numLat} lng=${numLng}`);
+          return socket.emit('error', { msg: 'Invalid GPS coordinates. No fallback location stored.' });
+        }
+
+        const roomStr = orderId.toString();
+
+        // If handyman already arrived for this order, ignore further location updates.
+        if (arrivedOrders.has(roomStr)) {
+          console.log(`🚗 ARRIVAL CHECK | Order ${roomStr} already arrived. Ignoring sendLocation.`);
+          return;
         }
 
         const order = await Order.findById(orderId);
@@ -76,11 +404,6 @@ const liveTrackingSocket = (io) => {
           console.warn(`❌ [Backend Socket Audit] Order not found: ${orderId}`);
           return socket.emit('error', { msg: 'Order not found' });
         }
-        
-        console.log("===== BEFORE TOMTOM =====");
-        console.log("customerLocation =", order.customerLocation);
-        console.log("coordinates =", order.customerLocation?.coordinates);
-        console.log("origin =", { lat: numLat, lng: numLng });
 
         const userId = socket.user?._id?.toString();
         const isAssignedHandyman = userId && order.handymanId.toString() === userId;
@@ -89,38 +412,100 @@ const liveTrackingSocket = (io) => {
           console.warn(`❌ [Backend Socket Audit] Unauthorized location update by user ${userId} for order ${orderId}`);
           return socket.emit('error', { msg: 'Not authorized to update this order\'s location' });
         }
-        
+
         if (!['price_confirmed', 'in-progress'].includes(order.status)) {
             return socket.emit('error', { msg: 'Order status does not allow location updates' });
         }
 
-        // calc route and ETA using TomTom API
+        const origin = { lat: numLat, lng: numLng };
+        lastHandymanLocations.set(roomStr, { ...origin, updatedAt: Date.now() });
+
+        const customerDest = resolveCustomerDestination(order, roomStr);
+
+        console.log('[ROUTE INPUT] handyman =', origin);
+        console.log('[ROUTE INPUT] customer =', customerDest ?? 'N/A');
+        if (customerDest) {
+          const directMeters = haversineMeters(origin, customerDest);
+          console.log('[ROUTE INPUT] directDistanceMeters =', Math.round(directMeters), '| customer source =', customerDest.source);
+        }
+
+        // ─── ARRIVAL DETECTION (uses live customer GPS when available) ───────
+        if (customerDest) {
+          if (checkAndEmitArrival(io, roomStr, origin, customerDest, 'sendLocation')) {
+            return;
+          }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
+
+        // calc route and ETA using TomTom API (throttled, with cache validation)
         let routeData = null;
-        if (order.customerLocation && Array.isArray(order.customerLocation.coordinates) && order.customerLocation.coordinates.length === 2) {
-          const [customerLng, customerLat] = order.customerLocation.coordinates;
+        if (customerDest) {
+          const now = Date.now();
+          const lastCalc = getThrottle(orderId);
+          const intervalSec = parseInt(process.env.ETA_RECALCULATION_INTERVAL_SEC) || 60;
+          const cached = lastTrustedRouteData.get(roomStr) ?? null;
+          const cacheStillValid = cached && isRouteCacheValid(cached, origin, customerDest, customerDest.source);
+          const throttleExpired = now - lastCalc > intervalSec * 1000;
+          const shouldRecalculate = throttleExpired || !cacheStillValid;
 
-          if (Number.isFinite(customerLat) && Number.isFinite(customerLng)) {
-            const now = Date.now();
-            const lastCalc = getThrottle(orderId);
-            const intervalSec = parseInt(process.env.ETA_RECALCULATION_INTERVAL_SEC) || 60;
+          // Skip TomTom entirely when users are very close — arrival should have caught this,
+          // but guard against routing to a far DB address while live GPS says otherwise.
+          const directMeters = haversineMeters(origin, customerDest);
+          if (directMeters <= ARRIVAL_THRESHOLD_METERS) {
+            console.log('[ROUTE] Skipping TomTom — direct distance', Math.round(directMeters), 'm (within arrival threshold)');
+            if (checkAndEmitArrival(io, roomStr, origin, customerDest, 'pre-tomtom-guard')) {
+              return;
+            }
+          }
 
-            if (now - lastCalc > intervalSec * 1000) {
-              console.log(`🗺️ [Backend TomTom Audit] Requesting calculateRoute: origin=(${numLat}, ${numLng}) -> destination=(${customerLat}, ${customerLng})`);
-              
-              setThrottle(orderId, now);
+          if (!shouldRecalculate) {
+            const remainingSec = Math.ceil((intervalSec * 1000 - (now - lastCalc)) / 1000);
+            console.log(`⏳ [ROUTE] TomTom throttled — reusing valid cache | remaining = ${remainingSec}s`);
+          } else {
+            if (!throttleExpired && !cacheStillValid) {
+              console.log('[ROUTE] Forcing TomTom recalc — cached route no longer matches current coordinates');
+            }
+            console.log(`\n[ROUTE] TomTom request | origin=(${origin.lat}, ${origin.lng}) -> dest=(${customerDest.lat}, ${customerDest.lng}) [${customerDest.source}]`);
 
-              try {
-                routeData = await calculateRoute(
-                  { lat: numLat, lng: numLng },
-                  { lat: customerLat, lng: customerLng }
-                );
+            setThrottle(orderId, now);
 
-                if (routeData && order.eta && Math.abs(routeData.eta - order.eta) <= 2) {
-                  routeData.eta = order.eta;
+            try {
+              routeData = await calculateRoute(origin, customerDest);
+
+              if (routeData && routeData.distance !== null) {
+                const routeMeters = routeData.distance * 1000;
+                console.log('[ROUTE RESULT] origin =', origin);
+                console.log('[ROUTE RESULT] destination =', customerDest);
+                console.log('[ROUTE RESULT] routeDistanceMeters =', Math.round(routeMeters));
+                console.log('[ROUTE RESULT] etaSeconds =', Math.round((routeData.eta ?? 0) * 60));
+                console.log('[ROUTE RESULT] geometry points =', routeData.geometry?.length ?? 0);
+
+                // Reject TomTom result if it wildly disagrees with direct distance (stale/wrong destination)
+                if (directMeters < 500 && routeMeters > directMeters * 10 + 500) {
+                  console.warn('[ROUTE RESULT] REJECTED — TomTom distance', routeData.distance, 'km inconsistent with direct', Math.round(directMeters), 'm');
+                  routeData = null;
+                  lastTrustedRouteData.delete(roomStr);
+                } else {
+                  if (order.eta !== null && order.eta !== undefined && Math.abs(routeData.eta - order.eta) <= 2) {
+                    routeData.eta = order.eta;
+                  }
+                  const trusted = buildTrustedRouteEntry(routeData, origin, customerDest, now, customerDest.source);
+                  lastTrustedRouteData.set(roomStr, trusted);
+                  console.log('[ROUTE] Cache updated | routeCalcTimestamp =', new Date(now).toISOString());
                 }
-                console.log(`✅ [Backend TomTom Audit] Route response:`, routeData);
-              } catch (err) {
-                console.log("TomTom recalculation failed, keeping previous ETA:", err.message);
+              } else {
+                console.warn('[ROUTE] TomTom returned no valid route — will not attach stale cache');
+                routeData = null;
+                if (!cacheStillValid) {
+                  lastTrustedRouteData.delete(roomStr);
+                }
+              }
+            } catch (err) {
+              console.error(`[ROUTE] TomTom error | order ${orderId}: ${err.message}`);
+              routeData = null;
+              if (!cacheStillValid) {
+                lastTrustedRouteData.delete(roomStr);
               }
             }
           }
@@ -133,7 +518,7 @@ const liveTrackingSocket = (io) => {
           updatedAt: new Date()
         };
 
-        // save ETA and distance if routeData is valid
+        // save ETA and distance only if routeData is valid (non-null distance)
         if (routeData && routeData.distance !== null) {
           order.eta = routeData.eta;
           order.distanceRemaining = routeData.distance;
@@ -143,24 +528,64 @@ const liveTrackingSocket = (io) => {
 
         await order.save();
 
-        const updateData = {
-          lat: numLat,
-          lng: numLng,
-          ...(routeData && {
+        // ── Build locationUpdate payload ──────────────────────────────────────────
+        // Priority:
+        //  1. Fresh TomTom result (routeData !== null)
+        //  2. Last trusted cached result ONLY if still valid for current origin/dest
+        //  3. Nothing — emit lat/lng only (never attach stale route data)
+        const trusted = lastTrustedRouteData.get(roomStr) ?? null;
+        const cacheValidForEmit = trusted && customerDest && isRouteCacheValid(trusted, origin, customerDest, customerDest.source);
+
+        let routePayload = {};
+        if (routeData && routeData.distance !== null) {
+          const ts = Date.now();
+          routePayload = withRouteGeometryAliases({
             distanceRemaining: routeData.distance,
             eta: routeData.eta,
             trafficDelay: routeData.trafficDelay,
             arrivalTime: routeData.arrivalTime,
-            geometry: routeData.geometry,
-          }),
+            etaTimestamp: ts,
+            routeCalcTimestamp: ts,
+            routeOrigin: origin,
+            routeDestination: { lat: customerDest.lat, lng: customerDest.lng },
+          }, routeData.geometry);
+        } else if (cacheValidForEmit) {
+          console.log('[ROUTE] Using valid cached route | routeCalcTimestamp =', new Date(trusted.routeCalcTimestamp).toISOString());
+          routePayload = withRouteGeometryAliases({
+            distanceRemaining: trusted.distance,
+            eta: trusted.eta,
+            trafficDelay: trusted.trafficDelay,
+            arrivalTime: trusted.arrivalTime,
+            etaTimestamp: trusted.etaTimestamp,
+            routeCalcTimestamp: trusted.routeCalcTimestamp,
+            routeOrigin: trusted.origin,
+            routeDestination: trusted.destination,
+          }, trusted.geometry);
+        } else if (trusted) {
+          console.warn('[ROUTE] Stale cache discarded — not attaching old distance/geometry to locationUpdate');
+        }
+
+        const updateData = {
+          lat: numLat,
+          lng: numLng,
+          ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
+          ...routePayload,
         };
 
-        // Broadcast immediately to order room
-        const roomStr = orderId.toString();
+        // Broadcast to order room
         io.to(roomStr).emit('locationUpdate', updateData);
         socket.emit('locationSent', { success: true, data: updateData });
 
-        console.log(`📡 [Backend Socket Audit] Broadcasted locationUpdate to room ${roomStr}: ${numLat}, ${numLng} | ETA: ${routeData?.eta || 'N/A'} min`);
+        console.log(`\n📍 [BACKEND] Sending locationUpdate with customer location | room ${roomStr}`);
+        console.log('  handyman =', { lat: numLat, lng: numLng });
+        console.log('  customerLat =', updateData.customerLat ?? 'N/A', '| customerLng =', updateData.customerLng ?? 'N/A');
+        console.log('  destinationSource =', updateData.destinationSource ?? 'N/A');
+        console.log('  directDistanceMeters =', updateData.directDistanceMeters ?? 'N/A');
+        console.log('  distanceRemaining =', updateData.distanceRemaining ?? 'N/A');
+        console.log('  eta =', updateData.eta ?? 'N/A');
+        console.log('  geometry points =', Array.isArray(updateData.geometry) ? updateData.geometry.length : 'null');
+        console.log('  routeCalcTimestamp =', updateData.routeCalcTimestamp ? new Date(updateData.routeCalcTimestamp).toISOString() : 'N/A');
+
       } catch (err) {
           console.error("sendLocation failed:", err.message);
       }
@@ -186,7 +611,7 @@ const liveTrackingSocket = (io) => {
       }
     });
 
-    //stop tracking event
+    //stop tracking event (manual, kept for backward compat)
     socket.on('stopTracking', async (orderId) => {
       try {
         if (!isValidId(orderId)) return;
@@ -200,7 +625,13 @@ const liveTrackingSocket = (io) => {
         io.to(orderId.toString()).emit('trackingStopped', {
           msg: ' الحرفي وصل!',
         });
+        const roomStr = orderId.toString();
+        lastTrustedRouteData.delete(roomStr);
+        liveCustomerLocations.delete(roomStr);
+        customerLocations.delete(roomStr);
+        lastHandymanLocations.delete(roomStr);
         console.log(`📡 [Backend Socket Audit] Tracking stopped for order ${orderId}`);
+        console.log('🧹 [BACKEND] Cleared customerLocations + route cache on stopTracking for order', roomStr);
       } catch(err) {
           console.error("stopTracking failed:", err.message);
       }
