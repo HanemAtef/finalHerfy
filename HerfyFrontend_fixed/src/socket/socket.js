@@ -6,10 +6,14 @@ let socket = null;
 /** Stable id for the singleton socket wrapper — proves connect/join/on/emit use same instance */
 let socketInstanceSeq = 0;
 let activeSocketInstanceId = null;
+/** Increments whenever the singleton is created or destroyed — lets tracking pages re-bind */
+let socketGeneration = 0;
 
 export const getSocket = () => socket;
 
 export const getSocketInstanceId = () => activeSocketInstanceId;
+
+export const getSocketGeneration = () => socketGeneration;
 
 export const connectSocket = (token) => {
   if (socket) {
@@ -27,6 +31,7 @@ export const connectSocket = (token) => {
   }
 
   activeSocketInstanceId = `sock-${++socketInstanceSeq}-${Date.now()}`;
+  socketGeneration += 1;
   socket = io(SOCKET_URL, {
     auth: { token },
     transports: ['websocket'],
@@ -72,6 +77,7 @@ export const disconnectSocket = () => {
     socket.disconnect();
     socket = null;
     activeSocketInstanceId = null;
+    socketGeneration += 1;
   }
 };
 
