@@ -157,21 +157,33 @@ export default function TrackingPage() {
       socket.emit('sendCustomerLocation', payload);
     };
 
-    const onLocationUpdate = ({
-      lat, lng,
-      distanceRemaining,
-      eta,
-      trafficDelay: delay,
-      geometry,
-      etaTimestamp: serverEtaTs,
-      routeCalcTimestamp,
-    }) => {
+    const onLocationUpdate = (payload) => {
+      console.log('[FRONTEND HANDYMAN LOCATION RECEIVED]', {
+        event: 'locationUpdate',
+        payload,
+      });
+
+      const {
+        lat,
+        lng,
+        distanceRemaining,
+        eta,
+        trafficDelay: delay,
+        geometry,
+        etaTimestamp: serverEtaTs,
+        routeCalcTimestamp,
+      } = payload;
+
       console.log('[CUSTOMER] locationUpdate | handyman =', { lat, lng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
 
       const numLat = Number(lat);
       const numLng = Number(lng);
       if (Number.isFinite(numLat) && Number.isFinite(numLng) && isValidGpsCoord(numLat, numLng)) {
         const handy = { latitude: numLat, longitude: numLng };
+        console.log('[HANDYMAN LOCATION STATE UPDATE]', {
+          previous: handymanLocRef.current,
+          next: handy,
+        });
         handymanLocRef.current = handy;
         setHandymanLoc(handy);
       }
@@ -419,7 +431,7 @@ export default function TrackingPage() {
   const status = currentOrder.status;
 
   const Header = ({ title }) => (
-    <header className="flex items-center justify-between border-b border-borderGray px-4 py-3">
+    <header className="flex shrink-0 items-center justify-between border-b border-borderGray px-4 py-3">
       <div className="flex items-center gap-3">
         <button type="button" onClick={() => navigate(-1)} className="text-primary">
           <FaArrowRight size={18} />
@@ -704,20 +716,20 @@ export default function TrackingPage() {
   const formattedDistance = formatDistance(distance);
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-white">
+    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-white">
       <Header title="تتبع الطلب" />
 
-      <div className="relative flex-1">
+      <div className="relative min-h-0 w-full flex-1">
         {canShowMap ? (
           <TrackingMap
             customerLocation={liveCustomerLocation}
             handymanLocation={hasValidHandymanLoc ? handymanLoc : null}
             routeGeometry={handymanArrived ? null : routeGeometry}
             routeCalcTimestamp={routeCalcTimestamp}
-            className="absolute inset-0"
+            className="absolute inset-0 h-full w-full"
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-neutral">
+          <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-neutral">
             <LoadingSpinner text="جاري تحديد موقعك..." />
           </div>
         )}
@@ -760,7 +772,7 @@ export default function TrackingPage() {
       </div>
 
       {/* Bottom sheet */}
-      <div className="rounded-t-2xl border-t border-borderGray bg-white p-4 shadow-lg">
+      <div className="shrink-0 rounded-t-2xl border-t border-borderGray bg-white p-4 shadow-lg">
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-borderGray" />
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-primary">

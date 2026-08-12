@@ -167,6 +167,44 @@ const replayCustomerLocationToSocket = (socket, roomStr) => {
   console.log('📤 [BACKEND] Replayed stored customer location to socket', socket.id, '| orderId =', roomStr);
 };
 
+/** Broadcast handyman lat/lng to everyone in the order room */
+const broadcastLocationUpdate = (io, roomStr, payload) => {
+  console.log('[BACKEND HANDYMAN LOCATION BROADCAST]', {
+    event: 'locationUpdate',
+    roomStr,
+    payload,
+  });
+  io.to(roomStr).emit('locationUpdate', payload);
+};
+
+/** Replay last known handyman GPS to a socket that joined late (e.g. customer) */
+const replayHandymanLocationToSocket = (socket, roomStr, order) => {
+  const stored = lastHandymanLocations.get(roomStr);
+  if (!stored) return;
+
+  const lat = Number(stored.lat);
+  const lng = Number(stored.lng);
+  if (!isValidHandymanGps(lat, lng)) return;
+
+  const origin = { lat, lng };
+  const customerDest = order ? resolveCustomerDestination(order, roomStr) : null;
+  const payload = {
+    lat,
+    lng,
+    ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
+  };
+
+  console.log('[BACKEND HANDYMAN LOCATION BROADCAST]', {
+    event: 'locationUpdate',
+    roomStr,
+    payload,
+    replay: true,
+    socketId: socket.id,
+  });
+  socket.emit('locationUpdate', payload);
+  console.log('📤 [BACKEND] Replayed stored handyman location to socket', socket.id, '| orderId =', roomStr);
+};
+
 /** Base customer fields always attached to locationUpdate when destination is known */
 const buildCustomerFields = (customerDest, origin) => {
   if (!customerDest) return {};
@@ -228,8 +266,9 @@ const liveTrackingSocket = (io) => {
         socket.join(roomStr);
         console.log(`🚪 [BACKEND] socket joined order room | socket = ${socket.id} | room = ${roomStr}`);
 
-        // Handyman joining late? Replay last known live customer GPS immediately.
+        // Replay last known live GPS to late joiners.
         replayCustomerLocationToSocket(socket, roomStr);
+        replayHandymanLocationToSocket(socket, roomStr, order);
 
         // If this order has already been marked as arrived (e.g. after reconnect),
         // re-emit arrival so customer rejoining can get the state.
@@ -309,12 +348,21 @@ const liveTrackingSocket = (io) => {
           const directMeters = haversineMeters(handymanPoint, customerPoint);
           console.log('[ROUTE INPUT] directDistanceMeters =', Math.round(directMeters));
 
+          const customerDest = { lat: numLat, lng: numLng, source: 'live-gps' };
+
+          // ── Always deliver handyman coords BEFORE arrival check ──
+          const baseUpdate = {
+            lat: handymanPoint.lat,
+            lng: handymanPoint.lng,
+            ...buildCustomerFields(customerDest, handymanPoint),
+          };
+          broadcastLocationUpdate(io, roomStr, baseUpdate);
+
           if (checkAndEmitArrival(io, roomStr, handymanPoint, customerPoint, 'sendCustomerLocation')) {
             return;
           }
 
-          // ── 2. Push locationUpdate with live customer coords ──
-          const customerDest = { lat: numLat, lng: numLng, source: 'live-gps' };
+          // ── 2. Optional route-enriched locationUpdate ──
           let routePayload = {};
           const now = Date.now();
           const lastCalc = getThrottle(orderId);
@@ -350,18 +398,19 @@ const liveTrackingSocket = (io) => {
             }
           }
 
-          const updateData = {
-            lat: handymanPoint.lat,
-            lng: handymanPoint.lng,
-            ...buildCustomerFields(customerDest, handymanPoint),
-            ...routePayload,
-          };
-
-          io.to(roomStr).emit('locationUpdate', updateData);
-          console.log('📍 [BACKEND] Sending locationUpdate with customer location | orderId =', roomStr);
-          console.log('  customerLat =', updateData.customerLat, '| customerLng =', updateData.customerLng);
-          console.log('  distanceRemaining =', updateData.distanceRemaining ?? 'N/A');
-          console.log('  geometry points =', Array.isArray(updateData.geometry) ? updateData.geometry.length : 0);
+          if (Object.keys(routePayload).length > 0) {
+            const updateData = {
+              lat: handymanPoint.lat,
+              lng: handymanPoint.lng,
+              ...buildCustomerFields(customerDest, handymanPoint),
+              ...routePayload,
+            };
+            broadcastLocationUpdate(io, roomStr, updateData);
+            console.log('📍 [BACKEND] Sending route-enriched locationUpdate | orderId =', roomStr);
+            console.log('  customerLat =', updateData.customerLat, '| customerLng =', updateData.customerLng);
+            console.log('  distanceRemaining =', updateData.distanceRemaining ?? 'N/A');
+            console.log('  geometry points =', Array.isArray(updateData.geometry) ? updateData.geometry.length : 0);
+          }
         }
       } catch (err) {
         console.error('sendCustomerLocation failed:', err.message);
@@ -375,7 +424,14 @@ const liveTrackingSocket = (io) => {
         const numLat = Number(lat);
         const numLng = Number(lng);
 
-        console.log(`📍 [BACKEND RECEIVE] sendLocation | orderId = ${orderId} | lat = ${numLat} | lng = ${numLng}`);
+        const roomStrEarly = isValidId(orderId) ? orderId.toString() : null;
+        console.log('[BACKEND HANDYMAN LOCATION RECEIVED]', {
+          socketId: socket.id,
+          orderId,
+          lat: numLat,
+          lng: numLng,
+          roomStr: roomStrEarly,
+        });
 
         if (!isValidId(orderId)) {
            return socket.emit('error', { msg: 'Invalid order id' });
@@ -429,14 +485,17 @@ const liveTrackingSocket = (io) => {
           console.log('[ROUTE INPUT] directDistanceMeters =', Math.round(directMeters), '| customer source =', customerDest.source);
         }
 
-        // ─── ARRIVAL DETECTION (uses live customer GPS when available) ───────
-        if (customerDest) {
-          if (checkAndEmitArrival(io, roomStr, origin, customerDest, 'sendLocation')) {
-            return;
-          }
-        }
-        // ─────────────────────────────────────────────────────────────────────
+        // ─── Always broadcast handyman coords BEFORE arrival check ───────────
+        const baseHandymanUpdate = {
+          lat: numLat,
+          lng: numLng,
+          ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
+        };
+        broadcastLocationUpdate(io, roomStr, baseHandymanUpdate);
 
+        if (customerDest && checkAndEmitArrival(io, roomStr, origin, customerDest, 'sendLocation')) {
+          return;
+        }
 
         // calc route and ETA using TomTom API (throttled, with cache validation)
         let routeData = null;
@@ -458,6 +517,7 @@ const liveTrackingSocket = (io) => {
               return;
             }
           }
+          // Coords already broadcast above; arrival may have fired and returned earlier.
 
           if (!shouldRecalculate) {
             const remainingSec = Math.ceil((intervalSec * 1000 - (now - lastCalc)) / 1000);
@@ -572,11 +632,13 @@ const liveTrackingSocket = (io) => {
           ...routePayload,
         };
 
-        // Broadcast to order room
-        io.to(roomStr).emit('locationUpdate', updateData);
+        // Route-enriched update (base lat/lng already broadcast above)
+        if (Object.keys(routePayload).length > 0) {
+          broadcastLocationUpdate(io, roomStr, updateData);
+        }
         socket.emit('locationSent', { success: true, data: updateData });
 
-        console.log(`\n📍 [BACKEND] Sending locationUpdate with customer location | room ${roomStr}`);
+        console.log(`\n📍 [BACKEND] sendLocation complete | room ${roomStr}`);
         console.log('  handyman =', { lat: numLat, lng: numLng });
         console.log('  customerLat =', updateData.customerLat ?? 'N/A', '| customerLng =', updateData.customerLng ?? 'N/A');
         console.log('  destinationSource =', updateData.destinationSource ?? 'N/A');

@@ -18,6 +18,42 @@ const toLngLat = (location) => {
   return [lng, lat];
 };
 
+const isFiniteLngLat = (lngLat) =>
+  Array.isArray(lngLat) &&
+  lngLat.length === 2 &&
+  Number.isFinite(lngLat[0]) &&
+  Number.isFinite(lngLat[1]);
+
+const safeZoom = (value, fallback = 13) => {
+  const z = Number(value);
+  return Number.isFinite(z) ? z : fallback;
+};
+
+const logContainerSize = (mapRef, label = '') => {
+  const el = mapRef.current;
+  if (!el) {
+    console.log('[TOMTOM DEBUG] container size = null (ref not attached)', label);
+    return { width: 0, height: 0 };
+  }
+  const rect = el.getBoundingClientRect();
+  const size = { width: rect.width, height: rect.height };
+  console.log('[TOMTOM DEBUG] container size =', size, label);
+  return size;
+};
+
+const tomTomCall = (operation, fn) => {
+  try {
+    console.log(`[TOMTOM DEBUG] ${operation} START`);
+    const result = fn();
+    console.log(`[TOMTOM DEBUG] ${operation} SUCCESS`);
+    return result;
+  } catch (err) {
+    console.error(`[TOMTOM ERROR] ${operation}`, err);
+    if (err?.stack) console.error(`[TOMTOM ERROR] ${operation} stack`, err.stack);
+    throw err;
+  }
+};
+
 const removeLayerAndSource = (map, layerId, sourceId) => {
   if (!map) return;
   try {
@@ -49,21 +85,23 @@ const upsertLineLayer = (map, sourceId, layerId, coordinates, color, opacity = 0
   };
   const existingSource = map.getSource(sourceId);
   if (existingSource) {
-    existingSource.setData(geojsonFeature);
+    tomTomCall('source.setData', () => existingSource.setData(geojsonFeature));
   } else {
-    map.addSource(sourceId, { type: 'geojson', data: geojsonFeature });
-    map.addLayer({
-      id: layerId,
-      type: 'line',
-      source: sourceId,
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: {
-        'line-color': color,
-        'line-width': dash ? 4 : 6,
-        'line-opacity': opacity,
-        ...(dash ? { 'line-dasharray': dash } : {}),
-      },
-    });
+    tomTomCall('addSource', () => map.addSource(sourceId, { type: 'geojson', data: geojsonFeature }));
+    tomTomCall('addLayer', () =>
+      map.addLayer({
+        id: layerId,
+        type: 'line',
+        source: sourceId,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': color,
+          'line-width': dash ? 4 : 6,
+          'line-opacity': opacity,
+          ...(dash ? { 'line-dasharray': dash } : {}),
+        },
+      })
+    );
   }
 };
 
@@ -74,11 +112,13 @@ export default function TrackingMap({
   routeCalcTimestamp = null,
   routeLoading = false,
   zoom = 13,
-  className = 'h-full w-full',
+  className = 'h-full w-full min-h-0',
 }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const markersRef = useRef([]);
+  const mapGenRef = useRef(0);
+  const readyGenRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
 
   const handymanLngLat = useMemo(() => toLngLat(handymanLocation), [
@@ -116,6 +156,9 @@ export default function TrackingMap({
   const hasAnyLocation = !!(handymanLngLat || customerLngLat);
   const hasBothLocations = !!(handymanLngLat && customerLngLat);
 
+  const primaryCenter = handymanLngLat || customerLngLat;
+  const mapZoom = safeZoom(zoom, 13);
+
   console.log('[TRACKING MAP] customerLocation', customerLocation);
   console.log('[TRACKING MAP] handymanLocation', handymanLocation);
   console.log('[TRACKING MAP] rendering', {
@@ -123,6 +166,8 @@ export default function TrackingMap({
     handymanLngLat,
     hasAnyLocation,
     hasBothLocations,
+    primaryCenter,
+    mapZoom,
   });
 
   devGroup('[TRACKING MAP]', () => {
@@ -134,64 +179,148 @@ export default function TrackingMap({
     console.log('route loading =', showRouteLoading);
   });
 
-  // Map init — once; no Cairo/user fallback — neutral world center until markers arrive
+  const isMapAlive = (map, gen) =>
+    !!map &&
+    mapInstance.current === map &&
+    gen === mapGenRef.current;
+
+  // Create map once we have valid coordinates — do not destroy on coordinate updates
   useEffect(() => {
     const apiKey = import.meta.env.VITE_TOMTOM_API_KEY;
-    if (!apiKey || !mapRef.current) return;
+    console.log('[TOMTOM DEBUG] apiKey present =', !!apiKey);
 
-    const center = handymanLngLat || customerLngLat || [0, 20];
-    const initialZoom = handymanLngLat || customerLngLat ? zoom : 2;
+    if (!apiKey) return;
 
-    try {
-      const map = tt.map({
-        key: apiKey,
-        container: mapRef.current,
-        center,
-        zoom: initialZoom,
-      });
+    logContainerSize(mapRef, '(init effect)');
 
-      mapInstance.current = map;
-
-      map.on('load', () => {
-        setMapReady(true);
-        try {
-          map.resize();
-        } catch (e) {}
-      });
-
-      setTimeout(() => {
-        try {
-          map.resize();
-        } catch (e) {}
-      }, 150);
-    } catch (err) {
-      console.warn('[TRACKING MAP] Init failed:', err);
+    if (!mapRef.current) {
+      console.log('[TOMTOM DEBUG] init skipped — mapRef not attached');
+      return;
     }
 
-    return () => {
-      setMapReady(false);
-      try {
-        mapInstance.current?.remove();
-      } catch (e) {}
+    if (mapInstance.current) {
+      console.log('[TOMTOM DEBUG] init skipped — map already exists');
+      return;
+    }
+
+    if (!isFiniteLngLat(primaryCenter)) {
+      console.log('[TOMTOM DEBUG] init deferred — waiting for valid coordinates', {
+        primaryCenter,
+      });
+      return;
+    }
+
+    const gen = ++mapGenRef.current;
+    console.log('[TOMTOM DEBUG] init generation =', gen, '| center =', primaryCenter, '| zoom =', mapZoom);
+
+    let map;
+    try {
+      map = tomTomCall('tt.map', () =>
+        tt.map({
+          key: apiKey,
+          container: mapRef.current,
+          center: primaryCenter,
+          zoom: mapZoom,
+        })
+      );
+      mapInstance.current = map;
+    } catch (err) {
       mapInstance.current = null;
+      return;
+    }
+
+    const onLoad = () => {
+      if (!isMapAlive(map, gen)) {
+        console.log('[TOMTOM DEBUG] map.load ignored — stale generation', {
+          gen,
+          current: mapGenRef.current,
+        });
+        return;
+      }
+      console.log('[TOMTOM DEBUG] map.load event — generation', gen);
+      readyGenRef.current = gen;
+      setMapReady(true);
+      try {
+        tomTomCall('resize', () => map.resize());
+      } catch (e) {
+        /* logged by tomTomCall */
+      }
+    };
+
+    tomTomCall('map.on(load)', () => map.on('load', onLoad));
+
+    const resizeTimer = setTimeout(() => {
+      if (!isMapAlive(map, gen)) return;
+      try {
+        tomTomCall('resize', () => map.resize());
+      } catch (e) {
+        /* logged */
+      }
+    }, 150);
+
+    return () => {
+      clearTimeout(resizeTimer);
+    };
+  }, [
+    primaryCenter?.[0],
+    primaryCenter?.[1],
+    mapZoom,
+  ]);
+
+  // StrictMode-safe teardown — only on component unmount
+  useEffect(() => {
+    return () => {
+      mapGenRef.current += 1;
+      readyGenRef.current = 0;
+      setMapReady(false);
+
+      const map = mapInstance.current;
+      if (map) {
+        try {
+          map.remove();
+        } catch (e) {
+          console.error('[TOMTOM ERROR] map.remove (unmount)', e);
+        }
+        mapInstance.current = null;
+      }
+
+      markersRef.current.forEach((m) => {
+        try {
+          m.remove();
+        } catch (e) {}
+      });
+      markersRef.current = [];
     };
   }, []);
 
-  // Markers + routes — only after map is ready; never pass null to TomTom
+  // Markers + routes + camera — only on live, loaded map instance
   useEffect(() => {
     const map = mapInstance.current;
-    if (!map || !mapReady) return;
+    const gen = mapGenRef.current;
+
+    if (!map || !mapReady || readyGenRef.current !== gen) {
+      return;
+    }
+
+    if (!isMapAlive(map, gen)) {
+      console.log('[TOMTOM DEBUG] markers effect skipped — map not alive');
+      return;
+    }
+
+    logContainerSize(mapRef, '(markers effect)');
 
     markersRef.current.forEach((m) => {
-      try { m.remove(); } catch (e) {}
+      try {
+        m.remove();
+      } catch (e) {}
     });
     markersRef.current = [];
 
     if (customerLngLat) {
       try {
-        const marker = new tt.Marker({ color: '#0F4C75' })
-          .setLngLat(customerLngLat)
-          .addTo(map);
+        const marker = tomTomCall('Marker.constructor(customer)', () => new tt.Marker({ color: '#0F4C75' }));
+        tomTomCall('setLngLat(customer)', () => marker.setLngLat(customerLngLat));
+        tomTomCall('marker.addTo(customer)', () => marker.addTo(map));
         markersRef.current.push(marker);
       } catch (error) {
         console.warn('[TRACKING MAP] Customer marker error:', error);
@@ -200,9 +329,9 @@ export default function TrackingMap({
 
     if (handymanLngLat) {
       try {
-        const marker = new tt.Marker({ color: '#28A745' })
-          .setLngLat(handymanLngLat)
-          .addTo(map);
+        const marker = tomTomCall('Marker.constructor(handyman)', () => new tt.Marker({ color: '#28A745' }));
+        tomTomCall('setLngLat(handyman)', () => marker.setLngLat(handymanLngLat));
+        tomTomCall('marker.addTo(handyman)', () => marker.addTo(map));
         markersRef.current.push(marker);
       } catch (error) {
         console.warn('[TRACKING MAP] Handyman marker error:', error);
@@ -233,41 +362,56 @@ export default function TrackingMap({
       removeLayerAndSource(map, 'temp-route-layer', 'temp-route-source');
     }
 
-    const points = [handymanLngLat, customerLngLat].filter(Boolean);
+    const points = [handymanLngLat, customerLngLat].filter(isFiniteLngLat);
     if (points.length === 0) return;
 
-    try {
-      if (points.length === 1) {
-        map.setCenter(points[0]);
-        map.setZoom(15);
-        return;
+    const runCamera = () => {
+      if (!isMapAlive(map, gen)) return;
+
+      try {
+        if (points.length === 1) {
+          tomTomCall('setCenter', () => map.setCenter(points[0]));
+          tomTomCall('setZoom', () => map.setZoom(15));
+          return;
+        }
+
+        const directM = getDirectDistanceMeters(handymanLocation, customerLocation);
+        if (directM < 80) {
+          const centerLng = (points[0][0] + points[1][0]) / 2;
+          const centerLat = (points[0][1] + points[1][1]) / 2;
+          if (Number.isFinite(centerLng) && Number.isFinite(centerLat)) {
+            tomTomCall('setCenter', () => map.setCenter([centerLng, centerLat]));
+            tomTomCall('setZoom', () => map.setZoom(16));
+          }
+          return;
+        }
+
+        const bounds = tomTomCall('LngLatBounds.constructor', () => new tt.LngLatBounds());
+        points.forEach((p) => {
+          tomTomCall('bounds.extend', () => bounds.extend(p));
+        });
+        tomTomCall('fitBounds', () => map.fitBounds(bounds, { padding: 80, maxZoom: 17 }));
+      } catch (error) {
+        console.warn('[TRACKING MAP] Camera update failed:', error);
       }
 
-      const directM = getDirectDistanceMeters(handymanLocation, customerLocation);
-      if (directM < 80) {
-        const centerLng = (points[0][0] + points[1][0]) / 2;
-        const centerLat = (points[0][1] + points[1][1]) / 2;
-        if (Number.isFinite(centerLng) && Number.isFinite(centerLat)) {
-          map.setCenter([centerLng, centerLat]);
-          map.setZoom(16);
-        }
-        return;
+      try {
+        tomTomCall('resize', () => map.resize());
+      } catch (e) {
+        /* logged */
       }
+    };
 
-      const bounds = new tt.LngLatBounds();
-      points.forEach((p) => {
-        if (Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])) {
-          bounds.extend(p);
-        }
-      });
-      map.fitBounds(bounds, { padding: 80, maxZoom: 17 });
-    } catch (error) {
-      console.warn('[TRACKING MAP] Camera update failed:', error);
+    if (map.loaded()) {
+      runCamera();
+    } else {
+      const onStyleLoad = () => {
+        if (!isMapAlive(map, gen)) return;
+        map.off('load', onStyleLoad);
+        runCamera();
+      };
+      map.on('load', onStyleLoad);
     }
-
-    try {
-      map.resize();
-    } catch (e) {}
   }, [
     mapReady,
     handymanLngLat?.[0],
@@ -295,8 +439,11 @@ export default function TrackingMap({
   }
 
   return (
-    <div className={`relative ${className}`} style={{ width: '100%', height: '100%', minHeight: '300px' }}>
-      <div ref={mapRef} className="absolute inset-0" />
+    <div
+      className={`relative min-h-0 ${className}`}
+      style={{ width: '100%', height: '100%', minHeight: '300px' }}
+    >
+      <div ref={mapRef} className="absolute inset-0 h-full w-full" style={{ minHeight: '300px' }} />
 
       {!hasAnyLocation && (
         <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center bg-neutral/80 text-center p-6">

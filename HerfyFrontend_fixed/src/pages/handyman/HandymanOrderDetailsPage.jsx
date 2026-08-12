@@ -174,6 +174,12 @@ export default function HandymanOrderDetailsPage() {
 
     lastSentRef.current = now;
     pendingLocationRef.current = null;
+    console.log('[HANDYMAN GPS SEND]', {
+      socketId: socket?.id,
+      orderId: id,
+      lat,
+      lng,
+    });
     devLog('[SOCKET SEND] sendLocation', payload);
     socket.emit('sendLocation', payload);
   };
