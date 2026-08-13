@@ -214,13 +214,16 @@ const replayCustomerLocationToSocket = (socket, roomStr) => {
 };
 
 /** Broadcast handyman lat/lng to everyone in the order room */
-const broadcastLocationUpdate = async (io, roomStr, payload) => {
-  const members = await logRoomMembers(io, roomStr, 'HANDYMAN ROOM MEMBERS');
+const broadcastLocationUpdate = async (io, roomStr, payload, source = 'unknown') => {
+  const members = await logRoomMembers(io, roomStr, 'HANDYMAN ROOM MEMBERS (pre-broadcast)');
   console.log('[SOCKET AUDIT][HANDYMAN LOCATION BROADCAST]', {
+    orderId: roomStr,
     room: roomStr,
+    source,
     event: 'locationUpdate',
     payload,
-    targetSockets: members.map((m) => m.socketId),
+    roomMembers: members,
+    targetSocketIds: members.map((m) => m.socketId),
   });
   io.to(roomStr).emit('locationUpdate', payload);
 };
@@ -419,8 +422,13 @@ const liveTrackingSocket = (io) => {
             return socket.emit('error', { msg: 'Invalid order id' });
         }
 
+        const roomStr = toOrderRoomId(orderId);
+        // Join immediately so broadcasts are not missed during async order/auth work
+        socket.join(roomStr);
+
         const order = await Order.findById(orderId);
         if (!order) {
+          socket.leave(roomStr);
           console.warn(`⚠️ [Backend Socket Audit] joinOrderRoom order not found: ${orderId}`);
           socket.emit('joinOrderRoomAck', { orderId, success: false, reason: 'order_not_found' });
           return;
@@ -432,6 +440,7 @@ const liveTrackingSocket = (io) => {
           (order.customerId.toString() === userId || order.handymanId.toString() === userId);
 
         if (!allowed) {
+          socket.leave(roomStr);
           console.warn(`⚠️ [Backend Socket Audit] joinOrderRoom unauthorized user: ${userId}`);
           socket.emit('joinOrderRoomAck', {
             orderId,
@@ -442,7 +451,6 @@ const liveTrackingSocket = (io) => {
           return;
         }
 
-        const roomStr = toOrderRoomId(orderId);
         const role =
           userId === order.customerId.toString()
             ? 'customer'
@@ -456,8 +464,6 @@ const liveTrackingSocket = (io) => {
           roomStr,
           role,
         });
-
-        socket.join(roomStr);
         if (!socket.data.trackingRooms) {
           socket.data.trackingRooms = new Map();
         }
@@ -519,6 +525,10 @@ const liveTrackingSocket = (io) => {
           return socket.emit('error', { msg: 'Invalid customer location data' });
         }
 
+        const roomStr = toOrderRoomId(orderId);
+        // Join immediately — customer may emit before joinOrderRoom ack completes
+        socket.join(roomStr);
+
         const order = await Order.findById(orderId);
         if (!order) {
           console.warn('📍 [BACKEND] sendCustomerLocation — order not found:', orderId);
@@ -532,7 +542,6 @@ const liveTrackingSocket = (io) => {
           return;
         }
 
-        const roomStr = toOrderRoomId(orderId);
         if (arrivedOrders.has(roomStr)) {
           console.log('[SOCKET AUDIT][BACKEND BLOCKED] sendCustomerLocation — order already arrived:', roomStr);
           return;
@@ -546,8 +555,6 @@ const liveTrackingSocket = (io) => {
           lng: numLng,
         });
 
-        // Ensure customer socket is in the room (TrackingPage may emit before joinOrderRoom)
-        socket.join(roomStr);
         await logRoomMembers(io, roomStr, 'CUSTOMER ROOM MEMBERS (after customer join on send)');
 
         const customerPoint = { lat: numLat, lng: numLng };
@@ -573,7 +580,7 @@ const liveTrackingSocket = (io) => {
             lng: handymanPoint.lng,
             ...buildCustomerFields(customerDest, handymanPoint),
           };
-          await broadcastLocationUpdate(io, roomStr, baseUpdate);
+          await broadcastLocationUpdate(io, roomStr, baseUpdate, 'sendCustomerLocation');
 
           if (checkAndEmitArrival(io, roomStr, order, handymanPoint, customerPoint, 'sendCustomerLocation', {
             handymanEntry: handymanPoint,
@@ -598,7 +605,7 @@ const liveTrackingSocket = (io) => {
               ...buildCustomerFields(customerDest, handymanPoint),
               ...routePayload,
             };
-            await broadcastLocationUpdate(io, roomStr, updateData);
+            await broadcastLocationUpdate(io, roomStr, updateData, 'sendCustomerLocation-route');
             console.log('📍 [BACKEND] Sending route-enriched locationUpdate | orderId =', roomStr);
             console.log('  customerLat =', updateData.customerLat, '| customerLng =', updateData.customerLng);
             console.log('  distanceRemaining =', updateData.distanceRemaining ?? 'N/A');
@@ -643,6 +650,8 @@ const liveTrackingSocket = (io) => {
         }
 
         const roomStr = toOrderRoomId(orderId);
+        // Join immediately so room membership exists before async order/auth work
+        socket.join(roomStr);
 
         // If handyman already arrived for this order, ignore further location updates.
         if (arrivedOrders.has(roomStr)) {
@@ -668,8 +677,6 @@ const liveTrackingSocket = (io) => {
             return socket.emit('error', { msg: 'Order status does not allow location updates' });
         }
 
-        // Ensure handyman socket is in the order room
-        socket.join(roomStr);
         await logRoomMembers(io, roomStr, 'HANDYMAN ROOM MEMBERS (after handyman join on send)');
 
         const origin = { lat: numLat, lng: numLng };
@@ -692,7 +699,7 @@ const liveTrackingSocket = (io) => {
           lng: numLng,
           ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
         };
-        await broadcastLocationUpdate(io, roomStr, baseHandymanUpdate);
+        await broadcastLocationUpdate(io, roomStr, baseHandymanUpdate, 'sendLocation');
 
         if (customerDest && checkAndEmitArrival(io, roomStr, order, origin, customerDest, 'sendLocation')) {
           return;
@@ -785,7 +792,7 @@ const liveTrackingSocket = (io) => {
 
         // Route-enriched update (base lat/lng already broadcast above)
         if (Object.keys(routePayload).length > 0) {
-          await broadcastLocationUpdate(io, roomStr, updateData);
+          await broadcastLocationUpdate(io, roomStr, updateData, 'sendLocation-route');
         }
         socket.emit('locationSent', { success: true, data: updateData });
 

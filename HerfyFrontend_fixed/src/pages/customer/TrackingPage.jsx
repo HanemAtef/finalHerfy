@@ -109,6 +109,8 @@ export default function TrackingPage() {
   const isCustomerJoinedRef = useRef(false);
   const emitCustomerLocationRef = useRef(() => {});
   const lastCustomerEmitRef = useRef({ lat: null, lng: null, ts: 0 });
+  const locationUpdateListenerRef = useRef(null);
+  const locationUpdateHandlerRef = useRef(null);
 
   const canSendCustomerGps = (order) =>
     order &&
@@ -210,6 +212,9 @@ export default function TrackingPage() {
         return;
       }
 
+      // Ensure room membership before every customer GPS emit (idempotent join)
+      socket.emit('joinOrderRoom', orderId);
+
       lastCustomerEmitRef.current = {
         lat: loc.latitude,
         lng: loc.longitude,
@@ -232,10 +237,16 @@ export default function TrackingPage() {
     emitCustomerLocationRef.current = emitCustomerLocation;
 
     const onLocationUpdate = (payload) => {
+      const numLat = Number(payload?.lat);
+      const numLng = Number(payload?.lng);
       console.log('[SOCKET AUDIT][CUSTOMER HANDYMAN LOCATION RECEIVED]', {
         socketId: socket.id,
+        socketInstanceId: getSocketInstanceId(),
         orderId,
+        room: String(orderId),
         payload,
+        lat: numLat,
+        lng: numLng,
       });
       console.log('[FRONTEND HANDYMAN LOCATION RECEIVED]', {
         event: 'locationUpdate',
@@ -255,8 +266,6 @@ export default function TrackingPage() {
 
       console.log('[CUSTOMER] locationUpdate | handyman =', { lat, lng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
 
-      const numLat = Number(lat);
-      const numLng = Number(lng);
       if (Number.isFinite(numLat) && Number.isFinite(numLng) && isValidGpsCoord(numLat, numLng)) {
         const handy = { latitude: numLat, longitude: numLng };
         console.log('[HANDYMAN LOCATION STATE UPDATE]', {
@@ -265,6 +274,8 @@ export default function TrackingPage() {
         });
         handymanLocRef.current = handy;
         setHandymanLoc(handy);
+      } else {
+        console.warn('[CUSTOMER] locationUpdate ignored — invalid handyman lat/lng', { lat, lng, numLat, numLng });
       }
 
       const payloadDest = normalizeGpsLocation(payload?.customerLat, payload?.customerLng);
@@ -417,12 +428,25 @@ export default function TrackingPage() {
       socket.emit('joinOrderRoom', orderId);
     };
 
+    locationUpdateHandlerRef.current = onLocationUpdate;
+
+    const bindLocationUpdateListener = () => {
+      if (!locationUpdateListenerRef.current) {
+        locationUpdateListenerRef.current = (payload) => {
+          locationUpdateHandlerRef.current?.(payload);
+        };
+      }
+      socket.off('locationUpdate', locationUpdateListenerRef.current);
+      socket.on('locationUpdate', locationUpdateListenerRef.current);
+    };
+
     const onConnect = () => {
       isCustomerJoinedRef.current = false;
       console.log('[SOCKET AUDIT] customer joining room =', String(orderId), {
         socketInstanceId: getSocketInstanceId(),
         socketId: socket.id,
       });
+      bindLocationUpdateListener();
       emitJoin();
       emitCustomerLocation({ force: true });
     };
@@ -441,7 +465,7 @@ export default function TrackingPage() {
       orderId,
       listenerBeforeJoin: true,
     });
-    socket.on('locationUpdate', onLocationUpdate);
+    bindLocationUpdateListener();
     socket.on('handymanArrived', onHandymanArrived);
     socket.on('trackingStarted', onTrackingStarted);
     socket.on('joinOrderRoomAck', onJoinOrderRoomAck);
@@ -470,7 +494,9 @@ export default function TrackingPage() {
       socket.emit('leaveOrderRoom', orderId);
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
-      socket.off('locationUpdate', onLocationUpdate);
+      if (locationUpdateListenerRef.current) {
+        socket.off('locationUpdate', locationUpdateListenerRef.current);
+      }
       socket.off('handymanArrived', onHandymanArrived);
       socket.off('trackingStarted', onTrackingStarted);
       socket.off('joinOrderRoomAck', onJoinOrderRoomAck);
