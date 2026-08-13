@@ -108,6 +108,7 @@ const upsertLineLayer = (map, sourceId, layerId, coordinates, color, opacity = 0
 export default function TrackingMap({
   customerLocation,
   handymanLocation,
+  routeDestination = null,
   routeGeometry,
   routeCalcTimestamp = null,
   routeLoading = false,
@@ -116,7 +117,10 @@ export default function TrackingMap({
 }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
-  const markersRef = useRef([]);
+  const customerMarkerRef = useRef(null);
+  const handymanMarkerRef = useRef(null);
+  const hasFittedBothRef = useRef(false);
+  const lastCustomerLngLatRef = useRef(null);
   const mapGenRef = useRef(0);
   const readyGenRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
@@ -130,6 +134,8 @@ export default function TrackingMap({
     customerLocation?.longitude,
   ]);
 
+  const routeDestLocation = routeDestination ?? customerLocation;
+
   const sanitizedRoute = useMemo(
     () => sanitizeRouteCoords(routeGeometry),
     [routeGeometry]
@@ -139,7 +145,7 @@ export default function TrackingMap({
     sanitizedRoute.length >= 2 &&
     handymanLngLat &&
     customerLngLat &&
-    isGeometryConsistent(sanitizedRoute, handymanLocation, customerLocation);
+    isGeometryConsistent(sanitizedRoute, handymanLocation, routeDestLocation);
 
   const showRouteLoading =
     routeLoading &&
@@ -159,8 +165,6 @@ export default function TrackingMap({
   const primaryCenter = handymanLngLat || customerLngLat;
   const mapZoom = safeZoom(zoom, 13);
 
-  console.log('[TRACKING MAP] customerLocation', customerLocation);
-  console.log('[TRACKING MAP] handymanLocation', handymanLocation);
   console.log('[TRACKING MAP] rendering', {
     customerLngLat,
     handymanLngLat,
@@ -284,14 +288,49 @@ export default function TrackingMap({
         mapInstance.current = null;
       }
 
-      markersRef.current.forEach((m) => {
-        try {
-          m.remove();
-        } catch (e) {}
-      });
-      markersRef.current = [];
+      try {
+        customerMarkerRef.current?.remove();
+      } catch (e) {}
+      try {
+        handymanMarkerRef.current?.remove();
+      } catch (e) {}
+      customerMarkerRef.current = null;
+      handymanMarkerRef.current = null;
+      hasFittedBothRef.current = false;
+      lastCustomerLngLatRef.current = null;
     };
   }, []);
+
+  const upsertMarker = (markerRef, lngLat, color, label) => {
+    const map = mapInstance.current;
+    if (!map || !isFiniteLngLat(lngLat)) {
+      if (markerRef.current) {
+        try {
+          markerRef.current.remove();
+        } catch (e) {}
+        markerRef.current = null;
+      }
+      return;
+    }
+
+    if (markerRef.current) {
+      try {
+        tomTomCall(`setLngLat(${label})`, () => markerRef.current.setLngLat(lngLat));
+      } catch (error) {
+        console.warn(`[TRACKING MAP] ${label} marker update error:`, error);
+      }
+      return;
+    }
+
+    try {
+      const marker = tomTomCall(`Marker.constructor(${label})`, () => new tt.Marker({ color }));
+      tomTomCall(`setLngLat(${label})`, () => marker.setLngLat(lngLat));
+      tomTomCall(`marker.addTo(${label})`, () => marker.addTo(map));
+      markerRef.current = marker;
+    } catch (error) {
+      console.warn(`[TRACKING MAP] ${label} marker error:`, error);
+    }
+  };
 
   // Markers + routes + camera — only on live, loaded map instance
   useEffect(() => {
@@ -309,34 +348,8 @@ export default function TrackingMap({
 
     logContainerSize(mapRef, '(markers effect)');
 
-    markersRef.current.forEach((m) => {
-      try {
-        m.remove();
-      } catch (e) {}
-    });
-    markersRef.current = [];
-
-    if (customerLngLat) {
-      try {
-        const marker = tomTomCall('Marker.constructor(customer)', () => new tt.Marker({ color: '#0F4C75' }));
-        tomTomCall('setLngLat(customer)', () => marker.setLngLat(customerLngLat));
-        tomTomCall('marker.addTo(customer)', () => marker.addTo(map));
-        markersRef.current.push(marker);
-      } catch (error) {
-        console.warn('[TRACKING MAP] Customer marker error:', error);
-      }
-    }
-
-    if (handymanLngLat) {
-      try {
-        const marker = tomTomCall('Marker.constructor(handyman)', () => new tt.Marker({ color: '#28A745' }));
-        tomTomCall('setLngLat(handyman)', () => marker.setLngLat(handymanLngLat));
-        tomTomCall('marker.addTo(handyman)', () => marker.addTo(map));
-        markersRef.current.push(marker);
-      } catch (error) {
-        console.warn('[TRACKING MAP] Handyman marker error:', error);
-      }
-    }
+    upsertMarker(customerMarkerRef, customerLngLat, '#0F4C75', 'customer');
+    upsertMarker(handymanMarkerRef, handymanLngLat, '#28A745', 'handyman');
 
     if (geometryValid) {
       removeLayerAndSource(map, 'temp-route-layer', 'temp-route-source');
@@ -365,13 +378,24 @@ export default function TrackingMap({
     const points = [handymanLngLat, customerLngLat].filter(isFiniteLngLat);
     if (points.length === 0) return;
 
+    const customerChanged =
+      customerLngLat &&
+      (lastCustomerLngLatRef.current?.[0] !== customerLngLat[0] ||
+        lastCustomerLngLatRef.current?.[1] !== customerLngLat[1]);
+
     const runCamera = () => {
       if (!isMapAlive(map, gen)) return;
 
       try {
         if (points.length === 1) {
-          tomTomCall('setCenter', () => map.setCenter(points[0]));
-          tomTomCall('setZoom', () => map.setZoom(15));
+          if (!hasFittedBothRef.current) {
+            tomTomCall('setCenter', () => map.setCenter(points[0]));
+            tomTomCall('setZoom', () => map.setZoom(15));
+          }
+          return;
+        }
+
+        if (hasFittedBothRef.current && !customerChanged) {
           return;
         }
 
@@ -383,6 +407,8 @@ export default function TrackingMap({
             tomTomCall('setCenter', () => map.setCenter([centerLng, centerLat]));
             tomTomCall('setZoom', () => map.setZoom(16));
           }
+          hasFittedBothRef.current = true;
+          lastCustomerLngLatRef.current = customerLngLat;
           return;
         }
 
@@ -391,6 +417,8 @@ export default function TrackingMap({
           tomTomCall('bounds.extend', () => bounds.extend(p));
         });
         tomTomCall('fitBounds', () => map.fitBounds(bounds, { padding: 80, maxZoom: 17 }));
+        hasFittedBothRef.current = true;
+        lastCustomerLngLatRef.current = customerLngLat;
       } catch (error) {
         console.warn('[TRACKING MAP] Camera update failed:', error);
       }
@@ -425,6 +453,7 @@ export default function TrackingMap({
     routeCalcTimestamp,
     handymanLocation,
     customerLocation,
+    routeDestination,
   ]);
 
   if (!import.meta.env.VITE_TOMTOM_API_KEY) {

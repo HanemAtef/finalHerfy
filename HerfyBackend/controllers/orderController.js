@@ -429,17 +429,6 @@ const updateOrderStatus = async (req, res) => {
         { orderId: order._id, handymanName: req.user.name }
       );
 
-      try {
-        io.to(id).emit('trackingStarted', {
-          orderId: id,
-          handymanName: req.user.name,
-          message: 'Handyman is on the way!',
-        });
-        console.log(`Tracking started event sent for order ${id}`);
-      } catch (error) {
-        console.log('Socket.io error:', error.message);
-      }
-
       if (isHandyman && typeof handymanProfile !== 'undefined' && handymanProfile) {
         handymanProfile.acceptedOffers += 1;
         if (handymanProfile.totalOffers > 0) {

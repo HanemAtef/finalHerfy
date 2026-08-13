@@ -4,12 +4,14 @@ const request = require('supertest');
 const app = require('../app');
 const User = require('../models/User');
 const Handyman = require('../models/Handyman');
+const { syncTestIndexes } = require('./helpers/syncTestIndexes');
 
 let mongoServer;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
+  await syncTestIndexes();
 });
 
 afterAll(async () => {

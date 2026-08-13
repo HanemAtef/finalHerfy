@@ -3,7 +3,7 @@ import { isValidGpsCoord } from '../utils/routeValidation';
 
 const CAIRO_FALLBACK = { latitude: 30.0444, longitude: 31.2357 };
 
-const GPS_WATCH_OPTIONS = { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 };
+const GPS_WATCH_OPTIONS = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
 const GPS_INIT_OPTIONS = { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 };
 
 /**
