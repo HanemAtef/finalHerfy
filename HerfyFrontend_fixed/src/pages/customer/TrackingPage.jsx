@@ -107,7 +107,10 @@ export default function TrackingPage() {
   const routeDestinationRef = useRef(null);
   const currentOrderRef = useRef(null);
   const isCustomerJoinedRef = useRef(false);
+  const customerJoinPendingRef = useRef(false);
+  const customerJoinSocketIdRef = useRef(null);
   const emitCustomerLocationRef = useRef(() => {});
+  const emitJoinOnceRef = useRef(() => {});
   const lastCustomerEmitRef = useRef({ lat: null, lng: null, ts: 0 });
   const locationUpdateListenerRef = useRef(null);
   const locationUpdateHandlerRef = useRef(null);
@@ -212,8 +215,15 @@ export default function TrackingPage() {
         return;
       }
 
-      // Ensure room membership before every customer GPS emit (idempotent join)
-      socket.emit('joinOrderRoom', orderId);
+      if (!isCustomerJoinedRef.current) {
+        pendingCustomerLocationRef.current = loc;
+        console.log('[SOCKET AUDIT][CUSTOMER SEND] blocked — awaiting joinOrderRoomAck', {
+          socketId: socket.id,
+          orderId,
+        });
+        emitJoinOnceRef.current();
+        return;
+      }
 
       lastCustomerEmitRef.current = {
         lat: loc.latitude,
@@ -247,6 +257,7 @@ export default function TrackingPage() {
         payload,
         lat: numLat,
         lng: numLng,
+        replay: payload?.replay ?? false,
       });
       console.log('[FRONTEND HANDYMAN LOCATION RECEIVED]', {
         event: 'locationUpdate',
@@ -403,22 +414,44 @@ export default function TrackingPage() {
     };
 
     const onJoinOrderRoomAck = (ack) => {
-      console.log('[SOCKET AUDIT][CUSTOMER joinOrderRoom ACK]', {
+      customerJoinPendingRef.current = false;
+      console.log('[SOCKET AUDIT][CUSTOMER JOIN ACK]', {
         socketInstanceId: getSocketInstanceId(),
         socketId: socket.id,
+        orderId,
         ack,
       });
       if (ack?.success) {
         isCustomerJoinedRef.current = true;
-        console.log('[SOCKET AUDIT] CUSTOMER joined order room — emitting live GPS');
+        customerJoinSocketIdRef.current = socket.id;
+        console.log('[SOCKET AUDIT] CUSTOMER joined order room — emitting live GPS', {
+          socketId: socket.id,
+          orderId,
+        });
         emitCustomerLocation({ force: true });
       } else {
         isCustomerJoinedRef.current = false;
+        customerJoinSocketIdRef.current = null;
       }
     };
 
-    const emitJoin = () => {
-      isCustomerJoinedRef.current = false;
+    const emitJoinOnce = () => {
+      if (isCustomerJoinedRef.current && customerJoinSocketIdRef.current === socket.id) {
+        console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom SKIPPED — already joined', {
+          socketId: socket.id,
+          orderId,
+        });
+        return;
+      }
+      if (customerJoinPendingRef.current && customerJoinSocketIdRef.current === socket.id) {
+        console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom SKIPPED — join pending', {
+          socketId: socket.id,
+          orderId,
+        });
+        return;
+      }
+      customerJoinPendingRef.current = true;
+      customerJoinSocketIdRef.current = socket.id;
       console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom EMIT', {
         socketInstanceId: getSocketInstanceId(),
         socketId: socket.id,
@@ -427,6 +460,8 @@ export default function TrackingPage() {
       });
       socket.emit('joinOrderRoom', orderId);
     };
+
+    emitJoinOnceRef.current = emitJoinOnce;
 
     locationUpdateHandlerRef.current = onLocationUpdate;
 
@@ -442,13 +477,19 @@ export default function TrackingPage() {
 
     const onConnect = () => {
       isCustomerJoinedRef.current = false;
-      console.log('[SOCKET AUDIT] customer joining room =', String(orderId), {
+      customerJoinPendingRef.current = false;
+      customerJoinSocketIdRef.current = socket.id;
+      console.log('[SOCKET AUDIT] customer socket connected — prepare join', {
         socketInstanceId: getSocketInstanceId(),
         socketId: socket.id,
+        orderId,
       });
       bindLocationUpdateListener();
-      emitJoin();
-      emitCustomerLocation({ force: true });
+      console.log('[SOCKET AUDIT][CUSTOMER LOCATION LISTENER READY]', {
+        socketId: socket.id,
+        orderId,
+      });
+      emitJoinOnce();
     };
 
     const onDisconnect = () => {
@@ -457,15 +498,21 @@ export default function TrackingPage() {
         socketId: socket.id,
       });
       isCustomerJoinedRef.current = false;
+      customerJoinPendingRef.current = false;
+      customerJoinSocketIdRef.current = null;
     };
 
+    bindLocationUpdateListener();
+    console.log('[SOCKET AUDIT][CUSTOMER LOCATION LISTENER READY]', {
+      socketId: socket.id,
+      orderId,
+    });
     console.log('[SOCKET AUDIT] CUSTOMER locationUpdate LISTENER REGISTERED', {
       socketInstanceId: getSocketInstanceId(),
       socketId: socket.id,
       orderId,
       listenerBeforeJoin: true,
     });
-    bindLocationUpdateListener();
     socket.on('handymanArrived', onHandymanArrived);
     socket.on('trackingStarted', onTrackingStarted);
     socket.on('joinOrderRoomAck', onJoinOrderRoomAck);
@@ -488,8 +535,11 @@ export default function TrackingPage() {
     return () => {
       clearInterval(heartbeatId);
       emitCustomerLocationRef.current = () => {};
+      emitJoinOnceRef.current = () => {};
       console.log('[SOCKET AUDIT] CUSTOMER locationUpdate LISTENER REMOVED', { orderId });
       isCustomerJoinedRef.current = false;
+      customerJoinPendingRef.current = false;
+      customerJoinSocketIdRef.current = null;
       customerSocketRef.current = null;
       socket.emit('leaveOrderRoom', orderId);
       socket.off('connect', onConnect);
@@ -503,7 +553,7 @@ export default function TrackingPage() {
     };
   }, [orderId, token, trackingSocketKey]);
 
-  // Re-join + re-emit when handyman starts heading over (no socket effect teardown)
+  // Re-join once when handyman starts heading over (no socket effect teardown)
   useEffect(() => {
     if (!orderId || !token || !currentOrder) return;
     if (!currentOrder.isHandymanOnTheWay && currentOrder.status !== 'in-progress') return;
@@ -512,15 +562,20 @@ export default function TrackingPage() {
     const socket = customerSocketRef.current ?? connectSocket(token);
     if (!socket.connected) return;
 
-    console.log('[SOCKET AUDIT] CUSTOMER live tracking started — re-join + emit GPS', {
+    console.log('[SOCKET AUDIT] CUSTOMER live tracking started', {
       orderId,
       socketId: socket.id,
       isHandymanOnTheWay: currentOrder.isHandymanOnTheWay,
       status: currentOrder.status,
+      isCustomerJoined: isCustomerJoinedRef.current,
     });
-    isCustomerJoinedRef.current = false;
-    socket.emit('joinOrderRoom', orderId);
-    emitCustomerLocationRef.current();
+
+    if (isCustomerJoinedRef.current && customerJoinSocketIdRef.current === socket.id) {
+      emitCustomerLocationRef.current();
+      return;
+    }
+
+    emitJoinOnceRef.current();
   }, [
     orderId,
     token,

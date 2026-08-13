@@ -228,18 +228,54 @@ const broadcastLocationUpdate = async (io, roomStr, payload, source = 'unknown')
   io.to(roomStr).emit('locationUpdate', payload);
 };
 
+/** Returns whether a socket is currently in an order room */
+const verifySocketInRoom = async (io, socket, roomStr) => {
+  const sockets = await io.in(roomStr).fetchSockets();
+  const members = sockets.map((s) => ({
+    socketId: s.id,
+    userId: s.user?._id?.toString?.() ?? s.data?.userId ?? 'unknown',
+    role: s.data?.trackingRooms?.get?.(roomStr) ?? s.data?.lastTrackingRole ?? 'unknown',
+  }));
+  return {
+    actuallyInRoom: members.some((m) => m.socketId === socket.id),
+    roomMembers: members,
+  };
+};
+
 /** Replay last known handyman GPS to a socket that joined late (e.g. customer) */
 const replayHandymanLocationToSocket = (socket, roomStr, order) => {
   const stored = lastHandymanLocations.get(roomStr);
-  if (!stored) return;
+  if (!stored) {
+    console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — no stored handyman GPS', {
+      socketId: socket.id,
+      orderId: roomStr,
+      roomStr,
+    });
+    return;
+  }
   if (!isGpsEntryFresh(stored)) {
-    console.log('[REPLAY] Skipping stale handyman GPS | orderId =', roomStr, '| ageMs =', Date.now() - (stored.updatedAt ?? 0));
+    console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — stale handyman GPS', {
+      socketId: socket.id,
+      orderId: roomStr,
+      roomStr,
+      ageMs: Date.now() - (stored.updatedAt ?? 0),
+      storedHandymanLocation: stored,
+    });
     return;
   }
 
   const lat = Number(stored.lat);
   const lng = Number(stored.lng);
-  if (!isValidHandymanGps(lat, lng)) return;
+  if (!isValidHandymanGps(lat, lng)) {
+    console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — invalid stored coords', {
+      socketId: socket.id,
+      orderId: roomStr,
+      roomStr,
+      lat,
+      lng,
+    });
+    return;
+  }
 
   const origin = { lat, lng };
   const customerDest = order ? resolveCustomerDestination(order, roomStr) : null;
@@ -252,10 +288,16 @@ const replayHandymanLocationToSocket = (socket, roomStr, order) => {
   };
 
   console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY]', {
+    socketId: socket.id,
+    orderId: roomStr,
+    roomStr,
+    replay: true,
+    lat,
+    lng,
     targetSocketId: socket.id,
-    room: roomStr,
     payload,
   });
+  // Direct emit to joining socket — do NOT rely on room broadcast for replay
   socket.emit('locationUpdate', payload);
   console.log('📤 [BACKEND] Replayed stored handyman location to socket', socket.id, '| orderId =', roomStr);
 };
@@ -472,6 +514,15 @@ const liveTrackingSocket = (io) => {
 
         await logRoomMembers(io, roomStr, 'ROOM MEMBERS AFTER JOIN');
 
+        const storedHandyman = lastHandymanLocations.get(roomStr) ?? null;
+        console.log('[SOCKET AUDIT][JOIN REPLAY START]', {
+          socketId: socket.id,
+          orderId,
+          roomStr,
+          hasStoredHandymanLocation: storedHandyman != null,
+          storedHandymanLocation: storedHandyman,
+        });
+
         socket.emit('joinOrderRoomAck', {
           orderId,
           roomStr,
@@ -479,9 +530,17 @@ const liveTrackingSocket = (io) => {
           success: true,
         });
 
-        // Replay last known live GPS to late joiners.
+        // Replay last known live GPS directly to this socket (late joiner).
         replayCustomerLocationToSocket(socket, roomStr);
         replayHandymanLocationToSocket(socket, roomStr, order);
+
+        const roomVerified = await verifySocketInRoom(io, socket, roomStr);
+        console.log('[SOCKET AUDIT][JOIN ROOM VERIFIED]', {
+          socketId: socket.id,
+          roomStr,
+          actuallyInRoom: roomVerified.actuallyInRoom,
+          roomMembers: roomVerified.roomMembers,
+        });
 
         await logRoomMembers(io, roomStr, 'ROOM MEMBERS AFTER REPLAY');
 
