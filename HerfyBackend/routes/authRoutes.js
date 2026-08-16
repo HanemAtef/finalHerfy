@@ -3,6 +3,8 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const path = require("path");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 
 const validate = require("../middlewares/validationMiddleware");
 const registerSchema = require("../validations/registerValidationSchema");
@@ -32,14 +34,12 @@ const changePasswordSchema = require("../validations/changePasswordSchema");
 // =====================================================
 
 // Ø¥Ø¹Ø¯Ø§Ø¯ ØªØ®Ø²ÙŠÙ† Ø§Ù„Ù…Ù„ÙØ§Øª
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/');
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: (req, file) => ({
+    folder: 'herfy/handyman-docs',
+    resource_type: 'auto', // supports images and PDFs (nationalId/certificate)
+  }),
 });
 
 // ÙÙ„ØªØ±Ø© Ø§Ù„Ù…Ù„ÙØ§Øª Ø§Ù„Ù…Ø³Ù…ÙˆØ­Ø©
