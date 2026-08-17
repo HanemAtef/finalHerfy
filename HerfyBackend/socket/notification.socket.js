@@ -5,9 +5,7 @@ const notificationSocket = (io) => {
     console.log(' Notification socket connected:', socket.id);
 
     // ========== 1. Join User Room ==========
-    // SECURITY FIX (H3): previously joined whatever room a client-supplied
-    // userId named. Now always joins the authenticated caller's own room,
-    // ignoring any userId argument the client might pass.
+
     socket.on('join-user-room', () => {
       const userId = socket.user?._id?.toString();
       if (userId) {
@@ -26,9 +24,7 @@ const notificationSocket = (io) => {
     });
 
     // ========== 3. Mark Notification as Read ==========
-    // SECURITY FIX (H3): only allow marking a notification read if it
-    // actually belongs to the authenticated caller — previously any
-    // authenticated socket could mark/read any notification by ID.
+
     socket.on('mark-notification-read', async (notificationId) => {
       try {
         const userId = socket.user?._id?.toString();
@@ -49,9 +45,7 @@ const notificationSocket = (io) => {
     });
 
     // ========== 4. Mark All Notifications as Read ==========
-    // SECURITY FIX (H3): always operates on the authenticated caller's own
-    // notifications now — previously trusted a client-supplied userId,
-    // letting an attacker silently mark another user's notifications read.
+
     socket.on('mark-all-notifications-read', async () => {
       try {
         const userId = socket.user?._id?.toString();
@@ -69,8 +63,7 @@ const notificationSocket = (io) => {
     });
 
     // ========== 5. Get Unread Count ==========
-    // SECURITY FIX (H3): always counts the authenticated caller's own
-    // notifications — previously trusted a client-supplied userId.
+  
     socket.on('get-unread-count', async () => {
       try {
         const userId = socket.user?._id?.toString();

@@ -15,11 +15,7 @@ const registerChatSocket = (io) => {
 
     io.on("connection", (socket) => {
 
-        // console.log(`${socket.user.name} Connected`);
-        // Message delivery must not depend on a page-specific order room.
-        // A user can reconnect while the chat page is open, which drops that
-        // room membership. Every authenticated socket instead has a stable
-        // user room for direct delivery to either party in an order.
+  
         socket.join(`user_${socket.user._id.toString()}`);
 
         socket.on("joinRoom", async (orderId, acknowledge) => {
@@ -40,9 +36,7 @@ const registerChatSocket = (io) => {
             }
         });
 
-        // `type`/`mediaUrl` let the same event carry text, image, or audio
-        // messages — the client uploads media via /api/uploads first, then
-        // emits this with the returned URL.
+  
         socket.on("sendMessage", async (payload = {}) => {
 
             try {
@@ -106,8 +100,7 @@ const registerChatSocket = (io) => {
 
         });
 
-        // Sender deletes their own message — broadcast the soft-deleted
-        // version so both clients update in place.
+
         socket.on("deleteMessage", async (messageId) => {
             try {
                 if (!isValidId(messageId)) return;
