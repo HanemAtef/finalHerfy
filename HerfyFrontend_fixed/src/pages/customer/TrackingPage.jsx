@@ -14,6 +14,7 @@ import {
   FaBan,
   FaStar,
   FaFlag,
+  FaCreditCard,
 } from 'react-icons/fa';
 import { fetchOrderById, updateOrderStatus, confirmOrderPrice } from '../../store/slices/orderSlice';
 import { connectSocket } from '../../socket/socket';
@@ -349,6 +350,7 @@ export default function TrackingPage() {
 
   // ===== price_confirmed & handyman hasn't started heading over yet =====
   if (status === 'price_confirmed' && !currentOrder.isHandymanOnTheWay) {
+    const canPayByCard = currentOrder.paymentStatus !== 'paid';
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <Header title={currentOrder.requestType === 'scheduled' ? 'موعد الطلب' : 'جاري التجهيز'} />
@@ -373,6 +375,28 @@ export default function TrackingPage() {
               </p>
             </>
           )}
+
+          {/* Payment options */}
+          {canPayByCard && (
+            <div className="w-full max-w-sm space-y-3">
+              <p className="text-sm font-bold text-textDark">اختر طريقة الدفع</p>
+              <button
+                type="button"
+                onClick={() => navigate(`/customer/payment/${orderId}`)}
+                className="btn-secondary flex w-full items-center justify-center gap-2"
+              >
+                <FaCreditCard /> ادفع بالكارت الآن
+              </button>
+              <p className="text-xs text-textGray">أو ادفع كاش للحرفي عند الانتهاء</p>
+            </div>
+          )}
+
+          {currentOrder.paymentStatus === 'paid' && (
+            <div className="flex items-center gap-2 rounded-xl bg-green-50 px-4 py-3 text-sm font-bold text-green-700">
+              <FaCheckCircle /> تم الدفع إلكترونياً بنجاح
+            </div>
+          )}
+
           <div className="flex w-full max-w-sm gap-4">
             <a
               href={handyman.phone ? `tel:${handyman.phone}` : undefined}

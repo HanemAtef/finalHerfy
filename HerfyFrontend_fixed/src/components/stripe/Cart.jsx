@@ -52,7 +52,7 @@ export default function Cart() {
     return (
       <Elements stripe={stripePromise} options={{ clientSecret }}>
         <h2 className="text-xl font-semibold text-center mb-4">Complete Payment</h2>
-        <CheckoutForm />
+        <CheckoutForm orderId={null} amount={null} />
       </Elements>
     );
   }

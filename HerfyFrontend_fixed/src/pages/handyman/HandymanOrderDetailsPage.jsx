@@ -440,6 +440,34 @@ export default function HandymanOrderDetailsPage() {
             </div>
           )}
 
+          <div className="flex justify-between">
+            <span className="text-textGray">طريقة الدفع</span>
+            <span className={`font-medium ${
+              currentOrder.paymentMethod === 'card' ? 'text-primary' : 'text-textDark'
+            }`}>
+              {currentOrder.paymentMethod === 'card' ? '💳 بطاقة إلكترونية' : '💵 كاش'}
+            </span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-textGray">حالة الدفع</span>
+            <span className={`font-medium ${
+              currentOrder.paymentStatus === 'paid'
+                ? 'text-green-600'
+                : currentOrder.paymentStatus === 'pending'
+                ? 'text-secondary'
+                : 'text-emergency'
+            }`}>
+              {{
+                paid: '✅ تم الدفع',
+                pending: '⏳ في الانتظار',
+                unpaid: '❌ لم يُدفع',
+                failed: '❌ فشل الدفع',
+                refunded: '↩️ مُسترد',
+              }[currentOrder.paymentStatus] || currentOrder.paymentStatus}
+            </span>
+          </div>
+
         </div>
       </div>
 
