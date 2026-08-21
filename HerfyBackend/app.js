@@ -144,12 +144,6 @@ app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
 
-// Start dispute escalation cron job
-if (process.env.NODE_ENV !== "test") {
-  const startDisputeEscalationJob = require("./jobs/disputeEscalation");
-  startDisputeEscalationJob(io);
-}
-
 // Seed the ServiceType collection from the old hardcoded profession list
 // on first boot, so existing handyman records keep working before an
 // admin has touched the new reference-data UI.
