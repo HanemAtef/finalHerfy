@@ -8,7 +8,7 @@ const Joi = require('joi');
 // don't silently diverge further.
 const updateOrderSchema = Joi.object({
   status: Joi.string()
-    .valid('pending', 'accepted', 'price_confirmed', 'in-progress', 'completed', 'cancelled', 'disputed')
+    .valid('pending', 'accepted', 'price_confirmed', 'in-progress', 'arrived', 'completed', 'cancelled', 'disputed')
     .required()
     .messages({
       'string.empty': 'Status is required',

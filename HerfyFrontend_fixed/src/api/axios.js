@@ -10,7 +10,14 @@ api.interceptors.request.use(
   (config) => {
     // The browser must generate the multipart boundary for FormData uploads.
     if (config.data instanceof FormData) {
-      config.headers.setContentType(false);
+      if (config.headers) {
+        delete config.headers['Content-Type'];
+        delete config.headers['content-type'];
+        if (typeof config.headers.delete === 'function') {
+          config.headers.delete('Content-Type');
+          config.headers.delete('content-type');
+        }
+      }
     }
 
     const token = localStorage.getItem('token');

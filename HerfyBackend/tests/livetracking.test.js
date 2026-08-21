@@ -93,6 +93,21 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 
+beforeEach(async () => {
+  await Order.deleteMany({});
+  arrivedOrders.clear();
+  arrivalTripState.clear();
+  lastHandymanLocations.clear();
+
+  testOrder = await Order.create({
+    customerId: customerUser._id,
+    handymanId: handymanUser._id,
+    status: 'pending',
+    profession: 'plumbing',
+    customerLocation: { type: 'Point', coordinates: [31.0, 30.0], address: 'Test' },
+  });
+});
+
 describe('Live Tracking Socket - Fix 8 Acceptance Tests', () => {
   it('Fix 8: sendLocation with non-ObjectId does not crash server', (done) => {
     customerSocket.emit('sendLocation', { orderId: 'invalid-id', lat: 30.0, lng: 31.0 });
@@ -296,10 +311,13 @@ describe('Live Tracking — reconnect & stale replay (#4)', () => {
     });
     const orderId = liveOrder._id.toString();
 
-    customerSocket.emit('joinOrderRoom', orderId);
-    await waitForEvent(customerSocket, 'joinOrderRoomAck');
+    const tempCustomerSocket = Client(`http://localhost:${port}`, { auth: { token: customerToken } });
+    await waitForEvent(tempCustomerSocket, 'connect');
 
-    customerSocket.disconnect();
+    tempCustomerSocket.emit('joinOrderRoom', orderId);
+    await waitForEvent(tempCustomerSocket, 'joinOrderRoomAck');
+
+    tempCustomerSocket.disconnect();
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const reconnected = Client(`http://localhost:${port}`, { auth: { token: customerToken } });
@@ -308,5 +326,149 @@ describe('Live Tracking — reconnect & stale replay (#4)', () => {
     const ack = await waitForEvent(reconnected, 'joinOrderRoomAck');
     expect(ack.success).toBe(true);
     reconnected.close();
+  });
+});
+
+describe('Live Tracking Architecture & Critical Rules Verification', () => {
+  beforeEach(() => {
+    arrivedOrders.clear();
+    arrivalTripState.clear();
+    lastHandymanLocations.clear();
+  });
+
+  it('Critical Rule 1 & 2: startTracking does not reset trackingStartedAt or trackingExpiresAt', async () => {
+    const trackingOrder = await Order.create({
+      customerId: customerUser._id,
+      handymanId: handymanUser._id,
+      status: 'in-progress',
+      profession: 'plumbing',
+      isHandymanOnTheWay: true,
+      trackingStatus: 'active',
+      trackingStartedAt: new Date(Date.now() - 5000),
+      trackingExpiresAt: new Date(Date.now() + 600000),
+      customerLocation: { type: 'Point', coordinates: [31.05, 30.05], address: 'Rule 2 Test' },
+    });
+    const orderId = trackingOrder._id.toString();
+
+    const originalStartedAt = trackingOrder.trackingStartedAt.getTime();
+    const originalExpiresAt = trackingOrder.trackingExpiresAt.getTime();
+
+    handymanSocket.emit('startTracking', orderId);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const updated = await Order.findById(orderId);
+    expect(updated.trackingStartedAt.getTime()).toBe(originalStartedAt);
+    expect(updated.trackingExpiresAt.getTime()).toBe(originalExpiresAt);
+    expect(updated.trackingStatus).toBe('active');
+  });
+
+  it('Critical Rule 2: startTracking after expired does not reactivate tracking', async () => {
+    const expiredOrder = await Order.create({
+      customerId: customerUser._id,
+      handymanId: handymanUser._id,
+      status: 'in-progress',
+      profession: 'plumbing',
+      isHandymanOnTheWay: true,
+      trackingStatus: 'expired',
+      trackingStartedAt: new Date(Date.now() - 3600000),
+      trackingExpiresAt: new Date(Date.now() - 1000),
+      customerLocation: { type: 'Point', coordinates: [31.05, 30.05], address: 'Expired Test' },
+    });
+    const orderId = expiredOrder._id.toString();
+
+    handymanSocket.emit('startTracking', orderId);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const updated = await Order.findById(orderId);
+    expect(updated.trackingStatus).toBe('expired');
+    expect(updated.status).toBe('in-progress');
+  });
+
+  it('Critical Rule 4: sendLocation after expiration triggers single trackingExpired emit and sets trackingStatus=expired', async () => {
+    const expiringOrder = await Order.create({
+      customerId: customerUser._id,
+      handymanId: handymanUser._id,
+      status: 'in-progress',
+      profession: 'plumbing',
+      isHandymanOnTheWay: true,
+      trackingStatus: 'active',
+      trackingStartedAt: new Date(Date.now() - 3600000),
+      trackingExpiresAt: new Date(Date.now() - 100),
+      customerLocation: { type: 'Point', coordinates: [31.05, 30.05], address: 'Timeout Test' },
+    });
+    const orderId = expiringOrder._id.toString();
+
+    customerSocket.emit('joinOrderRoom', orderId);
+    await waitForEvent(customerSocket, 'joinOrderRoomAck');
+    handymanSocket.emit('joinOrderRoom', orderId);
+    await waitForEvent(handymanSocket, 'joinOrderRoomAck');
+
+    const expiredPromise = waitForEvent(customerSocket, 'trackingExpired', 3000);
+
+    handymanSocket.emit('sendLocation', { orderId, lat: 30.1, lng: 31.1 });
+    const payload = await expiredPromise;
+
+    expect(payload.orderId).toBe(orderId);
+    expect(payload.trackingStatus).toBe('expired');
+
+    const checkDb = await Order.findById(orderId);
+    expect(checkDb.trackingStatus).toBe('expired');
+    expect(checkDb.status).toBe('in-progress');
+  });
+
+  it('Requirement 3 & 4: sendLocation without joining order room is rejected', async () => {
+    const unjoinedOrder = await Order.create({
+      customerId: customerUser._id,
+      handymanId: handymanUser._id,
+      status: 'price_confirmed',
+      profession: 'plumbing',
+      isHandymanOnTheWay: true,
+      trackingStatus: 'active',
+      customerLocation: { type: 'Point', coordinates: [31.05, 30.05], address: 'Unjoined Test' },
+    });
+    const orderId = unjoinedOrder._id.toString();
+
+    // Create a fresh unjoined socket
+    const freshSocket = Client(`http://localhost:${port}`, { auth: { token: handymanToken } });
+    await waitForEvent(freshSocket, 'connect');
+
+    const errPromise = waitForEvent(freshSocket, 'sendLocationError', 8000);
+    freshSocket.emit('sendLocation', { orderId, lat: 30.1, lng: 31.1 });
+    const err = await errPromise;
+    expect(err.msg).toMatch(/not joined/i);
+    freshSocket.close();
+  });
+
+  it('Requirement 1 & 9: Handyman cannot activate tracking for Order B while Order A has active tracking', async () => {
+    const orderA = await Order.create({
+      customerId: customerUser._id,
+      handymanId: handymanUser._id,
+      status: 'price_confirmed',
+      profession: 'plumbing',
+      isHandymanOnTheWay: true,
+      trackingStatus: 'active',
+      trackingExpiresAt: new Date(Date.now() + 600000),
+      customerLocation: { type: 'Point', coordinates: [31.05, 30.05], address: 'Order A' },
+    });
+
+    const orderB = await Order.create({
+      customerId: customerUser._id,
+      handymanId: handymanUser._id,
+      status: 'price_confirmed',
+      profession: 'plumbing',
+      isHandymanOnTheWay: true,
+      trackingStatus: 'active',
+      trackingExpiresAt: new Date(Date.now() + 600000),
+      customerLocation: { type: 'Point', coordinates: [31.08, 30.08], address: 'Order B' },
+    });
+
+    // Handyman joins Order B room and tries to emit sendLocation for Order B while Order A is active
+    handymanSocket.emit('joinOrderRoom', orderB._id.toString());
+    await waitForEvent(handymanSocket, 'joinOrderRoomAck');
+
+    const errPromise = waitForEvent(handymanSocket, 'sendLocationError', 8000);
+    handymanSocket.emit('sendLocation', { orderId: orderB._id.toString(), lat: 30.08, lng: 31.08 });
+    const err = await errPromise;
+    expect(err.msg).toMatch(/Another order is currently active/i);
   });
 });

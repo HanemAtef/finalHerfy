@@ -38,7 +38,7 @@ async function makeCustomer() {
     password: 'Password123!',
     role: 'customer',
     isVerified: true,
-    phone: `+2000000${String(n).padStart(4,'0')}`,
+    phone: `+2000000${String(n).padStart(4, '0')}`,
   });
   return { user, token: generateAccessToken(user) };
 }
@@ -51,7 +51,7 @@ async function makeHandyman() {
     password: 'Password123!',
     role: 'handyman',
     isVerified: true,
-    phone: `+3000000${String(n).padStart(4,'0')}`,
+    phone: `+3000000${String(n).padStart(4, '0')}`,
     location: { type: 'Point', coordinates: [31.2, 30.1] },
   });
   const profile = await Handyman.create({
@@ -106,6 +106,12 @@ async function advanceTo(targetStatus) {
     .set('Authorization', `Bearer ${hToken}`)
     .send({ status: 'in-progress' });
   if (targetStatus === 'in-progress') return { orderId, cToken, hToken, cUser, hUser };
+
+  await request(app)
+    .patch(`/api/orders/${orderId}/status`)
+    .set('Authorization', `Bearer ${hToken}`)
+    .send({ status: 'arrived' });
+  if (targetStatus === 'arrived') return { orderId, cToken, hToken, cUser, hUser };
 
   await request(app)
     .patch(`/api/orders/${orderId}/status`)
@@ -198,6 +204,34 @@ describe('Order — status transitions', () => {
     expect(res.body.order.status).toBe('completed');
   });
 
+  it('arrived → completed: handyman can complete from arrived status', async () => {
+    const { orderId, hToken } = await advanceTo('arrived');
+
+    const res = await request(app)
+      .patch(`/api/orders/${orderId}/status`)
+      .set('Authorization', `Bearer ${hToken}`)
+      .send({ status: 'completed', completionImage: 'https://example.com/proof.jpg' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.order.status).toBe('completed');
+    // trackingStatus must remain stopped — arrival already stopped it
+    expect(res.body.order.trackingStatus).toBe('stopped');
+  });
+
+  it('arrived → in-progress: handyman can start work after being marked arrived', async () => {
+    const { orderId, hToken } = await advanceTo('arrived');
+
+    const res = await request(app)
+      .patch(`/api/orders/${orderId}/status`)
+      .set('Authorization', `Bearer ${hToken}`)
+      .send({ status: 'in-progress' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.order.status).toBe('in-progress');
+  });
+
+
+
   it('invalid transition: pending → completed is rejected', async () => {
     const { orderId, hToken } = await advanceTo('pending');
     const res = await request(app)
@@ -257,7 +291,7 @@ describe('Fix 1 & 5 Acceptance Tests', () => {
 });
 
 describe('Order — cancellation penalty', () => {
-  it('customer cancelling in-progress order incurs penalty', async () => {
+  it('customer cancelling in-progress order incurs penalty when tracking active', async () => {
     const { orderId, cToken, cUser } = await advanceTo('in-progress');
 
     await request(app)
@@ -268,5 +302,43 @@ describe('Order — cancellation penalty', () => {
     const updatedCustomer = await User.findById(cUser._id);
     expect(updatedCustomer.penaltyCount).toBe(1);
     expect(updatedCustomer.penaltyAmount).toBe(50);
+  });
+
+  it('Critical Rule 7: customer cancelling after tracking expires waives penalty', async () => {
+    const { orderId, cToken, cUser } = await advanceTo('in-progress');
+
+    await Order.findByIdAndUpdate(orderId, {
+      trackingStatus: 'expired',
+      trackingExpiresAt: new Date(Date.now() - 1000),
+    });
+
+    const res = await request(app)
+      .patch(`/api/orders/${orderId}/status`)
+      .set('Authorization', `Bearer ${cToken}`)
+      .send({ status: 'cancelled' });
+
+    expect(res.statusCode).toBe(200);
+    const updatedCustomer = await User.findById(cUser._id);
+    expect(updatedCustomer.penaltyCount || 0).toBe(0);
+    expect(updatedCustomer.penaltyAmount || 0).toBe(0);
+  });
+});
+
+describe('Critical Rules — arrived status', () => {
+  it('Critical Rule 9: handyman can update order status to arrived', async () => {
+    const { orderId, hToken } = await advanceTo('in-progress');
+
+    const res = await request(app)
+      .patch(`/api/orders/${orderId}/status`)
+      .set('Authorization', `Bearer ${hToken}`)
+      .send({ status: 'arrived' });
+
+    if (res.statusCode !== 200) {
+      console.log('TEST DEBUG FAIL MSG:', res.body);
+    }
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.order.status).toBe('arrived');
+    expect(res.body.order.trackingStatus).toBe('stopped');
   });
 });

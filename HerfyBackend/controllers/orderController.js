@@ -7,6 +7,9 @@ const mongoose = require("mongoose");
 const { createNotification } = require("./notificationController");
 const { cleanupThrottle } = require("../socket/liveTrackingThrottle");
 const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
+const { calculateRoute } = require("../utils/tomtom");
+
+
 // ========== 1. create order ==========
 const createOrder = async (req, res) => {
   try {
@@ -37,6 +40,7 @@ const createOrder = async (req, res) => {
         msg: "You have been penalized for multiple cancellations. Please pay your fines to continue.",
       });
     }
+
 
     const handyman = await User.findOne({ _id: handymanId, role: "handyman" });
     if (!handyman) {
@@ -138,6 +142,16 @@ const getOrder = async (req, res) => {
       return res.status(403).json({ msg: "You are not authorized to view this order" });
     }
 
+    if (['arrived', 'completed', 'cancelled', 'disputed'].includes(order.status)) {
+      if (order.isHandymanOnTheWay || order.trackingStatus === 'active') {
+        order.isHandymanOnTheWay = false;
+        if (order.trackingStatus !== 'expired') {
+          order.trackingStatus = 'stopped';
+        }
+        await order.save();
+      }
+    }
+
     res.status(200).json(order);
   } catch (error) {
     console.log(error);
@@ -212,7 +226,7 @@ const updateOrderStatus = async (req, res) => {
     const { id } = req.params;
     const { status, price } = req.body;
 
-    const validStatuses = ["pending", "accepted", "price_confirmed", "in-progress", "completed", "cancelled"];
+    const validStatuses = ["pending", "accepted", "price_confirmed", "in-progress", "arrived", "completed", "cancelled"];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ msg: "Invalid status" });
     }
@@ -226,23 +240,39 @@ const updateOrderStatus = async (req, res) => {
     const isHandyman = req.user.id === order.handymanId?.toString();
     const isAdmin = req.user.role === "admin";
 
-    // SECURITY FIX (C2): previously only the "cancelled + currentStatus===pending"
-    // branch denied unrelated users — every other status (accepted, price_confirmed,
-    // in-progress, disputed) had no ownership check at all, letting any
-    // authenticated user cancel/mutate someone else's order. Require the caller
-    // to be a party to this order (or an admin) up front, for every status.
     if (!isCustomer && !isHandyman && !isAdmin) {
       return res.status(403).json({ msg: "You are not authorized to update this order" });
     }
 
     const currentStatus = order.status;
-    // FIX (M3): set true only when the "accepted" branch already
-    // transactionally saved the order itself, so the shared final save
-    // below doesn't redundantly (and non-atomically) overwrite it.
     let orderAlreadySaved = false;
 
     if (currentStatus === "completed") {
       return res.status(400).json({ msg: "Cannot update a completed order" });
+    }
+
+    // ========== Arrived Logic ==========
+    if (status === "arrived") {
+      if (!isHandyman && !isAdmin) {
+        return res.status(403).json({ msg: "Only handyman can mark order as arrived" });
+      }
+      if (!["in-progress", "price_confirmed"].includes(currentStatus)) {
+        return res.status(400).json({ msg: "Order must be in-progress before marking as arrived" });
+      }
+      order.trackingStatus = "stopped";
+      order.isHandymanOnTheWay = false;
+      console.log(`[TRACKING] Stopped (handyman arrived) for order ${id}`);
+
+      const io = req.app.get('io');
+      if (io) {
+        io.to(id).emit('handymanArrived', {
+          orderId: id,
+          msg: 'الحرفي وصل إلى موقع العميل',
+          distanceRemaining: 0,
+          eta: 0,
+        });
+      }
+      cleanupThrottle(id);
     }
 
     // ========== Cancelled Logic ==========
@@ -260,7 +290,7 @@ const updateOrderStatus = async (req, res) => {
       }
 
       if (
-        (currentStatus === "price_confirmed" || currentStatus === "in-progress") && isHandyman) {
+        (currentStatus === "price_confirmed" || currentStatus === "in-progress" || currentStatus === "arrived") && isHandyman) {
         const handyman = await Handyman.findOne({
           userId: order.handymanId,
         });
@@ -303,32 +333,41 @@ const updateOrderStatus = async (req, res) => {
         }
       }
 
+      if ((currentStatus === "price_confirmed" || currentStatus === "in-progress" || currentStatus === "arrived") && isCustomer) {
+        const isTrackingExpired =
+          order.trackingStatus === "expired" ||
+          (order.trackingExpiresAt && Date.now() >= new Date(order.trackingExpiresAt).getTime());
 
-      if (currentStatus === "in-progress" && isCustomer) {
-        const customer = await User.findById(order.customerId);
-        if (customer) {
-          customer.penaltyCount = (customer.penaltyCount || 0) + 1;
-          customer.penaltyAmount = (customer.penaltyAmount || 0) + 50;
-          if (customer.penaltyCount >= 3) {
-            customer.isPenalized = true;
+        if (isTrackingExpired) {
+          console.log('[ORDER] Tracking expired - penalty waived');
+          order.penaltyAmount = 0;
+        } else {
+          const customer = await User.findById(order.customerId);
+          if (customer) {
+            customer.penaltyCount = (customer.penaltyCount || 0) + 1;
+            customer.penaltyAmount = (customer.penaltyAmount || 0) + 50;
+            if (customer.penaltyCount >= 3) {
+              customer.isPenalized = true;
+            }
+            await customer.save();
           }
-          await customer.save();
+          const io = req.app.get('io');
+          await createNotification(
+            io,
+            order.customerId,
+            'penalty_warning',
+            ' Penalty Warning',
+            `You have been charged a 50 EGP penalty. Total penalties: ${customer?.penaltyCount || 0}`,
+            { orderId: order._id, penaltyCount: customer?.penaltyCount || 0 }
+          );
         }
-        // ========== NOTIFICATION: Penalty warning ==========
-        const io = req.app.get('io');
-        await createNotification(
-          io,
-          order.customerId,
-          'penalty_warning',
-          ' Penalty Warning',
-          `You have been charged a 50 EGP penalty. Total penalties: ${customer.penaltyCount}`,
-          { orderId: order._id, penaltyCount: customer.penaltyCount }
-        );
       }
 
       if (currentStatus === "completed") {
         return res.status(400).json({ msg: "Cannot cancel a completed order" });
       }
+      order.trackingStatus = "stopped";
+      order.isHandymanOnTheWay = false;
       cleanupThrottle(id);
       // ========== NOTIFICATION: Order cancelled ==========
       const io = req.app.get('io');
@@ -440,8 +479,10 @@ const updateOrderStatus = async (req, res) => {
 
     // ========== In-Progress Logic ==========
     if (status === "in-progress") {
-      if (currentStatus !== "price_confirmed") {
-        return res.status(400).json({ msg: "Order must be price confirmed before starting" });
+      // Allow transition from price_confirmed (normal on-the-way flow) OR
+      // from arrived (handyman physically reached destination and is starting work)
+      if (!["price_confirmed", "arrived"].includes(currentStatus)) {
+        return res.status(400).json({ msg: "Order must be price confirmed or arrived before starting work" });
       }
       if (!isHandyman && !isAdmin) {
         return res.status(403).json({ msg: "Only handyman can start work" });
@@ -466,8 +507,8 @@ const updateOrderStatus = async (req, res) => {
         return res.status(403).json({ msg: "Only handyman can complete order" });
       }
 
-      if (currentStatus !== "in-progress") {
-        return res.status(400).json({ msg: "Order must be in-progress before it can be completed" });
+      if (!["in-progress", "arrived"].includes(currentStatus)) {
+        return res.status(400).json({ msg: "Order must be in-progress or arrived before it can be completed" });
       }
 
       const { completionImage } = req.body;
@@ -496,6 +537,8 @@ const updateOrderStatus = async (req, res) => {
         { userId: order.handymanId },
         updateQuery
       );
+      order.trackingStatus = "stopped";
+      order.isHandymanOnTheWay = false;
       cleanupThrottle(id);
       // ========== NOTIFICATION: Order completed ==========
       const io = req.app.get('io');
@@ -511,6 +554,12 @@ const updateOrderStatus = async (req, res) => {
 
     if (!orderAlreadySaved) {
       order.status = status;
+      if (['arrived', 'completed', 'cancelled', 'disputed'].includes(status)) {
+        order.isHandymanOnTheWay = false;
+        if (order.trackingStatus !== 'expired') {
+          order.trackingStatus = 'stopped';
+        }
+      }
       await order.save();
     }
 
@@ -557,6 +606,8 @@ const confirmPrice = async (req, res) => {
       );
     } else {
       order.status = "cancelled";
+      order.isHandymanOnTheWay = false;
+      order.trackingStatus = "stopped";
       const io = req.app.get('io');
       await createNotification(
         io,
@@ -806,8 +857,75 @@ const markOnTheWay = async (req, res) => {
       return res.status(400).json({ msg: "Order must be price confirmed before starting the trip" });
     }
 
-    order.isHandymanOnTheWay = true;
-    order.onTheWayAt = new Date();
+    // BUSINESS RULE: A handyman may have ONLY ONE active live-tracking order at any given time.
+    // If tracking is not already active for THIS order, verify the handyman has no OTHER active tracking order.
+    if (order.trackingStatus !== "active") {
+      const handymanOrders = await Order.find({
+        handymanId: order.handymanId,
+        _id: { $ne: order._id },
+        isHandymanOnTheWay: true,
+        status: { $in: ["price_confirmed", "in-progress"] },
+      });
+
+      const activeOtherOrder = handymanOrders.find((o) => {
+        if (o.trackingStatus === "expired") return false;
+        if (o.trackingExpiresAt && new Date(o.trackingExpiresAt).getTime() <= Date.now()) return false;
+        return true;
+      });
+
+      if (activeOtherOrder) {
+        console.warn(`[TRACKING REJECTED] Handyman ${order.handymanId} already has active tracking order ${activeOtherOrder._id}`);
+        return res.status(400).json({
+          msg: "لديك طلب آخر قيد التتبع حالياً. يجب وصول الطلب الحالي قبل تتبع طلب جديد.",
+          activeOrderId: activeOtherOrder._id,
+        });
+      }
+    }
+
+    // CRITICAL RULE 1: markOnTheWay is sole authoritative backend initialization of a tracking session.
+    // If tracking is ALREADY active, preserve existing trackingStartedAt and trackingExpiresAt.
+    if (order.trackingStatus === "active" && order.trackingExpiresAt) {
+      console.log(`[TRACKING] Order ${id} already active — preserving existing tracking window expiring at ${order.trackingExpiresAt.toISOString()}`);
+    } else {
+      order.isHandymanOnTheWay = true;
+      order.onTheWayAt = new Date();
+      order.trackingStatus = "active";
+      order.trackingStartedAt = new Date();
+
+      // Resolve initial ETA
+      let initialEta = null;
+      if (Number.isFinite(order.eta) && order.eta > 0) {
+        initialEta = order.eta;
+      } else if (
+        order.handymanLiveLocation?.coordinates?.length === 2 &&
+        order.customerLocation?.coordinates?.length === 2
+      ) {
+        const [hLng, hLat] = order.handymanLiveLocation.coordinates;
+        const [cLng, cLat] = order.customerLocation.coordinates;
+        if (hLat !== 0 && hLng !== 0 && cLat !== 0 && cLng !== 0) {
+          try {
+            const routeData = await calculateRoute({ lat: hLat, lng: hLng }, { lat: cLat, lng: cLng });
+            if (routeData && Number.isFinite(routeData.eta) && routeData.eta > 0) {
+              initialEta = routeData.eta;
+            }
+          } catch (err) {
+            console.warn('[TRACKING] Initial route calculation failed for markOnTheWay:', err.message);
+          }
+        }
+      }
+
+      if (!Number.isFinite(initialEta) || initialEta <= 0) {
+        const defaultEta = parseInt(process.env.TRACKING_DEFAULT_ETA_MINUTES || '25', 10);
+        initialEta = Number.isFinite(defaultEta) && defaultEta > 0 ? defaultEta : 25;
+        console.log(`[TRACKING] Initial ETA fallback used: ${initialEta} min`);
+      }
+
+      const gracePeriodMinutes = parseInt(process.env.TRACKING_GRACE_PERIOD_MINUTES || '15', 10);
+      const totalWindowMinutes = initialEta + (Number.isFinite(gracePeriodMinutes) ? gracePeriodMinutes : 15);
+      order.trackingExpiresAt = new Date(order.trackingStartedAt.getTime() + totalWindowMinutes * 60 * 1000);
+      console.log(`[TRACKING] Started for order ${id} | initialEta = ${initialEta}m | expiresAt = ${order.trackingExpiresAt.toISOString()}`);
+    }
+
     await order.save();
 
     const io = req.app.get('io');
@@ -816,6 +934,9 @@ const markOnTheWay = async (req, res) => {
         orderId: id,
         handymanName: req.user.name,
         message: 'Handyman is on the way!',
+        trackingStatus: order.trackingStatus,
+        trackingStartedAt: order.trackingStartedAt,
+        trackingExpiresAt: order.trackingExpiresAt,
       });
     }
     await createNotification(

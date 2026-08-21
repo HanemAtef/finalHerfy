@@ -118,18 +118,22 @@ export default function HandymanOrderDetailsPage() {
   const pendingArrivalRef = useRef(false);
   const [arrivalPending, setArrivalPending] = useState(false);
 
-  devLog('📍 [HandymanOrderDetails Render]', {
-    orderId: id,
-    hasCurrentOrder: !!currentOrder,
-    handymanLoc,
-    distance,
-    displayedEta,
-    routePoints: routeGeometry?.length || 0,
-    staticProfileLocation: currentOrder?.handymanLiveLocation ?? 'N/A',
-  });
+  const currentOrderRef = useRef(currentOrder);
+  useEffect(() => {
+    currentOrderRef.current = currentOrder;
+  }, [currentOrder]);
 
-
-
+  const isTerminalOrder = useCallback((order) => {
+    if (!order) return false;
+    // 'arrived' is NOT terminal — the handyman is physically present but work
+    // hasn't started yet. The socket must stay alive so the customer map
+    // can continue showing the handyman's last position and the arrival banner.
+    const terminalStatuses = ['completed', 'cancelled', 'disputed'];
+    return (
+      terminalStatuses.includes(order.status) ||
+      order.trackingStatus === 'expired'
+    );
+  }, []);
 
   // Fetch order
   useEffect(() => {
@@ -163,7 +167,7 @@ export default function HandymanOrderDetailsPage() {
   const hasArrivedRef = useRef(false);
   const watchIdRef = useRef(null);
   const gpsInitGenRef = useRef(0);
-  const tryFinalizeArrivalRef = useRef(() => {});
+  const tryFinalizeArrivalRef = useRef(() => { });
 
   const tryFinalizeArrival = useCallback(() => {
     if (!pendingArrivalRef.current || hasArrivedRef.current) return;
@@ -211,6 +215,16 @@ export default function HandymanOrderDetailsPage() {
 
   const emitSendLocation = (socket, lat, lng) => {
     if (!socket?.connected) return false;
+
+    if (!isHandymanJoinedRef.current) {
+      console.log('[HANDYMAN SOCKET BLOCKED] sendLocation — handyman not joined to order room');
+      return false;
+    }
+
+    if (currentOrderRef.current?._id && String(id) !== String(currentOrderRef.current._id)) {
+      console.log('[HANDYMAN SOCKET BLOCKED] sendLocation — orderId mismatch');
+      return false;
+    }
 
     console.log('[HANDYMAN SOCKET AUDIT] SEND_LOCATION PRE-CHECK', {
       socketId: socket.id,
@@ -324,6 +338,14 @@ export default function HandymanOrderDetailsPage() {
       logReturn('invalid_coordinates');
       return;
     }
+    if (!isHandymanJoinedRef.current) {
+      logReturn('handyman_not_joined');
+      return;
+    }
+    if (currentOrderRef.current?._id && String(id) !== String(currentOrderRef.current._id)) {
+      logReturn('order_id_mismatch');
+      return;
+    }
     if (hasArrivedRef.current || !isLiveRef.current) {
       logReturn(hasArrivedRef.current ? 'already_arrived' : 'is_live_false');
       return;
@@ -375,10 +397,31 @@ export default function HandymanOrderDetailsPage() {
   };
 
   const startWatchAfterInitialFix = (lat, lng) => {
+    // Never start a new watcher after arrival or terminal status
+    if (isTerminalOrder(currentOrderRef.current) || hasArrivedRef.current) {
+      console.log('[GPS] startWatchAfterInitialFix skipped — order is terminal or arrived');
+      return;
+    }
     if (watchIdRef.current !== null) return;
     console.log('[HANDYMAN SOCKET AUDIT] GPS WATCH STARTED', { orderId: id });
     const watchId = navigator.geolocation.watchPosition(
       (position) => {
+        if (currentOrderRef.current?._id && String(id) !== String(currentOrderRef.current._id)) {
+          console.log('[GPS] Watcher callback killed — orderId mismatch (stale closure)');
+          navigator.geolocation.clearWatch(watchId);
+          if (watchIdRef.current === watchId) watchIdRef.current = null;
+          return;
+        }
+
+        if (isTerminalOrder(currentOrderRef.current)) {
+          if (watchIdRef.current !== null) {
+            console.log('[GPS] watchPosition callback killed active watcher — order is terminal');
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+          }
+          return;
+        }
+
         const wLat = position.coords.latitude;
         const wLng = position.coords.longitude;
         if (!isValidHandymanCoord(wLat, wLng)) return;
@@ -387,11 +430,20 @@ export default function HandymanOrderDetailsPage() {
         handymanLocRef.current = wLoc;
         setHandymanLoc(wLoc);
         // Keep sending until arrival is finalized (not just pending)
-        if (!hasArrivedRef.current) {
+        if (!hasArrivedRef.current && isLiveRef.current) {
           queueOrSendLocation(socketRef.current, wLat, wLng);
         }
       },
       (err) => {
+        if (isTerminalOrder(currentOrderRef.current)) {
+          if (watchIdRef.current !== null) {
+            console.log('[GPS] watchPosition error callback killed active watcher — order is terminal');
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+          }
+          return;
+        }
+
         console.error('❌ [GPS ERROR] watchPosition |', err.message);
         if (err.code === 1) {
           setGpsPermissionDenied(true);
@@ -404,26 +456,63 @@ export default function HandymanOrderDetailsPage() {
     queueOrSendLocation(socketRef.current, lat, lng);
   };
 
-  useEffect(() => {
-    const isLive =
-      currentOrder &&
-      ((currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
-        currentOrder.status === 'in-progress');
-    isLiveRef.current = !!isLive;
+  const isHandymanGpsInitAllowed = useCallback((order) => {
+    if (!order) return false;
+    if (order._id != null && String(order._id) !== String(id)) return false;
+    if (order.trackingStatus === 'expired') return false;
+    // GPS init is allowed for all active work states (not just price_confirmed/in-progress)
+    if (['completed', 'cancelled', 'disputed'].includes(order.status)) return false;
 
-    const socket = socketRef.current;
-    console.log('[HANDYMAN SOCKET AUDIT] TRACKING STATE', {
-      orderId: id,
-      status: currentOrder?.status ?? null,
-      isHandymanOnTheWay: currentOrder?.isHandymanOnTheWay ?? null,
-      isLive: !!isLive,
-      socketConnected: !!socket?.connected,
-      socketId: socket?.id ?? null,
-      currentOrderId: currentOrder?._id ?? null,
-      orderIdMatches: currentOrder?._id != null && String(currentOrder._id) === String(id),
-      isHandymanJoined: isHandymanJoinedRef.current,
-    });
-  }, [currentOrder?.status, currentOrder?.isHandymanOnTheWay, currentOrder, gpsStatus, id]);
+    return ['price_confirmed', 'in-progress', 'arrived'].includes(order.status);
+  }, [id]);
+
+  // isTrackingLive: routing, map, and GPS are ACTIVE.
+  // Excludes 'arrived' & 'in-progress' — once handyman reaches customer/starts work,
+  // the map and GPS sending must remain stopped.
+  const isTrackingLive = useMemo(() => {
+    if (!currentOrder) return false;
+    if (currentOrder.trackingStatus === 'expired') return false;
+    if (['arrived', 'in-progress', 'completed', 'cancelled', 'disputed'].includes(currentOrder.status)) return false;
+
+    return (
+      currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay === true
+    );
+  }, [currentOrder]);
+
+  // socketShouldBeAlive: keep the Socket.IO room joined so both sides
+  // receive the arrival event / banner synchronisation. This is a superset
+  // of isTrackingLive — it additionally covers the 'arrived' window
+  // between physical arrival and the handyman pressing Start Work.
+  const socketShouldBeAlive = useMemo(() => {
+    if (!currentOrder) return false;
+    if (['completed', 'cancelled', 'disputed'].includes(currentOrder.status)) return false;
+    if (currentOrder.trackingStatus === 'expired') return false;
+
+    return (
+      isTrackingLive ||
+      currentOrder.status === 'arrived'
+    );
+  }, [currentOrder, isTrackingLive]);
+
+
+  useEffect(() => {
+    isLiveRef.current = isTrackingLive;
+
+    if (isTrackingLive) {
+      const socket = socketRef.current;
+      devLog('[HANDYMAN SOCKET AUDIT] TRACKING STATE', {
+        orderId: id,
+        status: currentOrder?.status ?? null,
+        isHandymanOnTheWay: currentOrder?.isHandymanOnTheWay ?? null,
+        isLive: isTrackingLive,
+        socketConnected: !!socket?.connected,
+        socketId: socket?.id ?? null,
+        currentOrderId: currentOrder?._id ?? null,
+        orderIdMatches: currentOrder?._id != null && String(currentOrder._id) === String(id),
+        isHandymanJoined: isHandymanJoinedRef.current,
+      });
+    }
+  }, [currentOrder, id, isTrackingLive]);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -432,12 +521,30 @@ export default function HandymanOrderDetailsPage() {
       return;
     }
 
+    if (!isHandymanGpsInitAllowed(currentOrder)) {
+      return;
+    }
+
+    if (watchIdRef.current !== null) return;
+
     console.log('📍 [GPS INIT] Requesting initial handyman location...');
     const gen = ++gpsInitGenRef.current;
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        if (gen !== gpsInitGenRef.current) return;
+        const isAllowed = isHandymanGpsInitAllowed(currentOrderRef.current);
+        console.log('[GPS TRACE] getCurrentPosition success', {
+          isAllowed,
+          status: currentOrderRef.current?.status,
+          trackingStatus: currentOrderRef.current?.trackingStatus,
+          isHandymanOnTheWay: currentOrderRef.current?.isHandymanOnTheWay,
+        });
+
+        if (!isAllowed) {
+          console.log('[GPS TRACE] Aborted callback — order not eligible for GPS init');
+          return;
+        }
+
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
 
@@ -456,17 +563,23 @@ export default function HandymanOrderDetailsPage() {
           console.warn('⚠️ [GPS INIT] Low accuracy =', pos.coords.accuracy, 'm — enableHighAccuracy active; mobile GPS improves outdoors');
         }
 
-        console.log('✅ [GPS INIT] Valid initial location');
+        console.log('[GPS TRACE] setting handymanLoc & gpsStatus ready', { lat, lng });
         const loc = { latitude: lat, longitude: lng };
         handymanLocRef.current = loc;
         setHandymanLoc(loc);
         initialGpsReadyRef.current = true;
         setGpsStatus('ready');
 
-        startWatchAfterInitialFix(lat, lng);
+        // Only start continuous watchPosition if tracking is already live
+        if (isLiveRef.current) {
+          console.log('[GPS TRACE] starting watchPosition (tracking is live)');
+          startWatchAfterInitialFix(lat, lng);
+        } else {
+          console.log('[GPS TRACE] initial GPS fix complete — waiting for "أنا قادم" click');
+        }
       },
       (err) => {
-        if (gen !== gpsInitGenRef.current) return;
+        if (!isHandymanGpsInitAllowed(currentOrderRef.current)) return;
         console.error('❌ [GPS INIT] Location error');
         console.error('❌ [GPS INIT] code =', err.code);
         console.error('❌ [GPS INIT] message =', err.message);
@@ -488,35 +601,44 @@ export default function HandymanOrderDetailsPage() {
       gpsInitGenRef.current += 1;
       clearFlushTimeout();
       if (watchIdRef.current !== null) {
+        console.log(`[GPS] Unconditionally clearing watchId ${watchIdRef.current} on unmount / orderId change (${id})`);
         navigator.geolocation.clearWatch(watchIdRef.current);
         watchIdRef.current = null;
       }
     };
-  }, [id]);
+  }, [currentOrder?.status, currentOrder?.trackingStatus, id, isHandymanGpsInitAllowed, isTerminalOrder]);
+
+  // ── Kill GPS watcher when order reaches any terminal/stopped state ──────────
+  useEffect(() => {
+    if (!currentOrder) return;
+    if (isTerminalOrder(currentOrder)) {
+      // Invalidate any pending initial fix callbacks
+      gpsInitGenRef.current += 1;
+      clearFlushTimeout();
+
+      if (watchIdRef.current !== null) {
+        console.log(
+          `[GPS] watchPosition cleared — status=${currentOrder.status} trackingStatus=${currentOrder.trackingStatus}`
+        );
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    }
+  }, [currentOrder?.status, currentOrder?.trackingStatus, isTerminalOrder]);
 
   // Clear throttle flush timer on unmount / order change
   useEffect(() => () => clearFlushTimeout(), [id]);
 
   const handymanTrackingSocketKey =
     id &&
-    token &&
-    currentOrder?._id != null &&
-    String(currentOrder._id) === String(id) &&
-    ['price_confirmed', 'in-progress'].includes(currentOrder?.status)
+      token &&
+      socketShouldBeAlive
       ? `${id}:tracking`
       : null;
 
   // ===== Socket listeners — join room when THIS order is loaded and trackable =====
   useEffect(() => {
     if (!handymanTrackingSocketKey) {
-      console.log('[HANDYMAN SOCKET AUDIT] SOCKET EFFECT SKIPPED', {
-        orderId: id,
-        hasToken: !!token,
-        hasCurrentOrder: !!currentOrder,
-        status: currentOrder?.status ?? null,
-        handymanTrackingSocketKey,
-        userId: user?._id ?? null,
-      });
       return;
     }
 
@@ -566,7 +688,7 @@ export default function HandymanOrderDetailsPage() {
 
       if (hasArrivedRef.current) return;
 
-      // ── 1. Live customer GPS from payload (live-gps only — never order-db) ──
+      // ── 1. Live customer GPS from payload (live-gps only for display) ──
       if (
         payload?.destinationSource === 'live-gps' &&
         Number.isFinite(payload?.customerLat) &&
@@ -581,25 +703,22 @@ export default function HandymanOrderDetailsPage() {
         routeDestinationRef.current = payloadDest;
         setRouteDestination(payloadDest);
       }
-      const routeCustomer =
-        routeDestinationRef.current ??
-        customerLocRef.current ??
-        orderCustomerMapLocRef.current;
+
+      // Authoritative routing destination is ALWAYS the fixed order.customerLocation
+      const fixedOrderDest =
+        orderCustomerMapLocRef.current ??
+        payloadDest ??
+        routeDestinationRef.current;
+
       const routeKm = payload?.distanceRemaining;
 
-      if (!liveHandyman || !routeCustomer) {
+      if (!liveHandyman || !fixedOrderDest) {
         devLog('[HANDYMAN] Skipping route/distance — waiting for handyman + customer destination');
         return;
       }
-      let routeIsStale = false;
 
-      if (
-        payload?.destinationSource === 'order-db' &&
-        customerLocSourceRef.current === 'live-gps'
-      ) {
-        console.warn('[HANDYMAN] Stale route — TomTom used order-db while live GPS available');
-        routeIsStale = true;
-      }
+      let routeIsStale = false;
+      let staleReason = null;
 
       if (
         payload?.directDistanceMeters != null &&
@@ -607,41 +726,58 @@ export default function HandymanOrderDetailsPage() {
         routeKm != null &&
         routeKm > 0.5
       ) {
-        console.warn('[HANDYMAN] Stale route — direct =', payload.directDistanceMeters, 'm but route =', routeKm, 'km');
+        staleReason = `direct = ${payload.directDistanceMeters}m but route = ${routeKm}km`;
         routeIsStale = true;
       }
 
-      if (routeCustomer && !isRouteConsistentWithPositions(routeKm, liveHandyman, routeCustomer)) {
-        console.warn('[HANDYMAN] Stale route rejected | route =', routeKm, 'km');
+      if (fixedOrderDest && !isRouteConsistentWithPositions(routeKm, liveHandyman, fixedOrderDest)) {
+        staleReason = `route ${routeKm}km inconsistent with handyman/destination positions`;
         routeIsStale = true;
       }
+
+      const incomingGeometry = payload?.geometry ?? payload?.routeGeometry;
+
+      console.log('[HANDYMAN ROUTE AUDIT]', {
+        orderId: id,
+        handymanGps: liveHandyman,
+        fixedOrderDestination: fixedOrderDest,
+        destinationSource: payload?.destinationSource || 'order-db',
+        routePointsCount: Array.isArray(incomingGeometry) ? incomingGeometry.length : 0,
+        routeCalcTimestamp: payload?.routeCalcTimestamp,
+        routeKm,
+        routeIsStale,
+        staleReason,
+      });
 
       if (routeIsStale) {
+        console.warn('[HANDYMAN] Stale route rejected | reason =', staleReason);
         clearRouteState(
           { lastTrustedEtaRef, etaTimestampRef },
           { setRouteGeometry, setDistance, setLastTrustedEta, setEtaTimestamp, setDisplayedEta }
         );
         setRouteGeometry(null);
         setRouteCalcTimestamp(null);
-        console.warn('[HANDYMAN] Cleared stale route data — routeGeometry = null');
         return;
       }
 
       // ── 3. Apply valid route geometry + distance + ETA ──
       if (payload?.routeCalcTimestamp) setRouteCalcTimestamp(payload.routeCalcTimestamp);
 
-      const incomingGeometry = payload?.geometry ?? payload?.routeGeometry;
       const geometryIsValid =
         Array.isArray(incomingGeometry) &&
         incomingGeometry.length >= 2 &&
-        isRouteGeometryValid(incomingGeometry, liveHandyman, routeCustomer) &&
-        isRouteConsistentWithPositions(routeKm, liveHandyman, routeCustomer);
+        isRouteGeometryValid(incomingGeometry, liveHandyman, fixedOrderDest) &&
+        isRouteConsistentWithPositions(routeKm, liveHandyman, fixedOrderDest);
 
       if (geometryIsValid) {
         devLog('[HANDYMAN] ✅ route geometry received | points =', incomingGeometry.length);
         setRouteGeometry(incomingGeometry);
       } else if (Array.isArray(incomingGeometry) && incomingGeometry.length >= 2) {
-        console.warn('[HANDYMAN] Stale geometry rejected — clearing routeGeometry');
+        console.warn('[HANDYMAN] Stale geometry rejected — clearing routeGeometry', {
+          points: incomingGeometry.length,
+          handyman: liveHandyman,
+          destination: fixedOrderDest,
+        });
         setRouteGeometry(null);
         setRouteCalcTimestamp(null);
       }
@@ -790,12 +926,10 @@ export default function HandymanOrderDetailsPage() {
     }
   }, [gpsStatus, handymanLoc]);
 
-  const isTrackingLive =
-    currentOrder &&
-    ((currentOrder.status === 'price_confirmed' && currentOrder.isHandymanOnTheWay) ||
-      currentOrder.status === 'in-progress');
-
-  const showTrackingMap = isTrackingLive || handymanArrived || arrivalPending;
+  // Map is visible only while actively routing (not when arrived or terminal).
+  // arrivalPending / handymanArrived are internal state flags that can linger
+  // after the status has changed — gate purely on isTrackingLive instead.
+  const showTrackingMap = isTrackingLive;
 
   const hasValidHandymanMapLoc =
     handymanLoc &&
@@ -917,17 +1051,38 @@ export default function HandymanOrderDetailsPage() {
       console.error('❌ [GPS ERROR] Invalid coordinates — cannot start tracking');
       return;
     }
+    const { latitude, longitude } = handymanLocRef.current;
     console.log('🚀 [TRACKING] Handyman confirmed on the way with GPS =', handymanLocRef.current);
+
+    // Start continuous watchPosition now. isLiveRef will become true once
+    // markOrderOnTheWay resolves and the Redux order update propagates, at
+    // which point queueOrSendLocation inside watchPosition callbacks will
+    // start emitting.
+    if (watchIdRef.current === null) {
+      console.log('[GPS TRACE] starting watchPosition from handleOnTheWay');
+      startWatchAfterInitialFix(latitude, longitude);
+    }
+
     dispatch(markOrderOnTheWay(id));
   };
 
   const retryGpsInit = () => {
+    // Never restart GPS after arrival or when already in a terminal state
+    if (isTerminalOrder(currentOrderRef.current) || hasArrivedRef.current) {
+      console.log('[GPS] retryGpsInit skipped — order is terminal or arrived');
+      return;
+    }
     initialGpsReadyRef.current = false;
     setGpsStatus('initializing');
     setGpsPermissionDenied(false);
     console.log('📍 [GPS INIT] Retrying initial location request...');
+    const gen = ++gpsInitGenRef.current;
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        if (gen !== gpsInitGenRef.current || isTerminalOrder(currentOrderRef.current)) {
+          console.log('📍 [GPS INIT] Retry callback aborted — order terminal or gen stale');
+          return;
+        }
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
         console.log('📍 [GPS INIT] Location received (retry)');
@@ -945,6 +1100,7 @@ export default function HandymanOrderDetailsPage() {
         startWatchAfterInitialFix(lat, lng);
       },
       (err) => {
+        if (gen !== gpsInitGenRef.current || isTerminalOrder(currentOrderRef.current)) return;
         if (err.code === 1) {
           console.error('❌ [GPS ERROR] Location permission denied');
           setGpsPermissionDenied(true);
@@ -1259,36 +1415,36 @@ export default function HandymanOrderDetailsPage() {
 
 
         {showTrackingMap && (
-            <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
-              {showMapSpinner ? (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90">
-                  <LoadingSpinner
-                    text={
-                      arrivalPending
-                        ? 'جاري تأكيد الموقع على الخريطة...'
-                        : 'جاري تحديد موقعك...'
-                    }
-                  />
-                </div>
-              ) : null}
+          <div className="relative mt-4 h-72 w-full overflow-hidden rounded-2xl border border-neutral">
+            {showMapSpinner ? (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/90">
+                <LoadingSpinner
+                  text={
+                    arrivalPending
+                      ? 'جاري تأكيد الموقع على الخريطة...'
+                      : 'جاري تحديد موقعك...'
+                  }
+                />
+              </div>
+            ) : null}
 
-              {isTrackingLive && !mapCustomerLocation && !handymanArrived && (
-                <p className="absolute bottom-2 left-0 right-0 z-10 text-center text-xs text-textGray">
-                  جاري تحديد موقع العميل...
-                </p>
-              )}
+            {isTrackingLive && !mapCustomerLocation && !handymanArrived && (
+              <p className="absolute bottom-2 left-0 right-0 z-10 text-center text-xs text-textGray">
+                جاري تحديد موقع العميل...
+              </p>
+            )}
 
-              <TrackingMap
-                customerLocation={mapCustomerLocation}
-                routeDestination={routeDestination ?? orderCustomerMapLoc}
-                handymanLocation={handymanLoc}
-                routeGeometry={routeGeometry}
-                routeCalcTimestamp={routeCalcTimestamp}
-                routeLoading={routeLoading}
-                className="absolute inset-0 h-full w-full"
-              />
-            </div>
-          )}
+            <TrackingMap
+              customerLocation={mapCustomerLocation}
+              routeDestination={routeDestination ?? orderCustomerMapLoc}
+              handymanLocation={handymanLoc}
+              routeGeometry={routeGeometry}
+              routeCalcTimestamp={routeCalcTimestamp}
+              routeLoading={routeLoading}
+              className="absolute inset-0 h-full w-full"
+            />
+          </div>
+        )}
       </div>
 
       {/* Pending */}
@@ -1393,7 +1549,7 @@ export default function HandymanOrderDetailsPage() {
                 disabled={gpsStatus !== 'ready' || !handymanLoc}
                 className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {gpsStatus === 'initializing' ? 'جاري تحديد موقعك...' : 'أنا قادم للعميل'}
+                {gpsStatus === 'initializing' ? 'جاري تحديد موقعك لتفعيل زر أنا قادم...' : 'أنا قادم للعميل'}
               </button>
             </>
           ) : (
@@ -1465,6 +1621,53 @@ export default function HandymanOrderDetailsPage() {
         </div>
       )}
 
+      {/* Arrived — completion UI (identical to in-progress) */}
+      {currentOrder.status === "arrived" && (
+        <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+
+          <div className="mb-4 flex items-center gap-2 text-tertiary">
+            <FaCheck size={18} />
+            <span className="text-lg font-bold">الحرفي وصل — أتمم الطلب</span>
+          </div>
+
+          <label className="mb-2 block text-sm font-bold text-textDark">
+            صورة إثبات إتمام العمل (مطلوبة)
+          </label>
+
+          {completionImage ? (
+            <img
+              src={completionImage}
+              alt=""
+              className="mb-3 h-32 w-32 rounded-lg object-cover"
+            />
+          ) : (
+            <label className="mb-3 flex h-32 w-32 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-borderGray text-textGray">
+              <FaCamera size={20} />
+              <span className="text-xs">
+                {uploading ? "جاري الرفع..." : "إضافة صورة"}
+              </span>
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                disabled={uploading}
+                onChange={handleCompletionImageChange}
+              />
+            </label>
+          )}
+
+          <button
+            type="button"
+            onClick={handleComplete}
+            disabled={!completionImage || isLoading}
+            className="btn-secondary w-full disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            إتمام الطلب
+          </button>
+
+        </div>
+      )}
+
       {/* Contact */}
       <div className="flex flex-wrap gap-3">
 
@@ -1492,26 +1695,27 @@ export default function HandymanOrderDetailsPage() {
         "cancelled",
         "in-progress",
         "price_confirmed",
+        "arrived",
       ].includes(currentOrder.status) && (
-        <div className="mt-4 text-center">
+          <div className="mt-4 text-center">
 
-          {reportSent ? (
-            <p className="text-sm text-tertiary">
-              تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته
-            </p>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setReportOpen(true)}
-              className="inline-flex items-center gap-2 text-sm text-emergency hover:underline"
-            >
-              <FaFlag size={12} />
-              الإبلاغ عن مشكلة في هذا الطلب
-            </button>
-          )}
+            {reportSent ? (
+              <p className="text-sm text-tertiary">
+                تم إرسال بلاغك، سيقوم فريق الدعم بمراجعته
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setReportOpen(true)}
+                className="inline-flex items-center gap-2 text-sm text-emergency hover:underline"
+              >
+                <FaFlag size={12} />
+                الإبلاغ عن مشكلة في هذا الطلب
+              </button>
+            )}
 
-        </div>
-      )}
+          </div>
+        )}
 
       {/* Report Modal */}
       {reportOpen && (

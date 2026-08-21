@@ -1,7 +1,7 @@
 const Message = require("../models/Message");
 const Order = require("../models/Order");
 
-const OPEN_STATUSES = ["pending", "accepted", "price_confirmed", "in-progress"];
+const OPEN_STATUSES = ["pending", "accepted", "price_confirmed", "in-progress", "arrived"];
 
 const createMessage = async (req, res) => {
   try {

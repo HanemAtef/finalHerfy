@@ -12,7 +12,7 @@ const GPS_INIT_OPTIONS = { enableHighAccuracy: true, timeout: 25000, maximumAge:
  *   tracking=true — getCurrentPosition first, then watchPosition, with audit logs
  */
 export default function useCurrentLocation(options = {}) {
-  const { fallbackOnError = true, tracking = false } = options;
+  const { fallbackOnError = true, tracking = false, enabled = true } = options;
   const [location, setLocation] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -50,7 +50,7 @@ export default function useCurrentLocation(options = {}) {
   );
 
   const startWatch = useCallback(() => {
-    if (watchIdRef.current !== null) return;
+    if (!enabled || watchIdRef.current !== null) return;
 
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
@@ -66,9 +66,11 @@ export default function useCurrentLocation(options = {}) {
       (err) => handleGeoError(err, 'watchPosition'),
       GPS_WATCH_OPTIONS
     );
-  }, [applyValidPosition, handleGeoError, tracking]);
+  }, [applyValidPosition, enabled, handleGeoError, tracking]);
 
   const requestLocation = useCallback(() => {
+    if (!enabled) return;
+
     if (!navigator.geolocation) {
       setError('المتصفح لا يدعم تحديد الموقع');
       setLocation(null);
@@ -89,6 +91,7 @@ export default function useCurrentLocation(options = {}) {
     if (tracking) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          if (!enabled) return;
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
           console.log('📍 [CUSTOMER GPS] Location received');
@@ -99,7 +102,10 @@ export default function useCurrentLocation(options = {}) {
           setLoading(false);
           startWatch();
         },
-        (err) => handleGeoError(err, 'getCurrentPosition'),
+        (err) => {
+          if (!enabled) return;
+          handleGeoError(err, 'getCurrentPosition');
+        },
         GPS_INIT_OPTIONS
       );
       return;
@@ -107,18 +113,31 @@ export default function useCurrentLocation(options = {}) {
 
     watchIdRef.current = navigator.geolocation.watchPosition(
       (position) => {
+        if (!enabled) return;
         const lat = position?.coords?.latitude;
         const lng = position?.coords?.longitude;
         if (applyValidPosition(lat, lng)) {
           setLoading(false);
         }
       },
-      (err) => handleGeoError(err, 'watchPosition'),
+      (err) => {
+        if (!enabled) return;
+        handleGeoError(err, 'watchPosition');
+      },
       GPS_WATCH_OPTIONS
     );
-  }, [applyValidPosition, handleGeoError, startWatch, tracking]);
+  }, [applyValidPosition, enabled, handleGeoError, startWatch, tracking]);
 
   useEffect(() => {
+    if (!enabled) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      setLoading(false);
+      return;
+    }
+
     requestLocation();
 
     return () => {
@@ -127,7 +146,7 @@ export default function useCurrentLocation(options = {}) {
         watchIdRef.current = null;
       }
     };
-  }, [requestLocation]);
+  }, [enabled, requestLocation]);
 
   return { location, error, loading, requestLocation };
 };

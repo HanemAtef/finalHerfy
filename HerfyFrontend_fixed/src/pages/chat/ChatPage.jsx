@@ -30,7 +30,7 @@ const QUICK_REPLIES = [
 
 // Mirrors the backend's chat business rule (messageController.js /
 // chatSocket.js) — chat only stays open while the order is still active.
-const CHAT_OPEN_STATUSES = ['pending', 'accepted', 'price_confirmed', 'in-progress'];
+const CHAT_OPEN_STATUSES = ['pending', 'accepted', 'price_confirmed', 'in-progress', 'arrived'];
 
 export default function ChatPage() {
   const { orderId } = useParams();

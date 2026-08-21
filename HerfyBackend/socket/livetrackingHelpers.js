@@ -20,10 +20,21 @@ const haversineMeters = (a, b) => {
   return R * 2 * Math.atan2(Math.sqrt(chord), Math.sqrt(1 - chord));
 };
 
-const isActiveTrackingOrder = (order) =>
-  !!order &&
-  ['price_confirmed', 'in-progress'].includes(order.status) &&
-  (order.status === 'in-progress' || order.isHandymanOnTheWay === true);
+const isActiveTrackingOrder = (order) => {
+  if (!order) return false;
+  if (!['price_confirmed', 'in-progress'].includes(order.status)) return false;
+  if (order.status !== 'in-progress' && !order.isHandymanOnTheWay) return false;
+  if (order.trackingStatus === 'expired') return false;
+
+  if (order.trackingExpiresAt) {
+    const expiresMs = new Date(order.trackingExpiresAt).getTime();
+    if (Number.isFinite(expiresMs) && Date.now() >= expiresMs) return false;
+  }
+
+  if (order.trackingStatus === 'stopped' && !order.isHandymanOnTheWay) return false;
+
+  return true;
+};
 
 const isGpsEntryFresh = (entry, maxAgeMs = GPS_REPLAY_MAX_AGE_MS) =>
   !!entry &&

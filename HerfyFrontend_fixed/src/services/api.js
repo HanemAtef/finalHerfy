@@ -32,17 +32,17 @@ export const uploadService = {
   uploadImage: (file) => {
     const formData = new FormData();
     formData.append('image', file);
-    return api.post('/uploads/image', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post('/uploads/image', formData);
   },
   uploadImages: (files) => {
     const formData = new FormData();
     Array.from(files).forEach((file) => formData.append('images', file));
-    return api.post('/uploads/images', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post('/uploads/images', formData);
   },
   uploadAudio: (file) => {
     const formData = new FormData();
     formData.append('audio', file);
-    return api.post('/uploads/audio', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post('/uploads/audio', formData);
   },
 };
 

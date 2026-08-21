@@ -55,8 +55,24 @@
 
       status: {
         type: String,
-        enum: ["pending", "accepted", "price_confirmed", "in-progress", "completed", "cancelled", "disputed"],
+        enum: ["pending", "accepted", "price_confirmed", "in-progress", "arrived", "completed", "cancelled", "disputed"],
         default: "pending",
+      },
+
+      trackingStatus: {
+        type: String,
+        enum: ["stopped", "active", "expired"],
+        default: "stopped",
+      },
+
+      trackingStartedAt: {
+        type: Date,
+        default: null,
+      },
+
+      trackingExpiresAt: {
+        type: Date,
+        default: null,
       },
 
       price: {
@@ -164,6 +180,7 @@
   orderSchema.index({ customerId: 1 });
   orderSchema.index({ handymanId: 1 });
   orderSchema.index({ status: 1 });
+  orderSchema.index({ trackingStatus: 1 });
 
   const Order = mongoose.model("Order", orderSchema);
   module.exports = Order;

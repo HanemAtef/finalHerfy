@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Handyman = require('../models/Handyman');
 const { calculateRoute } = require('../utils/tomtom');
-const { getThrottle, setThrottle } = require('./liveTrackingThrottle');
+const { getThrottle, setThrottle, cleanupThrottle } = require('./liveTrackingThrottle');
 const {
   ARRIVAL_THRESHOLD_METERS,
   ROUTE_CACHE_TOLERANCE_METERS,
@@ -15,6 +15,7 @@ const {
   shouldRecalculateRoute,
   isRouteCacheValid,
   haversineMeters,
+  GPS_REPLAY_MAX_AGE_MS,
 } = require('./livetrackingHelpers');
 
 const isValidId = (id) => typeof id === "string" && mongoose.isValidObjectId(id);
@@ -83,11 +84,11 @@ const lastHandymanLocations = new Map();
 const arrivalTripState = new Map();
 
 const resolveCustomerDestination = (order, roomStr) => {
-  const live = liveCustomerLocations.get(roomStr);
-  if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
-    return { lat: live.lat, lng: live.lng, source: 'live-gps' };
-  }
-
+  // ── FIXED destination: always use order.customerLocation ──────────────────
+  // This is the location captured at order creation and is the authoritative
+  // routing/arrival target for the entire lifecycle of the order.
+  // Customer live GPS (liveCustomerLocations) is stored for display only and
+  // must NEVER become the route or arrival destination.
   if (
     order.customerLocation &&
     Array.isArray(order.customerLocation.coordinates) &&
@@ -147,6 +148,11 @@ const emitArrival = (io, roomStr) => {
   customerLocations.delete(roomStr);
   lastHandymanLocations.delete(roomStr);
   arrivalTripState.delete(roomStr);
+
+  Order.findByIdAndUpdate(roomStr, { status: 'arrived', trackingStatus: 'stopped' }).catch((err) => {
+    console.warn('[ARRIVAL DB UPDATE] failed:', err.message);
+  });
+
   io.to(roomStr).emit('handymanArrived', {
     orderId: roomStr,
     msg: 'الحرفي وصل إلى موقع العميل',
@@ -155,6 +161,51 @@ const emitArrival = (io, roomStr) => {
   });
   console.log('[ARRIVAL CHECK] arrived = true | Emitted handymanArrived to room', roomStr);
   console.log('🧹 [BACKEND] Cleared customerLocations + route cache for order', roomStr);
+};
+
+/** Single transition server-side expiration gate */
+const checkAndEnforceTrackingTimeout = async (io, order, roomStr) => {
+  if (!order) return true;
+
+  if (order.trackingStatus === 'expired') {
+    return true;
+  }
+
+  if (['arrived', 'completed', 'cancelled'].includes(order.status)) {
+    return true;
+  }
+
+  if (order.trackingStatus === 'stopped' && !order.isHandymanOnTheWay && order.status !== 'in-progress') {
+    return true;
+  }
+
+  const now = Date.now();
+  const expiresMs = order.trackingExpiresAt ? new Date(order.trackingExpiresAt).getTime() : null;
+  const isExpired = expiresMs != null && Number.isFinite(expiresMs) && now >= expiresMs;
+
+  if (isExpired) {
+    console.log(`[TRACKING Expired] Single transition active -> expired for order ${roomStr}`);
+    order.trackingStatus = 'expired';
+    await order.save();
+
+    io.to(roomStr).emit('trackingExpired', {
+      orderId: roomStr,
+      msg: 'انتهت جلسة التتبع المباشر',
+      trackingStatus: 'expired',
+      orderStatus: order.status,
+    });
+
+    lastTrustedRouteData.delete(roomStr);
+    liveCustomerLocations.delete(roomStr);
+    customerLocations.delete(roomStr);
+    lastHandymanLocations.delete(roomStr);
+    arrivalTripState.delete(roomStr);
+    cleanupThrottle(roomStr);
+
+    return true;
+  }
+
+  return false;
 };
 
 /** Store live customer GPS in memory */
@@ -243,9 +294,24 @@ const verifySocketInRoom = async (io, socket, roomStr) => {
 };
 
 /** Replay last known handyman GPS to a socket that joined late (e.g. customer) */
-const replayHandymanLocationToSocket = (socket, roomStr, order) => {
+const replayHandymanLocationToSocket = (socket, roomStr, order, role = 'unknown') => {
   const stored = lastHandymanLocations.get(roomStr);
+
+  console.log('[DEBUG REPLAY] TARGET SOCKET', {
+    id: socket.id,
+    connected: socket.connected,
+    role,
+    orderId: roomStr,
+  });
+
   if (!stored) {
+    console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION', {
+      key: roomStr,
+      hasLocation: false,
+      location: null,
+      cacheKeys: [...lastHandymanLocations.keys()],
+      cacheSize: lastHandymanLocations.size,
+    });
     console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — no stored handyman GPS', {
       socketId: socket.id,
       orderId: roomStr,
@@ -253,7 +319,24 @@ const replayHandymanLocationToSocket = (socket, roomStr, order) => {
     });
     return;
   }
+
+  console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION', {
+    key: roomStr,
+    hasLocation: true,
+    location: stored,
+    orderId: roomStr,
+    lat: stored.lat,
+    lng: stored.lng,
+    updatedAt: stored.updatedAt,
+    ageMs: stored.updatedAt != null ? Date.now() - stored.updatedAt : null,
+  });
+
   if (!isGpsEntryFresh(stored)) {
+    console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION stale — replay skipped', {
+      key: roomStr,
+      ageMs: Date.now() - (stored.updatedAt ?? 0),
+      maxAgeMs: GPS_REPLAY_MAX_AGE_MS,
+    });
     console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — stale handyman GPS', {
       socketId: socket.id,
       orderId: roomStr,
@@ -267,6 +350,11 @@ const replayHandymanLocationToSocket = (socket, roomStr, order) => {
   const lat = Number(stored.lat);
   const lng = Number(stored.lng);
   if (!isValidHandymanGps(lat, lng)) {
+    console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION invalid coords — replay skipped', {
+      key: roomStr,
+      lat,
+      lng,
+    });
     console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — invalid stored coords', {
       socketId: socket.id,
       orderId: roomStr,
@@ -287,6 +375,14 @@ const replayHandymanLocationToSocket = (socket, roomStr, order) => {
     ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
   };
 
+  console.log('[DEBUG REPLAY] ABOUT TO EMIT LOCATION', {
+    targetSocketId: socket.id,
+    orderId: roomStr,
+    lat,
+    lng,
+    replay: true,
+  });
+
   console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY]', {
     socketId: socket.id,
     orderId: roomStr,
@@ -299,6 +395,11 @@ const replayHandymanLocationToSocket = (socket, roomStr, order) => {
   });
   // Direct emit to joining socket — do NOT rely on room broadcast for replay
   socket.emit('locationUpdate', payload);
+
+  console.log('[DEBUG REPLAY] LOCATION EMITTED', {
+    targetSocketId: socket.id,
+    orderId: roomStr,
+  });
   console.log('📤 [BACKEND] Replayed stored handyman location to socket', socket.id, '| orderId =', roomStr);
 };
 
@@ -460,8 +561,8 @@ const liveTrackingSocket = (io) => {
     socket.on('joinOrderRoom', async (orderId) => {
       try {
         if (!isValidId(orderId)) {
-            socket.emit('joinOrderRoomAck', { orderId, success: false, reason: 'invalid_order_id' });
-            return socket.emit('error', { msg: 'Invalid order id' });
+          socket.emit('joinOrderRoomAck', { orderId, success: false, reason: 'invalid_order_id' });
+          return socket.emit('error', { msg: 'Invalid order id' });
         }
 
         const roomStr = toOrderRoomId(orderId);
@@ -523,6 +624,29 @@ const liveTrackingSocket = (io) => {
           storedHandymanLocation: storedHandyman,
         });
 
+        if (role === 'customer') {
+          console.log('[DEBUG REPLAY] CUSTOMER JOIN', {
+            socketId: socket.id,
+            orderId,
+            room: roomStr,
+            role,
+          });
+          console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION', {
+            hasLocation: storedHandyman != null,
+            location: storedHandyman,
+            key: roomStr,
+            cacheKeys: [...lastHandymanLocations.keys()],
+            ...(storedHandyman
+              ? {
+                orderId: roomStr,
+                lat: storedHandyman.lat,
+                lng: storedHandyman.lng,
+                updatedAt: storedHandyman.updatedAt,
+              }
+              : {}),
+          });
+        }
+
         socket.emit('joinOrderRoomAck', {
           orderId,
           roomStr,
@@ -532,7 +656,7 @@ const liveTrackingSocket = (io) => {
 
         // Replay last known live GPS directly to this socket (late joiner).
         replayCustomerLocationToSocket(socket, roomStr);
-        replayHandymanLocationToSocket(socket, roomStr, order);
+        replayHandymanLocationToSocket(socket, roomStr, order, role);
 
         const roomVerified = await verifySocketInRoom(io, socket, roomStr);
         console.log('[SOCKET AUDIT][JOIN ROOM VERIFIED]', {
@@ -563,7 +687,7 @@ const liveTrackingSocket = (io) => {
         socket.leave(roomStr);
         socket.data.trackingRooms?.delete?.(roomStr);
         console.log(`[SOCKET AUDIT] leaveOrderRoom`, { socketId: socket.id, room: roomStr });
-      } catch(err) {
+      } catch (err) {
         console.error("leaveOrderRoom failed:", err.message);
       }
     });
@@ -594,6 +718,11 @@ const liveTrackingSocket = (io) => {
           return;
         }
 
+        if (await checkAndEnforceTrackingTimeout(io, order, roomStr)) {
+          console.log('[SOCKET AUDIT][BACKEND BLOCKED] sendCustomerLocation — order tracking expired or stopped:', roomStr);
+          return;
+        }
+
         const userId = socket.user?._id?.toString();
         const isCustomer = userId && order.customerId.toString() === userId;
         if (!isCustomer && !socket.user?.isAdmin) {
@@ -616,32 +745,39 @@ const liveTrackingSocket = (io) => {
 
         await logRoomMembers(io, roomStr, 'CUSTOMER ROOM MEMBERS (after customer join on send)');
 
-        const customerPoint = { lat: numLat, lng: numLng };
+        // Store and broadcast live customer GPS for map display on the handyman side.
         storeCustomerLocation(roomStr, numLat, numLng);
-
-        const customerDest = { lat: numLat, lng: numLng, source: 'live-gps' };
-        invalidateRouteCacheIfNeeded(roomStr, customerDest);
 
         // ── 1. Broadcast live customer GPS to handyman (and others in room) ──
         await broadcastCustomerLocationUpdate(io, roomStr, numLat, numLng);
 
+        // ── Fixed destination: always from order.customerLocation ─────────────
+        // Live GPS is displayed on the map but MUST NOT be used for routing/arrival.
+        const fixedDest = resolveCustomerDestination(order, roomStr);
+        if (!fixedDest) {
+          console.log('[sendCustomerLocation] No fixed order destination available — skipping route/arrival');
+          return;
+        }
+
+        invalidateRouteCacheIfNeeded(roomStr, fixedDest);
+
         const handymanPoint = lastHandymanLocations.get(roomStr) ?? null;
         console.log('[ROUTE INPUT] handyman =', handymanPoint ?? 'not yet received');
-        console.log('[ROUTE INPUT] customer =', customerPoint, '(live-gps)');
+        console.log('[ROUTE INPUT] customer (fixed order dest) =', fixedDest, '| live GPS (display only) = { lat:', numLat, ', lng:', numLng, '}');
 
         if (handymanPoint && isGpsEntryFresh(handymanPoint)) {
-          const directMeters = haversineMeters(handymanPoint, customerPoint);
-          console.log('[ROUTE INPUT] directDistanceMeters =', Math.round(directMeters));
+          const directMeters = haversineMeters(handymanPoint, fixedDest);
+          console.log('[ROUTE INPUT] directDistanceMeters (to fixed dest) =', Math.round(directMeters));
 
           // ── Always deliver handyman coords BEFORE arrival check ──
           const baseUpdate = {
             lat: handymanPoint.lat,
             lng: handymanPoint.lng,
-            ...buildCustomerFields(customerDest, handymanPoint),
+            ...buildCustomerFields(fixedDest, handymanPoint),
           };
           await broadcastLocationUpdate(io, roomStr, baseUpdate, 'sendCustomerLocation');
 
-          if (checkAndEmitArrival(io, roomStr, order, handymanPoint, customerPoint, 'sendCustomerLocation', {
+          if (checkAndEmitArrival(io, roomStr, order, handymanPoint, fixedDest, 'sendCustomerLocation', {
             handymanEntry: handymanPoint,
             skipTripRecord: true,
           })) {
@@ -652,7 +788,7 @@ const liveTrackingSocket = (io) => {
             orderId,
             roomStr,
             origin: handymanPoint,
-            customerDest,
+            customerDest: fixedDest,
             directMeters,
             contextLabel: 'sendCustomerLocation',
           });
@@ -661,7 +797,7 @@ const liveTrackingSocket = (io) => {
             const updateData = {
               lat: handymanPoint.lat,
               lng: handymanPoint.lng,
-              ...buildCustomerFields(customerDest, handymanPoint),
+              ...buildCustomerFields(fixedDest, handymanPoint),
               ...routePayload,
             };
             await broadcastLocationUpdate(io, roomStr, updateData, 'sendCustomerLocation-route');
@@ -695,7 +831,7 @@ const liveTrackingSocket = (io) => {
         });
 
         if (!isValidId(orderId)) {
-           return socket.emit('error', { msg: 'Invalid order id' });
+          return socket.emit('error', { msg: 'Invalid order id' });
         }
 
         if (!Number.isFinite(numLat) || !Number.isFinite(numLng)) {
@@ -709,8 +845,13 @@ const liveTrackingSocket = (io) => {
         }
 
         const roomStr = toOrderRoomId(orderId);
-        // Join immediately so room membership exists before async order/auth work
-        socket.join(roomStr);
+
+        const trackingRole = socket.data?.trackingRooms?.get?.(roomStr);
+        if (!trackingRole || trackingRole !== 'handyman') {
+          console.warn(`❌ [BACKEND REJECT] sendLocation — Socket ${socket.id} not joined as handyman to room ${roomStr}`);
+          socket.emit('sendLocationError', { msg: 'Socket not joined or authorized for this order room' });
+          return socket.emit('error', { msg: 'Socket not joined or authorized for this order room' });
+        }
 
         // If handyman already arrived for this order, ignore further location updates.
         if (arrivedOrders.has(roomStr)) {
@@ -721,7 +862,13 @@ const liveTrackingSocket = (io) => {
         const order = await Order.findById(orderId);
         if (!order) {
           console.warn(`❌ [Backend Socket Audit] Order not found: ${orderId}`);
+          socket.emit('sendLocationError', { msg: 'Order not found' });
           return socket.emit('error', { msg: 'Order not found' });
+        }
+
+        if (await checkAndEnforceTrackingTimeout(io, order, roomStr)) {
+          console.log('[SOCKET AUDIT][BACKEND BLOCKED] sendLocation — order tracking expired or stopped:', roomStr);
+          return;
         }
 
         const userId = socket.user?._id?.toString();
@@ -729,18 +876,47 @@ const liveTrackingSocket = (io) => {
         const isAdmin = socket.user?.isAdmin;
         if (!isAssignedHandyman && !isAdmin) {
           console.warn(`❌ [Backend Socket Audit] Unauthorized location update by user ${userId} for order ${orderId}`);
+          socket.emit('sendLocationError', { msg: 'Not authorized to update this order\'s location' });
           return socket.emit('error', { msg: 'Not authorized to update this order\'s location' });
         }
 
-        if (!['price_confirmed', 'in-progress'].includes(order.status)) {
-            return socket.emit('error', { msg: 'Order status does not allow location updates' });
+        if (!isActiveTrackingOrder(order)) {
+          console.warn(`❌ [BACKEND REJECT] sendLocation — Order ${orderId} is not an active tracking order (status=${order.status}, trackingStatus=${order.trackingStatus}, onTheWay=${order.isHandymanOnTheWay})`);
+          socket.emit('sendLocationError', { msg: 'Order status does not allow location updates' });
+          return socket.emit('error', { msg: 'Order status does not allow location updates' });
         }
 
-        await logRoomMembers(io, roomStr, 'HANDYMAN ROOM MEMBERS (after handyman join on send)');
+        // BUSINESS RULE: Handyman may ONLY track ONE active order at a time.
+        const handymanOrders = await Order.find({
+          handymanId: order.handymanId,
+          _id: { $ne: order._id },
+          isHandymanOnTheWay: true,
+          status: { $in: ['price_confirmed', 'in-progress'] },
+        });
+
+        const activeOtherOrder = handymanOrders.find((o) => isActiveTrackingOrder(o));
+
+        if (activeOtherOrder) {
+          console.warn(`❌ [BACKEND REJECT] sendLocation — Handyman ${order.handymanId} has active tracking on another order ${activeOtherOrder._id}`);
+          socket.emit('sendLocationError', { msg: 'Another order is currently active for live tracking' });
+          return socket.emit('error', { msg: 'Another order is currently active for live tracking' });
+        }
+
+        await logRoomMembers(io, roomStr, 'HANDYMAN ROOM MEMBERS (sending location)');
 
         const origin = { lat: numLat, lng: numLng };
         if (isActiveTrackingOrder(order)) {
           lastHandymanLocations.set(roomStr, { ...origin, updatedAt: Date.now() });
+        } else {
+          console.log('[DEBUG REPLAY] HANDYMAN LOCATION NOT STORED for replay cache', {
+            orderId,
+            roomStr,
+            status: order.status,
+            isHandymanOnTheWay: order.isHandymanOnTheWay ?? null,
+            reason: 'isActiveTrackingOrder=false',
+            lat: numLat,
+            lng: numLng,
+          });
         }
 
         const customerDest = resolveCustomerDestination(order, roomStr);
@@ -866,7 +1042,7 @@ const liveTrackingSocket = (io) => {
         console.log('  routeCalcTimestamp =', updateData.routeCalcTimestamp ? new Date(updateData.routeCalcTimestamp).toISOString() : 'N/A');
 
       } catch (err) {
-          console.error("sendLocation failed:", err.message);
+        console.error("sendLocation failed:", err.message);
       }
     });
 
@@ -878,15 +1054,33 @@ const liveTrackingSocket = (io) => {
         if (!order) return;
         const userId = socket.user?._id?.toString();
         if (userId && order.handymanId.toString() !== userId && !socket.user?.isAdmin) {
-            return;
+          return;
         }
 
-        io.to(orderId.toString()).emit('trackingStarted', {
+        const roomStr = orderId.toString();
+        socket.join(roomStr);
+
+        // CRITICAL RULE 2: startTracking is NOT a start owner.
+        // It MUST NOT initialize trackingStartedAt or trackingExpiresAt or extend expiration!
+        if (order.trackingStatus === 'expired' || (order.trackingExpiresAt && Date.now() >= new Date(order.trackingExpiresAt).getTime())) {
+          console.log(`[TRACKING REJECT] startTracking ignored — tracking is expired for order ${orderId}`);
+          return;
+        }
+        if (order.trackingStatus === 'stopped' || ['arrived', 'completed', 'cancelled'].includes(order.status)) {
+          console.log(`[TRACKING REJECT] startTracking ignored — tracking is stopped/terminal for order ${orderId}`);
+          return;
+        }
+
+        io.to(roomStr).emit('trackingStarted', {
           msg: ' الحرفي في الطريق!',
+          orderId: roomStr,
+          trackingStatus: order.trackingStatus,
+          trackingStartedAt: order.trackingStartedAt,
+          trackingExpiresAt: order.trackingExpiresAt,
         });
-        console.log(`📡 [Backend Socket Audit] Tracking started for order ${orderId}`);
-      } catch(err) {
-          console.error("startTracking failed:", err.message);
+        console.log(`📡 [Backend Socket Audit] Tracking room confirmed for order ${orderId}`);
+      } catch (err) {
+        console.error("startTracking failed:", err.message);
       }
     });
 
@@ -898,7 +1092,7 @@ const liveTrackingSocket = (io) => {
         if (!order) return;
         const userId = socket.user?._id?.toString();
         if (userId && order.handymanId.toString() !== userId && !socket.user?.isAdmin) {
-            return;
+          return;
         }
 
         io.to(orderId.toString()).emit('trackingStopped', {
@@ -912,8 +1106,8 @@ const liveTrackingSocket = (io) => {
         arrivalTripState.delete(roomStr);
         console.log(`📡 [Backend Socket Audit] Tracking stopped for order ${orderId}`);
         console.log('🧹 [BACKEND] Cleared customerLocations + route cache on stopTracking for order', roomStr);
-      } catch(err) {
-          console.error("stopTracking failed:", err.message);
+      } catch (err) {
+        console.error("stopTracking failed:", err.message);
       }
     });
 

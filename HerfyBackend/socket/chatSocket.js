@@ -3,7 +3,7 @@ const Order = require("../models/Order");
 const mongoose = require("mongoose");
 const { createNotification } = require("../controllers/notificationController");
 
-const OPEN_STATUSES = ["pending", "accepted", "price_confirmed", "in-progress"];
+const OPEN_STATUSES = ["pending", "accepted", "price_confirmed", "in-progress", "arrived"];
 
 const isValidId = (id) => typeof id === "string" && mongoose.isValidObjectId(id);
 

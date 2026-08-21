@@ -16,6 +16,7 @@ import {
   FaFlag,
   FaMapMarkerAlt,
   FaWalking,
+  FaWrench,
 } from 'react-icons/fa';
 import { fetchOrderById, updateOrderStatus, confirmOrderPrice } from '../../store/slices/orderSlice';
 import { connectSocket, getSocketInstanceId } from '../../socket/socket';
@@ -73,9 +74,16 @@ export default function TrackingPage() {
   const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
   const { token } = useSelector((state) => state.auth);
 
+  const isTrackingLive =
+    currentOrder &&
+    currentOrder.status === 'price_confirmed' &&
+    currentOrder.isHandymanOnTheWay === true &&
+    currentOrder.trackingStatus === 'active';
+
   const { location, error: locationError, loading: locationLoading } = useCurrentLocation({
     fallbackOnError: false,
-    tracking: true,
+    tracking: !!isTrackingLive,
+    enabled: !!isTrackingLive,
   });
 
   const [handymanLoc, setHandymanLoc] = useState(null);
@@ -117,14 +125,17 @@ export default function TrackingPage() {
 
   const canSendCustomerGps = (order) =>
     order &&
-    ['price_confirmed', 'in-progress'].includes(order.status) &&
+    order.status === 'price_confirmed' &&
+    order.isHandymanOnTheWay === true &&
+    order.trackingStatus === 'active' &&
     !handymanArrivedRef.current;
 
   const isLiveTracking = (order) =>
     order &&
     !handymanArrivedRef.current &&
-    ((order.status === 'price_confirmed' && order.isHandymanOnTheWay) ||
-      order.status === 'in-progress');
+    order.status === 'price_confirmed' &&
+    order.isHandymanOnTheWay === true &&
+    order.trackingStatus === 'active';
 
   useEffect(() => {
     currentOrderRef.current = currentOrder;
@@ -134,6 +145,10 @@ export default function TrackingPage() {
       setRouteDestination((prev) => prev ?? orderDest);
     }
   }, [currentOrder]);
+
+  useEffect(() => {
+    console.log('[DEBUG HANDYMAN STATE] ACTUAL STATE', handymanLoc);
+  }, [handymanLoc]);
 
   // ─── Fetch order once ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -152,7 +167,9 @@ export default function TrackingPage() {
     orderId &&
     token &&
     currentOrder &&
-    ['price_confirmed', 'in-progress'].includes(currentOrder.status) &&
+    currentOrder.status === 'price_confirmed' &&
+    currentOrder.isHandymanOnTheWay === true &&
+    currentOrder.trackingStatus === 'active' &&
     !handymanArrivedRef.current
       ? `${orderId}:tracking`
       : null;
@@ -247,8 +264,19 @@ export default function TrackingPage() {
     emitCustomerLocationRef.current = emitCustomerLocation;
 
     const onLocationUpdate = (payload) => {
-      const numLat = Number(payload?.lat);
-      const numLng = Number(payload?.lng);
+      const numLat = Number(payload?.lat ?? payload?.latitude);
+      const numLng = Number(payload?.lng ?? payload?.longitude);
+      const isReplay = payload?.replay ?? false;
+
+      console.log('[DEBUG CUSTOMER LISTENER] LOCATION UPDATE RECEIVED', {
+        socketId: socket.id,
+        orderId,
+        lat: numLat,
+        lng: numLng,
+        replay: isReplay,
+        payload,
+      });
+
       console.log('[SOCKET AUDIT][CUSTOMER HANDYMAN LOCATION RECEIVED]', {
         socketId: socket.id,
         socketInstanceId: getSocketInstanceId(),
@@ -265,8 +293,6 @@ export default function TrackingPage() {
       });
 
       const {
-        lat,
-        lng,
         distanceRemaining,
         eta,
         trafficDelay: delay,
@@ -275,18 +301,35 @@ export default function TrackingPage() {
         routeCalcTimestamp,
       } = payload;
 
-      console.log('[CUSTOMER] locationUpdate | handyman =', { lat, lng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
+      console.log('[CUSTOMER] locationUpdate | handyman =', { lat: numLat, lng: numLng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
 
       if (Number.isFinite(numLat) && Number.isFinite(numLng) && isValidGpsCoord(numLat, numLng)) {
         const handy = { latitude: numLat, longitude: numLng };
+        console.log('[DEBUG HANDYMAN STATE] BEFORE', {
+          current: handymanLocRef.current,
+          next: handy,
+        });
         console.log('[HANDYMAN LOCATION STATE UPDATE]', {
           previous: handymanLocRef.current,
           next: handy,
         });
         handymanLocRef.current = handy;
         setHandymanLoc(handy);
+        console.log('[DEBUG HANDYMAN STATE] UPDATE SCHEDULED', {
+          latitude: numLat,
+          longitude: numLng,
+          replay: isReplay,
+        });
       } else {
-        console.warn('[CUSTOMER] locationUpdate ignored — invalid handyman lat/lng', { lat, lng, numLat, numLng });
+        console.warn('[CUSTOMER] locationUpdate ignored — invalid handyman lat/lng', {
+          lat: payload?.lat,
+          lng: payload?.lng,
+          latitude: payload?.latitude,
+          longitude: payload?.longitude,
+          numLat,
+          numLng,
+          replay: isReplay,
+        });
       }
 
       const payloadDest = normalizeGpsLocation(payload?.customerLat, payload?.customerLng);
@@ -452,6 +495,10 @@ export default function TrackingPage() {
       }
       customerJoinPendingRef.current = true;
       customerJoinSocketIdRef.current = socket.id;
+      console.log('[DEBUG CUSTOMER LISTENER] READY', {
+        socketId: socket.id,
+        orderId,
+      });
       console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom EMIT', {
         socketInstanceId: getSocketInstanceId(),
         socketId: socket.id,
@@ -503,6 +550,11 @@ export default function TrackingPage() {
     };
 
     bindLocationUpdateListener();
+    console.log('[DEBUG CUSTOMER LISTENER] READY', {
+      socketId: socket.id,
+      orderId,
+      phase: 'listener-bound-before-join',
+    });
     console.log('[SOCKET AUDIT][CUSTOMER LOCATION LISTENER READY]', {
       socketId: socket.id,
       orderId,
@@ -931,6 +983,96 @@ export default function TrackingPage() {
     );
   }
 
+  // ===== ARRIVED =====
+  if (status === 'arrived') {
+    return (
+      <div className="fixed inset-0 flex flex-col bg-white">
+        <Header title="الطلب" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <FaCheckCircle className="text-tertiary" size={48} />
+          <h2 className="text-xl font-bold text-textDark">الحرفي وصل إلى موقعك</h2>
+          <p className="max-w-xs text-sm text-textGray">
+            وصل {handyman.name || 'الحرفي'} ويعمل على إتمام الخدمة. تواصل معه عبر المحادثة.
+          </p>
+          <div className="card w-full max-w-sm text-right">
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">رقم الطلب</span>
+              <span className="font-medium text-textDark">#{String(orderId).slice(-6)}</span>
+            </div>
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">الخدمة</span>
+              <span className="font-medium text-textDark">{currentOrder.profession}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-textGray">السعر</span>
+              <span className="font-medium text-textDark">
+                {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+              </span>
+            </div>
+          </div>
+          <Link to={`/chat/${orderId}`} className="btn-primary flex items-center gap-2">
+            <FaComments /> فتح المحادثة
+          </Link>
+          <ReportButton />
+        </div>
+        {reportOpen && (
+          <ReasonModal
+            title="سبب الإبلاغ عن هذا الطلب"
+            confirmLabel="إرسال البلاغ"
+            danger
+            onConfirm={handleReport}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ===== IN-PROGRESS =====
+  if (status === 'in-progress') {
+    return (
+      <div className="fixed inset-0 flex flex-col bg-white">
+        <Header title="الطلب قيد التنفيذ" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <FaWrench className="animate-bounce text-primary" size={48} />
+          <h2 className="text-xl font-bold text-textDark">الحرفي يعمل على طلبك الآن</h2>
+          <p className="max-w-xs text-sm text-textGray">
+            يقوم {handyman.name || 'الحرفي'} حالياً بتقديم الخدمة المطلوبة. يمكنك التواصل معه عبر المحادثة.
+          </p>
+          <div className="card w-full max-w-sm text-right">
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">رقم الطلب</span>
+              <span className="font-medium text-textDark">#{String(orderId).slice(-6)}</span>
+            </div>
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">الخدمة</span>
+              <span className="font-medium text-textDark">{currentOrder.profession}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-textGray">السعر</span>
+              <span className="font-medium text-textDark">
+                {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+              </span>
+            </div>
+          </div>
+          <Link to={`/chat/${orderId}`} className="btn-primary flex items-center gap-2">
+            <FaComments /> فتح المحادثة
+          </Link>
+          <ReportButton />
+        </div>
+        {reportOpen && (
+          <ReasonModal
+            title="سبب الإبلاغ عن هذا الطلب"
+            confirmLabel="إرسال البلاغ"
+            danger
+            onConfirm={handleReport}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
   // ===== ✅ LIVE TRACKING (price_confirmed on-way / in-progress) =====
 
   const orderCustomerLocation = parseOrderCustomerLocation(currentOrder);
@@ -943,6 +1085,12 @@ export default function TrackingPage() {
   const hasValidHandymanLoc =
     handymanLoc &&
     isValidGpsCoord(handymanLoc.latitude, handymanLoc.longitude);
+
+  console.log('[DEBUG TRACKING MAP INPUT]', {
+    handymanLocation: hasValidHandymanLoc ? handymanLoc : null,
+    customerLocation: mapCustomerLocation,
+    rawHandymanLoc: handymanLoc,
+  });
 
   const canShowMap = !!(mapCustomerLocation || hasValidHandymanLoc);
 
