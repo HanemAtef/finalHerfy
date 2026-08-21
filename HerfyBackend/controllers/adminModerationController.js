@@ -58,15 +58,7 @@ const deleteUserAccount = async (req, res) => {
     if (user.isAdmin) return res.status(400).json({ msg: "لا يمكن حذف حساب أدمن" });
     if (user.deletedAt) return res.status(400).json({ msg: "الحساب محذوف بالفعل" });
 
-    // FIX (M4): previously hard-deleted the User (and Handyman) row, leaving
-    // Order/Message/Review/Notification/RefreshToken documents pointing at
-    // a now-nonexistent user — every populate() of that field silently
-    // returns null, permanently losing which party was involved in
-    // historical orders. Soft-delete instead: the row (and its history)
-    // stays intact, the account is blocked from logging in
-    // (see authMiddleware/socketAuth/loginUser/refreshAccessToken), and it
-    // drops out of "nearby handymen" results because the Handyman profile
-    // (a separate, non-historical record) is still removed.
+
     user.deletedAt = new Date();
     user.isBanned = true;
     user.banReason = reason;

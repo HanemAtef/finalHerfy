@@ -92,14 +92,7 @@ const createOrder = async (req, res) => {
     handymanProfile.totalOffers += 1;
     handymanProfile.acceptanceRate = handymanProfile.acceptedOffers / handymanProfile.totalOffers;
     await handymanProfile.save();
-    // BUG FIX (C8): the customer's owed penalty used to be zeroed out here,
-    // immediately on order creation, even though it was never actually
-    // charged anywhere collectible (the fields that carried it were being
-    // silently dropped, and even once persisted, nothing at payment time
-    // referenced them). The penalty now stays on the customer's balance —
-    // and is snapshotted onto this order's `penaltyAmount`/`totalPrice` —
-    // until it's actually collected when cash payment is confirmed
-    // (see confirmCashPayment).
+
 
     // ========== NOTIFICATION: New order to handyman ==========
     const io = req.app.get('io');
@@ -165,8 +158,7 @@ const getCustomerOrders = async (req, res) => {
     const { customerId } = req.params;
     const { page = 1, limit = 10 } = req.query;
 
-    // SECURITY FIX (C4): route middleware only checked role, not ownership —
-    // any authenticated customer could read any other customer's orders.
+
     if (req.user.id !== customerId && req.user.role !== "admin") {
       return res.status(403).json({ msg: "You can only view your own orders" });
     }
