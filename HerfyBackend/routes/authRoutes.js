@@ -73,11 +73,11 @@ const normalizeRegistrationLocation = (req, res, next) => {
 };
 
 // ========== RATE LIMITING ==========
-const authLimiter = rateLimit({
-  windowMs: (parseInt(process.env.RATE_LIMIT_AUTH_WINDOW) || 15) * 60 * 1000,
-  max: process.env.NODE_ENV === "production" ? (parseInt(process.env.RATE_LIMIT_AUTH_MAX) || 10) : 1000,
-  message: "Too many login attempts, please try again after 15 minutes.",
-});
+// const authLimiter = rateLimit({
+//   windowMs: (parseInt(process.env.RATE_LIMIT_AUTH_WINDOW) || 15) * 60 * 1000,
+//   max: process.env.NODE_ENV === "production" ? (parseInt(process.env.RATE_LIMIT_AUTH_MAX) || 10) : 1000,
+//   message: "Too many login attempts, please try again after 15 minutes.",
+// });
 
 // ========== ROUTES ==========
 
@@ -93,19 +93,33 @@ router.post(
   registerUser
 );
 
-router.post("/verify-email", authLimiter, verifyEmail);
-router.post("/resend-otp", authLimiter, resendVerificationOtp);
+router.post("/verify-email", verifyEmail);
+
+router.post("/resend-otp", resendVerificationOtp);
 
 router.post("/refresh", refreshAccessToken);
+
 router.post("/logout", logoutUser);
 
-router.post("/login", authLimiter, validate(loginSchema), loginUser);
+router.post("/login", validate(loginSchema), loginUser);
 
 router.get("/me", authMiddleware, getMe);
-router.put("/me", authMiddleware, validate(updateProfileSchema), updateProfile);
-router.put("/change-password", authMiddleware, validate(changePasswordSchema), changePassword);
 
-router.post("/forgot-password", authLimiter, sendResetOtp);
-router.post("/reset-password", authLimiter, validate(resetPasswordSchema), resetPassword);
+router.put("/me", authMiddleware, validate(updateProfileSchema), updateProfile);
+
+router.put(
+  "/change-password",
+  authMiddleware,
+  validate(changePasswordSchema),
+  changePassword
+);
+
+router.post("/forgot-password", sendResetOtp);
+
+router.post(
+  "/reset-password",
+  validate(resetPasswordSchema),
+  resetPassword
+);
 
 module.exports = router;
