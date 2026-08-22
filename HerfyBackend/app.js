@@ -116,6 +116,9 @@ app.use("/api/reports", require("./routes/reportRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
 
+// Seed the ServiceType collection from the old hardcoded profession list
+// on first boot, so existing handyman records keep working before an
+// admin has touched the new reference-data UI.
 require("./controllers/referenceDataController").ensureSeeded().catch((e) =>
   console.log("ServiceType seed skipped:", e.message)
 );

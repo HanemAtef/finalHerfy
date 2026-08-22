@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import {
@@ -14,16 +14,58 @@ import {
   FaBan,
   FaStar,
   FaFlag,
-  FaCreditCard,
+  FaMapMarkerAlt,
+  FaWalking,
+  FaWrench,
 } from 'react-icons/fa';
 import { fetchOrderById, updateOrderStatus, confirmOrderPrice } from '../../store/slices/orderSlice';
-import { connectSocket } from '../../socket/socket';
+import { connectSocket, getSocketInstanceId } from '../../socket/socket';
 import { reportService } from '../../services/api';
 import TrackingMap from '../../components/Map/TrackingMap';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ReasonModal from '../../components/common/ReasonModal';
 import { formatPrice, formatDate, getDefaultAvatar } from '../../utils/helpers';
 import useCurrentLocation from '../../hooks/useCurrentLocation';
+import {
+  isRouteConsistentWithPositions,
+  isValidGpsCoord,
+  haversineKm,
+  normalizeGpsLocation,
+  parseOrderCustomerLocation,
+} from '../../utils/routeValidation';
+import AlertMessage from '../../components/common/AlertMessage';
+
+const clearRouteState = (refs, setters) => {
+  refs.lastTrustedEtaRef.current = null;
+  refs.etaTimestampRef.current = null;
+  setters.setRouteGeometry(null);
+  setters.setDistance(null);
+  setters.setLastTrustedEta(null);
+  setters.setEtaTimestamp(null);
+  setters.setDisplayedEta(null);
+};
+
+/** Re-emit live customer GPS while tracking so handyman always receives customerLocationUpdate */
+const CUSTOMER_GPS_HEARTBEAT_MS = 12000;
+const CUSTOMER_GPS_MIN_EMIT_MS = 3000;
+const CUSTOMER_GPS_MIN_MOVE_M = 5;
+
+// ─── ETA Formatting ─────────────────────────────────────────────────────────
+const formatEta = (minutes) => {
+  if (minutes === null || minutes === undefined) return null;
+  const m = Math.max(0, Math.round(minutes));
+  if (m === 0) return 'أقل من دقيقة';
+  if (m === 1) return 'دقيقة واحدة';
+  if (m <= 10) return `${m} دقائق`;
+  return `${m} دقيقة`;
+};
+
+// ─── Distance Formatting ─────────────────────────────────────────────────────
+const formatDistance = (km) => {
+  if (km === null || km === undefined) return null;
+  if (km < 1) return `${Math.round(km * 1000)} م`;
+  return `${km.toFixed(1)} كم`;
+};
 
 export default function TrackingPage() {
   const { orderId } = useParams();
@@ -31,81 +73,609 @@ export default function TrackingPage() {
   const dispatch = useDispatch();
   const { currentOrder, isLoading, error } = useSelector((state) => state.orders);
   const { token } = useSelector((state) => state.auth);
-  
-  const { location, loading: locationLoading } = useCurrentLocation();
-  
+
+  const isTrackingLive =
+    currentOrder &&
+    currentOrder.status === 'price_confirmed' &&
+    currentOrder.isHandymanOnTheWay === true &&
+    currentOrder.trackingStatus === 'active';
+
+  const { location, error: locationError, loading: locationLoading } = useCurrentLocation({
+    fallbackOnError: false,
+    tracking: !!isTrackingLive,
+    enabled: !!isTrackingLive,
+  });
+
   const [handymanLoc, setHandymanLoc] = useState(null);
   const [routeGeometry, setRouteGeometry] = useState(null);
+  const [routeCalcTimestamp, setRouteCalcTimestamp] = useState(null);
+  const [routeDestination, setRouteDestination] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
-  const [distance, setDistance] = useState(null);
-  const [eta, setEta] = useState(null);
+  const [distance, setDistance] = useState(null);       // km from TomTom
   const [trafficDelay, setTrafficDelay] = useState(null);
-  const [arrivalTime, setArrivalTime] = useState(null);
+  const [handymanArrived, setHandymanArrived] = useState(false);
 
+  // ─── ETA state managed with timestamps for local countdown ────────────────
+  // lastTrustedEta:     the ETA (in minutes) received from TomTom
+  // etaTimestamp:       Date.now() when that ETA was received
+  // displayedEta:       derived value shown to user (counts down locally)
+  const [lastTrustedEta, setLastTrustedEta] = useState(null);
+  const [etaTimestamp, setEtaTimestamp] = useState(null);
+  const [displayedEta, setDisplayedEta] = useState(null);
+
+  // Refs for reading latest ETA values inside socket closures (stale-closure safe)
+  const lastTrustedEtaRef = useRef(null);
+  const etaTimestampRef = useRef(null);
+  const handymanLocRef = useRef(null);
+  const locationRef = useRef(null);
+  const pendingCustomerLocationRef = useRef(null);
+  const customerSocketRef = useRef(null);
+  const handymanArrivedRef = useRef(false);
+  const routeDestinationRef = useRef(null);
+  const currentOrderRef = useRef(null);
+  const isCustomerJoinedRef = useRef(false);
+  const customerJoinPendingRef = useRef(false);
+  const customerJoinSocketIdRef = useRef(null);
+  const emitCustomerLocationRef = useRef(() => {});
+  const emitJoinOnceRef = useRef(() => {});
+  const lastCustomerEmitRef = useRef({ lat: null, lng: null, ts: 0 });
+  const locationUpdateListenerRef = useRef(null);
+  const locationUpdateHandlerRef = useRef(null);
+
+  const canSendCustomerGps = (order) =>
+    order &&
+    order.status === 'price_confirmed' &&
+    order.isHandymanOnTheWay === true &&
+    order.trackingStatus === 'active' &&
+    !handymanArrivedRef.current;
+
+  const isLiveTracking = (order) =>
+    order &&
+    !handymanArrivedRef.current &&
+    order.status === 'price_confirmed' &&
+    order.isHandymanOnTheWay === true &&
+    order.trackingStatus === 'active';
+
+  useEffect(() => {
+    currentOrderRef.current = currentOrder;
+    const orderDest = parseOrderCustomerLocation(currentOrder);
+    if (orderDest) {
+      routeDestinationRef.current = routeDestinationRef.current ?? orderDest;
+      setRouteDestination((prev) => prev ?? orderDest);
+    }
+  }, [currentOrder]);
+
+  useEffect(() => {
+    console.log('[DEBUG HANDYMAN STATE] ACTUAL STATE', handymanLoc);
+  }, [handymanLoc]);
+
+  // ─── Fetch order once ─────────────────────────────────────────────────────
   useEffect(() => {
     dispatch(fetchOrderById(orderId));
   }, [dispatch, orderId]);
 
+  // ─── Poll order while active ───────────────────────────────────────────────
   useEffect(() => {
     if (!currentOrder || ['completed', 'cancelled'].includes(currentOrder.status)) return;
     const interval = setInterval(() => dispatch(fetchOrderById(orderId)), 8000);
     return () => clearInterval(interval);
   }, [dispatch, orderId, currentOrder?.status]);
 
+  // ─── Socket + customer GPS emission ───────────────────────────────────────
+  const trackingSocketKey =
+    orderId &&
+    token &&
+    currentOrder &&
+    currentOrder.status === 'price_confirmed' &&
+    currentOrder.isHandymanOnTheWay === true &&
+    currentOrder.trackingStatus === 'active' &&
+    !handymanArrivedRef.current
+      ? `${orderId}:tracking`
+      : null;
+
   useEffect(() => {
-    if (!orderId || !token) return;
+    if (!trackingSocketKey) return;
 
     const socket = connectSocket(token);
+    customerSocketRef.current = socket;
 
-    socket.emit('joinOrderRoom', orderId);
+    console.log('[SOCKET AUDIT] CUSTOMER SOCKET', {
+      socketInstanceId: getSocketInstanceId(),
+      socketId: socket.id,
+      connected: socket.connected,
+      orderId,
+      room: String(orderId),
+      sameRefAsCustomerSocketRef: socket === customerSocketRef.current,
+    });
 
-    socket.on('locationUpdate', ({ lat, lng, distanceRemaining, eta, trafficDelay, arrivalTime, geometry }) => {
-      const numLat = Number(lat);
-      const numLng = Number(lng);
-      if (Number.isFinite(numLat) && Number.isFinite(numLng)) {
-        console.log(`📍 [TrackingPage] Real-time handyman location received: ${numLat}, ${numLng}`);
-        setHandymanLoc({ latitude: numLat, longitude: numLng });
+    console.log('[SOCKET AUDIT] CUSTOMER TRACKING STATE', {
+      status: currentOrder?.status ?? null,
+      isHandymanOnTheWay: currentOrder?.isHandymanOnTheWay ?? null,
+      canSendGps: canSendCustomerGps(currentOrder),
+      socketConnected: socket.connected,
+      socketInstanceId: getSocketInstanceId(),
+    });
+
+    const emitCustomerLocation = (options = {}) => {
+      const { force = false } = options;
+      const loc = locationRef.current ?? pendingCustomerLocationRef.current;
+      if (!loc || !isValidGpsCoord(loc.latitude, loc.longitude)) return;
+      if (!canSendCustomerGps(currentOrderRef.current)) return;
+
+      const now = Date.now();
+      const last = lastCustomerEmitRef.current;
+      if (!force && last.lat != null && last.lng != null) {
+        const movedM = haversineKm(
+          { latitude: last.lat, longitude: last.lng },
+          loc
+        ) * 1000;
+        if (now - last.ts < CUSTOMER_GPS_MIN_EMIT_MS && movedM < CUSTOMER_GPS_MIN_MOVE_M) {
+          return;
+        }
       }
 
-      if (Array.isArray(geometry) && geometry.length >= 2) {
-        console.log('🗺️ [Step 2 Customer Geometry Audit]', {
-          isArray: Array.isArray(geometry),
-          length: geometry.length,
-          firstPoint: geometry[0],
-          lastPoint: geometry[geometry.length - 1],
+      locationRef.current = loc;
+      pendingCustomerLocationRef.current = loc;
+
+      const payload = {
+        orderId,
+        lat: loc.latitude,
+        lng: loc.longitude,
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+      };
+
+      if (!socket.connected) {
+        pendingCustomerLocationRef.current = loc;
+        console.log('📦 [CUSTOMER SOCKET] GPS queued — socket not connected yet');
+        return;
+      }
+
+      if (!isCustomerJoinedRef.current) {
+        pendingCustomerLocationRef.current = loc;
+        console.log('[SOCKET AUDIT][CUSTOMER SEND] blocked — awaiting joinOrderRoomAck', {
+          socketId: socket.id,
+          orderId,
         });
+        emitJoinOnceRef.current();
+        return;
+      }
+
+      lastCustomerEmitRef.current = {
+        lat: loc.latitude,
+        lng: loc.longitude,
+        ts: now,
+      };
+
+      console.log('[SOCKET AUDIT][CUSTOMER SEND]', {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
+        orderId,
+        room: String(orderId),
+        lat: loc.latitude,
+        lng: loc.longitude,
+        isCustomerJoined: isCustomerJoinedRef.current,
+        isLiveTracking: isLiveTracking(currentOrderRef.current),
+      });
+      socket.emit('sendCustomerLocation', payload);
+    };
+
+    emitCustomerLocationRef.current = emitCustomerLocation;
+
+    const onLocationUpdate = (payload) => {
+      const numLat = Number(payload?.lat ?? payload?.latitude);
+      const numLng = Number(payload?.lng ?? payload?.longitude);
+      const isReplay = payload?.replay ?? false;
+
+      console.log('[DEBUG CUSTOMER LISTENER] LOCATION UPDATE RECEIVED', {
+        socketId: socket.id,
+        orderId,
+        lat: numLat,
+        lng: numLng,
+        replay: isReplay,
+        payload,
+      });
+
+      console.log('[SOCKET AUDIT][CUSTOMER HANDYMAN LOCATION RECEIVED]', {
+        socketId: socket.id,
+        socketInstanceId: getSocketInstanceId(),
+        orderId,
+        room: String(orderId),
+        payload,
+        lat: numLat,
+        lng: numLng,
+        replay: payload?.replay ?? false,
+      });
+      console.log('[FRONTEND HANDYMAN LOCATION RECEIVED]', {
+        event: 'locationUpdate',
+        payload,
+      });
+
+      const {
+        distanceRemaining,
+        eta,
+        trafficDelay: delay,
+        geometry,
+        etaTimestamp: serverEtaTs,
+        routeCalcTimestamp,
+      } = payload;
+
+      console.log('[CUSTOMER] locationUpdate | handyman =', { lat: numLat, lng: numLng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
+
+      if (Number.isFinite(numLat) && Number.isFinite(numLng) && isValidGpsCoord(numLat, numLng)) {
+        const handy = { latitude: numLat, longitude: numLng };
+        console.log('[DEBUG HANDYMAN STATE] BEFORE', {
+          current: handymanLocRef.current,
+          next: handy,
+        });
+        console.log('[HANDYMAN LOCATION STATE UPDATE]', {
+          previous: handymanLocRef.current,
+          next: handy,
+        });
+        handymanLocRef.current = handy;
+        setHandymanLoc(handy);
+        console.log('[DEBUG HANDYMAN STATE] UPDATE SCHEDULED', {
+          latitude: numLat,
+          longitude: numLng,
+          replay: isReplay,
+        });
+      } else {
+        console.warn('[CUSTOMER] locationUpdate ignored — invalid handyman lat/lng', {
+          lat: payload?.lat,
+          lng: payload?.lng,
+          latitude: payload?.latitude,
+          longitude: payload?.longitude,
+          numLat,
+          numLng,
+          replay: isReplay,
+        });
+      }
+
+      const payloadDest = normalizeGpsLocation(payload?.customerLat, payload?.customerLng);
+      if (payloadDest) {
+        routeDestinationRef.current = payloadDest;
+        setRouteDestination(payloadDest);
+      }
+
+      if (handymanArrivedRef.current) return;
+
+      const handyman = handymanLocRef.current;
+      const customer =
+        routeDestinationRef.current ??
+        parseOrderCustomerLocation(currentOrderRef.current);
+
+      if (!handyman || !customer) {
+        return;
+      }
+
+      if (!isRouteConsistentWithPositions(distanceRemaining, handyman, customer)) {
+        console.warn('[CUSTOMER] Stale route rejected | route =', distanceRemaining, 'km | direct =', handyman && customer ? haversineKm(handyman, customer).toFixed(3) : 'N/A', 'km');
+        clearRouteState(
+          { lastTrustedEtaRef, etaTimestampRef },
+          { setRouteGeometry, setDistance, setLastTrustedEta, setEtaTimestamp, setDisplayedEta }
+        );
+        setRouteCalcTimestamp(null);
+        return;
+      }
+
+      if (routeCalcTimestamp) setRouteCalcTimestamp(routeCalcTimestamp);
+
+      if (Array.isArray(geometry) && geometry.length >= 2) {
+        console.log('[CUSTOMER] route geometry points =', geometry.length);
         setRouteGeometry(geometry);
       }
 
-      if (distanceRemaining !== undefined) setDistance(distanceRemaining);
-      if (eta !== undefined) setEta(eta);
-      if (trafficDelay !== undefined) setTrafficDelay(trafficDelay);
-      if (arrivalTime !== undefined) setArrivalTime(arrivalTime);
-    });
+      if (distanceRemaining !== undefined && distanceRemaining !== null) {
+        console.log('[CUSTOMER] distanceRemaining =', distanceRemaining, 'km');
+        setDistance(distanceRemaining);
+      }
 
-    socket.on('trackingStarted', () => {
+
+      // ── Controlled ETA recalculation ────────────────────────────────────
+      if (eta !== undefined && eta !== null) {
+        const now = serverEtaTs || Date.now();
+        console.log('⏱️ ETA UPDATE | TomTom ETA =', eta, 'min at', new Date(now).toISOString());
+
+
+        // Read latest values from refs — avoids stale closure
+        const prevEta = lastTrustedEtaRef.current;
+        const prevTs = etaTimestampRef.current;
+
+        let shouldAccept = true;
+
+        if (prevEta !== null && prevTs !== null) {
+          const elapsedMin = (Date.now() - prevTs) / 60000;
+          const expectedEta = Math.max(0, prevEta - elapsedMin);
+          const diff = eta - expectedEta;
+
+          if (diff > 10) {
+            // Large ETA jump — cross-validate against route distance.
+            // A genuine traffic/reroute increase should produce a distance
+            // that is consistent with the new ETA at a reasonable urban speed.
+            const distKm = distanceRemaining ?? null;
+
+            if (distKm !== null) {
+              const avgSpeedKmh = 30; // conservative urban speed for validation
+              const impliedEtaMin = (distKm / avgSpeedKmh) * 60;
+              const etaDistConsistent = Math.abs(eta - impliedEtaMin) <= 15;
+
+              if (etaDistConsistent) {
+                console.warn(
+                  `⚠️ ETA JUMP | Expected ~${expectedEta.toFixed(1)} min, got ${eta} min (+${diff.toFixed(1)} min). ` +
+                  `Distance ${distKm}km implies ~${impliedEtaMin.toFixed(1)} min — ACCEPTING (traffic/reroute).`
+                );
+              } else {
+                console.warn(
+                  `⚠️ ETA JUMP | Expected ~${expectedEta.toFixed(1)} min, got ${eta} min (+${diff.toFixed(1)} min). ` +
+                  `Distance ${distKm}km implies ~${impliedEtaMin.toFixed(1)} min — SUSPICIOUS. Keeping countdown.`
+                );
+                shouldAccept = false;
+              }
+            } else {
+              // No distance data to validate — accept with a warning
+              console.warn(
+                `⚠️ ETA JUMP | Expected ~${expectedEta.toFixed(1)} min, got ${eta} min (+${diff.toFixed(1)} min). ` +
+                `No distance data for cross-validation — ACCEPTING cautiously.`
+              );
+            }
+          }
+        }
+
+        if (shouldAccept) {
+          lastTrustedEtaRef.current = eta;
+          etaTimestampRef.current = now;
+          setLastTrustedEta(eta);
+          setEtaTimestamp(now);
+          setDisplayedEta(eta);
+        }
+      }
+      // ────────────────────────────────────────────────────────────────────
+
+      if (delay !== undefined) setTrafficDelay(delay);
+    };
+
+    const onHandymanArrived = (payload) => {
+      console.log('✅ HANDYMAN ARRIVED | Customer received arrival event', payload);
+      handymanArrivedRef.current = true;
+      lastTrustedEtaRef.current = null;
+      etaTimestampRef.current = null;
+      setHandymanArrived(true);
+      // Clear route & countdown tracking state
+      setRouteGeometry(null);
+      setDistance(0);
+      setLastTrustedEta(null);
+      setEtaTimestamp(null);
+      setDisplayedEta(0);
+      setTrafficDelay(null);
+    };
+
+
+
+    const onTrackingStarted = () => {
       dispatch(fetchOrderById(orderId));
+    };
+
+    const onJoinOrderRoomAck = (ack) => {
+      customerJoinPendingRef.current = false;
+      console.log('[SOCKET AUDIT][CUSTOMER JOIN ACK]', {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
+        orderId,
+        ack,
+      });
+      if (ack?.success) {
+        isCustomerJoinedRef.current = true;
+        customerJoinSocketIdRef.current = socket.id;
+        console.log('[SOCKET AUDIT] CUSTOMER joined order room — emitting live GPS', {
+          socketId: socket.id,
+          orderId,
+        });
+        emitCustomerLocation({ force: true });
+      } else {
+        isCustomerJoinedRef.current = false;
+        customerJoinSocketIdRef.current = null;
+      }
+    };
+
+    const emitJoinOnce = () => {
+      if (isCustomerJoinedRef.current && customerJoinSocketIdRef.current === socket.id) {
+        console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom SKIPPED — already joined', {
+          socketId: socket.id,
+          orderId,
+        });
+        return;
+      }
+      if (customerJoinPendingRef.current && customerJoinSocketIdRef.current === socket.id) {
+        console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom SKIPPED — join pending', {
+          socketId: socket.id,
+          orderId,
+        });
+        return;
+      }
+      customerJoinPendingRef.current = true;
+      customerJoinSocketIdRef.current = socket.id;
+      console.log('[DEBUG CUSTOMER LISTENER] READY', {
+        socketId: socket.id,
+        orderId,
+      });
+      console.log('[SOCKET AUDIT] CUSTOMER joinOrderRoom EMIT', {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
+        orderId,
+        room: String(orderId),
+      });
+      socket.emit('joinOrderRoom', orderId);
+    };
+
+    emitJoinOnceRef.current = emitJoinOnce;
+
+    locationUpdateHandlerRef.current = onLocationUpdate;
+
+    const bindLocationUpdateListener = () => {
+      if (!locationUpdateListenerRef.current) {
+        locationUpdateListenerRef.current = (payload) => {
+          locationUpdateHandlerRef.current?.(payload);
+        };
+      }
+      socket.off('locationUpdate', locationUpdateListenerRef.current);
+      socket.on('locationUpdate', locationUpdateListenerRef.current);
+    };
+
+    const onConnect = () => {
+      isCustomerJoinedRef.current = false;
+      customerJoinPendingRef.current = false;
+      customerJoinSocketIdRef.current = socket.id;
+      console.log('[SOCKET AUDIT] customer socket connected — prepare join', {
+        socketInstanceId: getSocketInstanceId(),
+        socketId: socket.id,
+        orderId,
+      });
+      bindLocationUpdateListener();
+      console.log('[SOCKET AUDIT][CUSTOMER LOCATION LISTENER READY]', {
+        socketId: socket.id,
+        orderId,
+      });
+      emitJoinOnce();
+    };
+
+    const onDisconnect = () => {
+      console.log('[SOCKET AUDIT] CUSTOMER socket disconnected — reset join state', {
+        orderId,
+        socketId: socket.id,
+      });
+      isCustomerJoinedRef.current = false;
+      customerJoinPendingRef.current = false;
+      customerJoinSocketIdRef.current = null;
+    };
+
+    bindLocationUpdateListener();
+    console.log('[DEBUG CUSTOMER LISTENER] READY', {
+      socketId: socket.id,
+      orderId,
+      phase: 'listener-bound-before-join',
     });
+    console.log('[SOCKET AUDIT][CUSTOMER LOCATION LISTENER READY]', {
+      socketId: socket.id,
+      orderId,
+    });
+    console.log('[SOCKET AUDIT] CUSTOMER locationUpdate LISTENER REGISTERED', {
+      socketInstanceId: getSocketInstanceId(),
+      socketId: socket.id,
+      orderId,
+      listenerBeforeJoin: true,
+    });
+    socket.on('handymanArrived', onHandymanArrived);
+    socket.on('trackingStarted', onTrackingStarted);
+    socket.on('joinOrderRoomAck', onJoinOrderRoomAck);
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
+
+    if (socket.connected) {
+      onConnect();
+    } else {
+      console.log('📦 [CUSTOMER SOCKET] Waiting for socket connect before join/send');
+    }
+
+    const heartbeatId = setInterval(() => {
+      if (!canSendCustomerGps(currentOrderRef.current)) return;
+      if (!isLiveTracking(currentOrderRef.current)) return;
+      if (!socket.connected) return;
+      emitCustomerLocation({ force: true });
+    }, CUSTOMER_GPS_HEARTBEAT_MS);
 
     return () => {
+      clearInterval(heartbeatId);
+      emitCustomerLocationRef.current = () => {};
+      emitJoinOnceRef.current = () => {};
+      console.log('[SOCKET AUDIT] CUSTOMER locationUpdate LISTENER REMOVED', { orderId });
+      isCustomerJoinedRef.current = false;
+      customerJoinPendingRef.current = false;
+      customerJoinSocketIdRef.current = null;
+      customerSocketRef.current = null;
       socket.emit('leaveOrderRoom', orderId);
-      socket.off('locationUpdate');
-      socket.off('trackingStarted');
-    };
-  }, [orderId, dispatch, token]);
-
-  useEffect(() => {
-    if (Array.isArray(currentOrder?.handymanLiveLocation?.coordinates) && currentOrder.handymanLiveLocation.coordinates.length === 2) {
-      const [lng, lat] = currentOrder.handymanLiveLocation.coordinates;
-      const numLat = Number(lat);
-      const numLng = Number(lng);
-      if (Number.isFinite(numLat) && Number.isFinite(numLng)) {
-        setHandymanLoc({ latitude: numLat, longitude: numLng });
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      if (locationUpdateListenerRef.current) {
+        socket.off('locationUpdate', locationUpdateListenerRef.current);
       }
-    }
-  }, [currentOrder]);
+      socket.off('handymanArrived', onHandymanArrived);
+      socket.off('trackingStarted', onTrackingStarted);
+      socket.off('joinOrderRoomAck', onJoinOrderRoomAck);
+    };
+  }, [orderId, token, trackingSocketKey]);
 
+  // Re-join once when handyman starts heading over (no socket effect teardown)
+  useEffect(() => {
+    if (!orderId || !token || !currentOrder) return;
+    if (!currentOrder.isHandymanOnTheWay && currentOrder.status !== 'in-progress') return;
+    if (!canSendCustomerGps(currentOrder)) return;
+
+    const socket = customerSocketRef.current ?? connectSocket(token);
+    if (!socket.connected) return;
+
+    console.log('[SOCKET AUDIT] CUSTOMER live tracking started', {
+      orderId,
+      socketId: socket.id,
+      isHandymanOnTheWay: currentOrder.isHandymanOnTheWay,
+      status: currentOrder.status,
+      isCustomerJoined: isCustomerJoinedRef.current,
+    });
+
+    if (isCustomerJoinedRef.current && customerJoinSocketIdRef.current === socket.id) {
+      emitCustomerLocationRef.current();
+      return;
+    }
+
+    emitJoinOnceRef.current();
+  }, [
+    orderId,
+    token,
+    currentOrder?.isHandymanOnTheWay,
+    currentOrder?.status,
+  ]);
+
+  // Emit when live GPS arrives or updates (fixes GPS-before-socket race)
+  useEffect(() => {
+    if (!location || !isValidGpsCoord(location.latitude, location.longitude)) return;
+    if (!canSendCustomerGps(currentOrder)) return;
+
+    locationRef.current = location;
+    pendingCustomerLocationRef.current = location;
+
+    if (!customerSocketRef.current?.connected) {
+      console.log('📦 [CUSTOMER SOCKET] GPS ready — waiting for socket connect');
+      return;
+    }
+
+    emitCustomerLocationRef.current();
+  }, [
+    orderId,
+    token,
+    location?.latitude,
+    location?.longitude,
+    currentOrder?.status,
+    currentOrder?.isHandymanOnTheWay,
+  ]);
+
+
+  // ─── Local ETA countdown (timestamp-based, not counter-based) ────────────
+  useEffect(() => {
+    if (lastTrustedEta === null || etaTimestamp === null || handymanArrived) return;
+
+    const tick = () => {
+      const elapsedMin = (Date.now() - etaTimestamp) / 60000;
+      const current = Math.max(0, lastTrustedEta - elapsedMin);
+      console.log(`⏳ ETA COUNTDOWN | ${current.toFixed(1)} min remaining`);
+      setDisplayedEta(current);
+    };
+
+    tick(); // run immediately
+    const timer = setInterval(tick, 30000); // update every 30 seconds
+    return () => clearInterval(timer);
+  }, [lastTrustedEta, etaTimestamp, handymanArrived]);
+
+  // ─── Handlers ─────────────────────────────────────────────────────────────
   const handleCancel = () => {
     dispatch(updateOrderStatus({ id: orderId, status: 'cancelled' }));
   };
@@ -134,7 +704,7 @@ export default function TrackingPage() {
     );
 
   if (isLoading && !currentOrder) return <LoadingSpinner fullScreen />;
-  
+
   if (!currentOrder) {
     return (
       <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-white p-6 text-center">
@@ -151,7 +721,7 @@ export default function TrackingPage() {
   const status = currentOrder.status;
 
   const Header = ({ title }) => (
-    <header className="flex items-center justify-between border-b border-borderGray px-4 py-3">
+    <header className="flex shrink-0 items-center justify-between border-b border-borderGray px-4 py-3">
       <div className="flex items-center gap-3">
         <button type="button" onClick={() => navigate(-1)} className="text-primary">
           <FaArrowRight size={18} />
@@ -417,18 +987,137 @@ export default function TrackingPage() {
     );
   }
 
-  // ===== ✅ LIVE TRACKING (All other statuses: price_confirmed + on way, in-progress) =====
-  
-  const effectiveLocation =
-    location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
-      ? location
-      : (Array.isArray(currentOrder?.customerLocation?.coordinates) &&
-         Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
-         Number.isFinite(currentOrder.customerLocation.coordinates[0]))
-        ? { latitude: currentOrder.customerLocation.coordinates[1], longitude: currentOrder.customerLocation.coordinates[0] }
-        : null;
+  // ===== DISPUTED =====
+  if (status === 'disputed') {
+    return (
+      <div className="fixed inset-0 flex flex-col bg-white">
+        <Header title="تتبع الطلب" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <AlertMessage
+            type="info"
+            message="هذا الطلب قيد مراجعة من فريق الدعم. التتبع المباشر متوقف مؤقتاً."
+            className="max-w-md"
+          />
+          <button type="button" onClick={() => navigate(-1)} className="btn-outline">
+            رجوع
+          </button>
+        </div>
+      </div>
+    );
+  }
 
-  if (!effectiveLocation && locationLoading) {
+  // ===== ARRIVED =====
+  if (status === 'arrived') {
+    return (
+      <div className="fixed inset-0 flex flex-col bg-white">
+        <Header title="الطلب" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <FaCheckCircle className="text-tertiary" size={48} />
+          <h2 className="text-xl font-bold text-textDark">الحرفي وصل إلى موقعك</h2>
+          <p className="max-w-xs text-sm text-textGray">
+            وصل {handyman.name || 'الحرفي'} ويعمل على إتمام الخدمة. تواصل معه عبر المحادثة.
+          </p>
+          <div className="card w-full max-w-sm text-right">
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">رقم الطلب</span>
+              <span className="font-medium text-textDark">#{String(orderId).slice(-6)}</span>
+            </div>
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">الخدمة</span>
+              <span className="font-medium text-textDark">{currentOrder.profession}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-textGray">السعر</span>
+              <span className="font-medium text-textDark">
+                {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+              </span>
+            </div>
+          </div>
+          <Link to={`/chat/${orderId}`} className="btn-primary flex items-center gap-2">
+            <FaComments /> فتح المحادثة
+          </Link>
+          <ReportButton />
+        </div>
+        {reportOpen && (
+          <ReasonModal
+            title="سبب الإبلاغ عن هذا الطلب"
+            confirmLabel="إرسال البلاغ"
+            danger
+            onConfirm={handleReport}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ===== IN-PROGRESS =====
+  if (status === 'in-progress') {
+    return (
+      <div className="fixed inset-0 flex flex-col bg-white">
+        <Header title="الطلب قيد التنفيذ" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+          <FaWrench className="animate-bounce text-primary" size={48} />
+          <h2 className="text-xl font-bold text-textDark">الحرفي يعمل على طلبك الآن</h2>
+          <p className="max-w-xs text-sm text-textGray">
+            يقوم {handyman.name || 'الحرفي'} حالياً بتقديم الخدمة المطلوبة. يمكنك التواصل معه عبر المحادثة.
+          </p>
+          <div className="card w-full max-w-sm text-right">
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">رقم الطلب</span>
+              <span className="font-medium text-textDark">#{String(orderId).slice(-6)}</span>
+            </div>
+            <div className="mb-2 flex justify-between text-sm">
+              <span className="text-textGray">الخدمة</span>
+              <span className="font-medium text-textDark">{currentOrder.profession}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-textGray">السعر</span>
+              <span className="font-medium text-textDark">
+                {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+              </span>
+            </div>
+          </div>
+          <Link to={`/chat/${orderId}`} className="btn-primary flex items-center gap-2">
+            <FaComments /> فتح المحادثة
+          </Link>
+          <ReportButton />
+        </div>
+        {reportOpen && (
+          <ReasonModal
+            title="سبب الإبلاغ عن هذا الطلب"
+            confirmLabel="إرسال البلاغ"
+            danger
+            onConfirm={handleReport}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ===== ✅ LIVE TRACKING (price_confirmed on-way / in-progress) =====
+
+  const orderCustomerLocation = parseOrderCustomerLocation(currentOrder);
+
+  const liveCustomerLocation =
+    location && isValidGpsCoord(location.latitude, location.longitude) ? location : null;
+
+  const mapCustomerLocation = orderCustomerLocation;
+
+  const hasValidHandymanLoc =
+    handymanLoc &&
+    isValidGpsCoord(handymanLoc.latitude, handymanLoc.longitude);
+
+  console.log('[DEBUG TRACKING MAP INPUT]', {
+    handymanLocation: hasValidHandymanLoc ? handymanLoc : null,
+    customerLocation: mapCustomerLocation,
+    rawHandymanLoc: handymanLoc,
+  });
+
+  const canShowMap = !!(mapCustomerLocation || hasValidHandymanLoc);
+
+  if (!orderCustomerLocation && !liveCustomerLocation && locationLoading) {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <Header title="تتبع الطلب" />
@@ -439,83 +1128,104 @@ export default function TrackingPage() {
     );
   }
 
+  if (!orderCustomerLocation && !liveCustomerLocation && locationError) {
+    return (
+      <div className="fixed inset-0 flex flex-col bg-white">
+        <Header title="تتبع الطلب" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6">
+          <AlertMessage
+            type="error"
+            message="يرجى السماح بالوصول إلى موقعك لتفعيل التتبع المباشر."
+            className="max-w-md"
+          />
+          <p className="text-sm text-textGray text-center">{locationError}</p>
+        </div>
+      </div>
+    );
+  }
+
+
+  const formattedEta = formatEta(displayedEta);
+  const formattedDistance = formatDistance(distance);
+
   return (
-    <div className="fixed inset-0 flex flex-col bg-white">
+    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-white">
       <Header title="تتبع الطلب" />
 
-      <div className="relative flex-1">
-        {handymanLoc && Number.isFinite(handymanLoc.latitude) && Number.isFinite(handymanLoc.longitude) ? (
+      <div className="relative min-h-0 w-full flex-1">
+        {canShowMap ? (
           <TrackingMap
-            customerLocation={
-              location && Number.isFinite(location.latitude) && Number.isFinite(location.longitude)
-                ? location
-                : (Array.isArray(currentOrder?.customerLocation?.coordinates) &&
-                   Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
-                   Number.isFinite(currentOrder.customerLocation.coordinates[0]))
-                  ? { latitude: currentOrder.customerLocation.coordinates[1], longitude: currentOrder.customerLocation.coordinates[0] }
-                  : null
-            }
-            handymanLocation={handymanLoc}
-            routeGeometry={routeGeometry}
-            pickupLocation={
-              Array.isArray(currentOrder?.customerLocation?.coordinates) &&
-              Number.isFinite(currentOrder.customerLocation.coordinates[1]) &&
-              Number.isFinite(currentOrder.customerLocation.coordinates[0])
-                ? { latitude: currentOrder.customerLocation.coordinates[1], longitude: currentOrder.customerLocation.coordinates[0] }
-                : null
-            }
-            destinationLocation={
-              Array.isArray(currentOrder?.destinationLocation?.coordinates) &&
-              Number.isFinite(currentOrder.destinationLocation.coordinates[1]) &&
-              Number.isFinite(currentOrder.destinationLocation.coordinates[0])
-                ? { latitude: currentOrder.destinationLocation.coordinates[1], longitude: currentOrder.destinationLocation.coordinates[0] }
-                : null
-            }
-            className="absolute inset-0"
+            customerLocation={mapCustomerLocation}
+            routeDestination={routeDestination ?? orderCustomerLocation}
+            handymanLocation={hasValidHandymanLoc ? handymanLoc : null}
+            routeGeometry={handymanArrived ? null : routeGeometry}
+            routeCalcTimestamp={routeCalcTimestamp}
+            className="absolute inset-0 h-full w-full"
           />
         ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-neutral">
-            <div className="text-center">
-              <FaClock className="mx-auto text-4xl text-primary" />
-              <p className="mt-2 text-textGray">في انتظار وصول الحرفي...</p>
-            </div>
+          <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-neutral">
+            <LoadingSpinner text="جاري تحديد موقعك..." />
           </div>
         )}
 
-        {handymanLoc && (
-          <div className="absolute bottom-32 left-1/2 -translate-x-1/2 rounded-full border border-primary bg-white px-4 py-2 shadow-md">
-            <span className="flex items-center gap-2 text-sm font-medium text-primary">
-              <FaClock />
-              {eta !== null 
-                ? `سيصل بعد ${eta} دقيقة` 
-                : currentOrder.eta 
-                  ? `سيصل بعد ${currentOrder.eta} دقيقة`
-                  : 'الحرفي في الطريق'}
+        {!liveCustomerLocation && locationError && orderCustomerLocation && (
+          <div className="absolute top-4 left-1/2 z-10 w-[90%] max-w-md -translate-x-1/2">
+            <AlertMessage
+              type="info"
+              message="تعذر تحديث موقعك المباشر. الخريطة تعرض عنوان الطلب المحجوز."
+            />
+          </div>
+        )}
+
+        {handymanArrived && (
+          <div className="absolute top-4 left-1/2 z-10 -translate-x-1/2 rounded-2xl border border-tertiary/30 bg-white px-5 py-3 shadow-lg">
+            <span className="flex items-center gap-2 text-sm font-bold text-tertiary">
+              <FaCheckCircle />
+              الحرفي وصل إلى موقعك
             </span>
-            {distance !== null && (
-              <span className="mr-3 flex items-center gap-1 text-sm text-secondary">
-                📏 {distance} كم
+          </div>
+        )}
+
+        {/* ETA + Distance floating pill */}
+        {!handymanArrived && hasValidHandymanLoc && (formattedEta || formattedDistance) && (
+          <div className="absolute bottom-32 left-1/2 -translate-x-1/2 rounded-2xl border border-primary/20 bg-white px-5 py-3 shadow-lg">
+            {formattedEta && (
+              <span className="flex items-center gap-2 text-sm font-medium text-primary">
+                <FaClock />
+                سيصل بعد {formattedEta}
+              </span>
+            )}
+            {formattedDistance && (
+              <span className="mt-1 flex items-center gap-1 text-xs text-secondary">
+                <FaMapMarkerAlt size={10} />
+                {formattedDistance} متبقية
               </span>
             )}
           </div>
         )}
 
+        {/* Traffic delay badge */}
         {trafficDelay > 0 && (
           <div className="absolute top-4 left-1/2 -translate-x-1/2 rounded-full bg-emergency/10 px-4 py-2 shadow-md">
             <span className="flex items-center gap-2 text-sm font-medium text-emergency">
-              ⚠️ تأخر {trafficDelay} دقائق بسبب حركة المرور
+              ⚠️ تأخر {Math.round(trafficDelay)} دقائق بسبب حركة المرور
             </span>
           </div>
         )}
       </div>
 
-      <div className="rounded-t-2xl border-t border-borderGray bg-white p-4 shadow-lg">
+      {/* Bottom sheet */}
+      <div className="shrink-0 rounded-t-2xl border-t border-borderGray bg-white p-4 shadow-lg">
         <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-borderGray" />
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2 text-primary">
-            <FaCheckCircle className="text-tertiary" />
+            <FaCheckCircle className={handymanArrived ? 'text-tertiary' : 'text-tertiary'} />
             <span className="font-bold">
-              {status === 'in-progress' ? 'الحرفي يعمل على طلبك' : 'تم تأكيد السعر — الحرفي في الطريق'}
+              {handymanArrived
+                ? 'الحرفي وصل!'
+                : status === 'in-progress'
+                  ? 'الحرفي يعمل على طلبك'
+                  : 'تم تأكيد السعر — الحرفي في الطريق'}
             </span>
           </div>
           <span className="rounded-lg bg-primary/10 px-3 py-1 text-sm font-bold text-primary">
@@ -538,10 +1248,10 @@ export default function TrackingPage() {
           <div className="text-left">
             <p className="text-xs text-textGray">رسوم الخدمة</p>
             <p className="font-bold text-textDark">{formatPrice(currentOrder.price || currentOrder.estimatedPrice)}</p>
-            {distance !== null && (
+            {formattedDistance && (
               <>
                 <p className="mt-1 text-xs text-textGray">المسافة المتبقية</p>
-                <p className="font-bold text-secondary">{distance} كم</p>
+                <p className="font-bold text-secondary">{formattedDistance}</p>
               </>
             )}
           </div>

@@ -23,7 +23,11 @@ const orderSchema = new mongoose.Schema(
       type: String,
     },
 
-    images: [{ type: String }],
+    images: [
+      {
+        type: String,
+      },
+    ],
 
     requestType: {
       type: String,
@@ -31,56 +35,159 @@ const orderSchema = new mongoose.Schema(
       default: "instant",
     },
 
-    scheduledDate: { type: Date },
+    scheduledDate: {
+      type: Date,
+    },
 
-    estimatedPrice: { type: Number },
+    estimatedPrice: {
+      type: Number,
+    },
 
-    penaltyAmount: { type: Number, default: 0 },
+    penaltyAmount: {
+      type: Number,
+      default: 0,
+    },
 
-    totalPrice: { type: Number, default: 0 },
+    totalPrice: {
+      type: Number,
+      default: 0,
+    },
 
     status: {
       type: String,
-      enum: ["pending", "accepted", "price_confirmed", "in-progress", "completed", "cancelled", "disputed"],
+      enum: [
+        "pending",
+        "accepted",
+        "price_confirmed",
+        "in-progress",
+        "arrived",
+        "completed",
+        "cancelled",
+        "disputed",
+      ],
       default: "pending",
     },
 
-    price: { type: Number, default: null },
+    trackingStatus: {
+      type: String,
+      enum: ["stopped", "active", "expired"],
+      default: "stopped",
+    },
+
+    trackingStartedAt: {
+      type: Date,
+      default: null,
+    },
+
+    trackingExpiresAt: {
+      type: Date,
+      default: null,
+    },
+
+    price: {
+      type: Number,
+      default: null,
+    },
 
     customerLocation: {
-      type: { type: String, enum: ["Point"], default: "Point" },
-      coordinates: { type: [Number], required: true },
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number],
+        required: true,
+      },
     },
 
     // Live tracking fields
     handymanLiveLocation: {
-      type: { type: String, enum: ["Point"], default: "Point" },
-      coordinates: { type: [Number], default: [0, 0] },
-      updatedAt: { type: Date, default: Date.now },
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number],
+        default: [0, 0],
+      },
+      updatedAt: {
+        type: Date,
+        default: Date.now,
+      },
     },
-    eta: { type: Number, default: null },
-    distanceRemaining: { type: Number, default: null },
-    trafficDelay: { type: Number, default: null },
-    arrivalTime: { type: Date, default: null },
 
-    commissionRate: { type: Number, default: 10 },
-    commissionAmount: { type: Number, default: 0 },
-    netAmount: { type: Number, default: 0 },
+    eta: {
+      type: Number,
+      default: null,
+    },
+
+    distanceRemaining: {
+      type: Number,
+      default: null,
+    },
+
+    trafficDelay: {
+      type: Number,
+      default: null,
+    },
+
+    arrivalTime: {
+      type: Date,
+      default: null,
+    },
+
+    commissionRate: {
+      type: Number,
+      default: 10,
+    },
+
+    commissionAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    netAmount: {
+      type: Number,
+      default: 0,
+    },
 
     rescheduleRequest: {
-      requestedBy: { type: String, enum: ["customer", "handyman"] },
+      requestedBy: {
+        type: String,
+        enum: ["customer", "handyman"],
+      },
       newDate: Date,
-      status: { type: String, enum: ["pending", "accepted", "rejected"], default: "pending" },
+      status: {
+        type: String,
+        enum: ["pending", "accepted", "rejected"],
+        default: "pending",
+      },
       createdAt: Date,
     },
 
-    isEmergency: { type: Boolean, default: false },
-    isHandymanOnTheWay: { type: Boolean, default: false },
-    onTheWayAt: { type: Date, default: null },
+    isEmergency: {
+      type: Boolean,
+      default: false,
+    },
 
-    completionImage: { type: String, default: null },
+    isHandymanOnTheWay: {
+      type: Boolean,
+      default: false,
+    },
 
-    // Payment — cash and card (Stripe) are parallel flows
+    onTheWayAt: {
+      type: Date,
+      default: null,
+    },
+
+    completionImage: {
+      type: String,
+      default: null,
+    },
+
+    // Payment
     paymentMethod: {
       type: String,
       enum: ["cash", "card"],
@@ -93,12 +200,19 @@ const orderSchema = new mongoose.Schema(
       default: "unpaid",
     },
 
-    // Populated only for card payments — null for cash orders
-    stripePaymentIntentId: { type: String, default: null },
+    stripePaymentIntentId: {
+      type: String,
+      default: null,
+    },
 
-    paidAt: { type: Date, default: null },
+    paidAt: {
+      type: Date,
+      default: null,
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
 orderSchema.index({ customerLocation: "2dsphere" });
@@ -106,6 +220,8 @@ orderSchema.index({ handymanLiveLocation: "2dsphere" });
 orderSchema.index({ customerId: 1 });
 orderSchema.index({ handymanId: 1 });
 orderSchema.index({ status: 1 });
+orderSchema.index({ trackingStatus: 1 });
 
 const Order = mongoose.model("Order", orderSchema);
+
 module.exports = Order;

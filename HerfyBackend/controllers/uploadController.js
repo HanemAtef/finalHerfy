@@ -1,8 +1,3 @@
-// Builds a public, absolute URL for an uploaded file
-const buildFileUrl = (req, filename) => {
-  return `${req.protocol}://${req.get("host")}/uploads/${filename}`;
-};
-
 // ========== 1. Upload a single image (avatar / profile photo) ==========
 const uploadImage = async (req, res) => {
   try {
@@ -10,11 +5,12 @@ const uploadImage = async (req, res) => {
       return res.status(400).json({ msg: "لم يتم إرسال أي صورة" });
     }
 
-    const url = buildFileUrl(req, req.file.filename);
-
+    // multer-storage-cloudinary sets `path` to the Cloudinary secure_url
+    // and `filename` to the Cloudinary public_id.
     res.status(200).json({
       msg: "تم رفع الصورة بنجاح",
-      url,
+      url: req.file.path,
+      publicId: req.file.filename,
     });
   } catch (error) {
     console.log(error);
@@ -29,11 +25,13 @@ const uploadImages = async (req, res) => {
       return res.status(400).json({ msg: "لم يتم إرسال أي صور" });
     }
 
-    const urls = req.files.map((file) => buildFileUrl(req, file.filename));
+    const urls = req.files.map((file) => file.path);
+    const publicIds = req.files.map((file) => file.filename);
 
     res.status(200).json({
       msg: "تم رفع الصور بنجاح",
       urls,
+      publicIds,
     });
   } catch (error) {
     console.log(error);
@@ -48,11 +46,10 @@ const uploadAudioFile = async (req, res) => {
       return res.status(400).json({ msg: "لم يتم إرسال أي ملف صوتي" });
     }
 
-    const url = buildFileUrl(req, req.file.filename);
-
     res.status(200).json({
       msg: "تم رفع الرسالة الصوتية بنجاح",
-      url,
+      url: req.file.path,
+      publicId: req.file.filename,
     });
   } catch (error) {
     console.log(error);

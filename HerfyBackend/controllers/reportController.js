@@ -26,7 +26,7 @@ const createReport = async (req, res) => {
     }
 
     
-    const reportableStatuses = ["accepted", "price_confirmed", "in-progress","completed","cancelled"];
+    const reportableStatuses = ["accepted", "price_confirmed", "in-progress", "arrived", "completed", "cancelled"];
     if (!reportableStatuses.includes(order.status)) {
       return res.status(400).json({
         msg: "لا يمكن الإبلاغ عن طلب لم يبدأ العمل عليه بعد أو تم إنهاؤه بالفعل",

@@ -3,7 +3,8 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const path = require("path");
-const rateLimit = require("express-rate-limit");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 
 const validate = require("../middlewares/validationMiddleware");
 const registerSchema = require("../validations/registerValidationSchema");
@@ -28,11 +29,17 @@ const {
   logoutUser,
 } = require("../controllers/authController");
 
-// ========== MULTER ==========
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) =>
-    cb(null, Date.now() + "-" + Math.round(Math.random() * 1e9) + path.extname(file.originalname)),
+// =====================================================
+// ========== MULTER SETUP FOR FILE UPLOADS ==========
+// =====================================================
+
+// Ø¥Ø¹Ø¯Ø§Ø¯ ØªØ®Ø²ÙŠÙ† Ø§Ù„Ù…Ù„ÙØ§Øª
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: (req, file) => ({
+    folder: 'herfy/handyman-docs',
+    resource_type: 'auto', // supports images and PDFs (nationalId/certificate)
+  }),
 });
 
 const fileFilter = (req, file, cb) => {

@@ -12,8 +12,7 @@ const { generateAccessToken, generateRefreshTokenValue, hashToken } =
 
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-// Issues a fresh access token + a fresh (rotated) refresh token for a user,
-// persisting the refresh token's hash so it can be looked up / revoked.
+
 const issueTokenPair = async (user, userAgent) => {
   const accessToken = generateAccessToken(user);
   const refreshToken = generateRefreshTokenValue();
@@ -43,10 +42,7 @@ const publicUser = (user) => ({
   penaltyAmount: user.penaltyAmount,
 });
 
-// console.log({
-//   penaltyCount: user.penaltyCount,
-//   penaltyAmount: user.penaltyAmount,
-// });
+
 
 /********* register user - مع دعم الملفات وحالة pending *********/
 const registerUser = async (req, res) => {

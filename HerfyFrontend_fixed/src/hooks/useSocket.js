@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { connectSocket, disconnectSocket, getSocket } from '../socket/socket';
+import { connectSocket, disconnectSocket, getSocket, getSocketInstanceId } from '../socket/socket';
 import { addNotification, setUnreadCount, fetchUnreadCount } from '../store/slices/notificationSlice';
 
 export default function useSocket() {
@@ -8,7 +8,11 @@ export default function useSocket() {
   const { token, user, isAuthenticated } = useSelector((state) => state.auth);
 
   useEffect(() => {
-    if (!isAuthenticated || !token || !user?._id) return;
+    if (!isAuthenticated || !token) {
+      disconnectSocket();
+      return;
+    }
+    if (!user?._id) return;
 
     const socket = connectSocket(token);
 
@@ -25,9 +29,12 @@ export default function useSocket() {
     });
 
     return () => {
+      console.log('[SOCKET AUDIT] useSocket cleanup — removing notification listeners only', {
+        socketInstanceId: getSocketInstanceId(),
+        userId: user?._id,
+      });
       socket.off('new-notification');
       socket.off('unread-count');
-      disconnectSocket();
     };
   }, [isAuthenticated, token, user?._id, dispatch]);
 

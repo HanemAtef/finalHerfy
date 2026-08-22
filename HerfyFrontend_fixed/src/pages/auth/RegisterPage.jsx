@@ -17,12 +17,12 @@ import {
   FaCertificate,
   FaCamera,
   FaFileUpload,
+  FaUserPlus,
 } from 'react-icons/fa';
 import { registerUser, clearError } from '../../store/slices/authSlice';
 import { PROFESSIONS } from '../../utlis/constants';
 import { referenceService } from '../../services/api';
 import useCurrentLocation from '../../hooks/useCurrentLocation';
-import LoadingSpinner from '../../components/common/LoadingSpinner';
 import AlertMessage from '../../components/common/AlertMessage';
 
 export default function RegisterPage() {
@@ -60,14 +60,10 @@ export default function RegisterPage() {
   const navigate = useNavigate();
   const { isLoading, error, isAuthenticated, user, pendingVerificationEmail } = useSelector((state) => state.auth);
 
-  // Cities & professions
-  const [cities, setCities] = useState([]);
+  // Professions
   const [professions, setProfessions] = useState(PROFESSIONS.map((name) => ({ _id: name, name })));
 
   useEffect(() => {
-    referenceService.getCities().then((res) => {
-      if (res.data?.data?.length) setCities(res.data.data);
-    }).catch(() => {});
     referenceService.getServiceTypes().then((res) => {
       if (res.data?.data?.length) setProfessions(res.data.data);
     }).catch(() => {});
@@ -216,400 +212,353 @@ export default function RegisterPage() {
 
   return (
     <div className="flex min-h-screen">
-      <div className="flex flex-1 flex-col justify-center bg-neutral/30 px-6 py-12 lg:px-16 backdrop-blur-sm">
-        <div className="mx-auto w-full max-w-xl rounded-3xl bg-white/95 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.08)]">
-          <Link to="/" className="mb-4 flex items-center gap-2 text-sm text-textGray hover:text-primary">
-            <FaArrowRight /> رجوع
+      <div className="register-page">
+        <div className="register-card">
+          <Link to="/" className="register-back" tabIndex={0}>
+            <FaArrowRight aria-hidden="true" /> رجوع للرئيسية
           </Link>
-          <h1 className="mb-2 text-2xl font-bold text-primary">Harfey (حرفي)</h1>
-          <p className="mb-8 text-textGray">إنشاء حساب جديد للبدء</p>
 
-          <div className="mb-6 flex rounded-xl bg-white p-1 shadow-sm">
-            <button
-              type="button"
-              onClick={() => setRole('customer')}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold transition-colors ${
-                role === 'customer' ? 'bg-white text-primary shadow-sm' : 'text-textGray'
-              }`}
-            >
-              <FaUser /> عميل
-            </button>
-            <button
-              type="button"
-              onClick={() => setRole('handyman')}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-3 text-sm font-bold transition-colors ${
-                role === 'handyman' ? 'bg-white text-secondary shadow-sm' : 'text-textGray'
-              }`}
-            >
-              <FaHardHat /> حرفي
-            </button>
+          <div className="register-hero">
+            <div className="register-hero-main">
+              <div className="register-logo" aria-hidden="true">
+                <FaUserPlus size={20} />
+              </div>
+              <div className="register-header">
+                <h1>إنشاء حساب جديد</h1>
+                <p>انضم إلى Harfey (حرفي) وابدأ في دقائق</p>
+              </div>
+            </div>
+
+            <div className="register-role-tabs" role="tablist" aria-label="نوع الحساب">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={role === 'customer'}
+                onClick={() => setRole('customer')}
+              >
+                <FaUser aria-hidden="true" /> عميل
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={role === 'handyman'}
+                onClick={() => setRole('handyman')}
+                className={role === 'handyman' ? 'is-handyman' : ''}
+              >
+                <FaHardHat aria-hidden="true" /> حرفي
+              </button>
+            </div>
           </div>
 
-          <AlertMessage type="error" message={error} className="mb-6" />
+          <AlertMessage type="error" message={error} className="mb-3" />
 
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm font-bold">الاسم الكامل</label>
-              <div className="relative">
-                <FaUser className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
-                <input 
-                  name="name" 
-                  value={form.name} 
-                  onChange={handleChange} 
-                  placeholder="أدخل اسمك الثلاثي" 
-                  className="input-field pr-10" 
-                  required 
-                />
+          <form onSubmit={handleSubmit} className="register-form" aria-label="نموذج إنشاء حساب">
+            <div className="register-grid">
+              <div className="register-field">
+                <label htmlFor="register-name">الاسم الكامل</label>
+                <div className="register-input-wrap">
+                  <span className="register-input-icon" aria-hidden="true"><FaUser /></span>
+                  <input
+                    id="register-name"
+                    name="name"
+                    value={form.name}
+                    onChange={handleChange}
+                    placeholder="الاسم الثلاثي"
+                    className="register-input"
+                    required
+                    aria-required="true"
+                    aria-label="الاسم الكامل"
+                  />
+                </div>
+              </div>
+
+              <div className="register-field">
+                <label htmlFor="register-phone">رقم الجوال</label>
+                <div className="register-input-wrap">
+                  <span className="register-input-icon" aria-hidden="true"><FaPhone /></span>
+                  <input
+                    id="register-phone"
+                    name="phone"
+                    value={form.phone}
+                    onChange={handleChange}
+                    placeholder="0512345678"
+                    className="register-input"
+                    required
+                    aria-required="true"
+                    aria-label="رقم الجوال"
+                  />
+                </div>
+              </div>
+
+              <div className="register-field">
+                <label htmlFor="register-email">البريد الإلكتروني</label>
+                <div className="register-input-wrap">
+                  <span className="register-input-icon" aria-hidden="true"><FaEnvelope /></span>
+                  <input
+                    id="register-email"
+                    name="email"
+                    type="email"
+                    value={form.email}
+                    onChange={handleChange}
+                    placeholder="example@domain.com"
+                    className="register-input"
+                    required
+                    autoComplete="email"
+                    aria-required="true"
+                    aria-label="البريد الإلكتروني"
+                  />
+                </div>
+              </div>
+
+              <div className="register-field">
+                <label htmlFor="register-password">كلمة المرور</label>
+                <div className="register-input-wrap">
+                  <span className="register-input-icon" aria-hidden="true"><FaLock /></span>
+                  <input
+                    id="register-password"
+                    name="password"
+                    type="password"
+                    value={form.password}
+                    onChange={handleChange}
+                    placeholder="••••••••"
+                    className="register-input"
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    aria-required="true"
+                    aria-label="كلمة المرور"
+                  />
+                </div>
               </div>
             </div>
 
-            <div>
-              <label className="mb-1 block text-sm font-bold">رقم الجوال</label>
-              <div className="relative">
-                <FaPhone className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
-                <input 
-                  name="phone" 
-                  value={form.phone} 
-                  onChange={handleChange} 
-                  placeholder="0512345678" 
-                  className="input-field pr-10" 
-                  required 
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-bold">البريد الإلكتروني</label>
-              <div className="relative">
-                <FaEnvelope className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
-                <input 
-                  name="email" 
-                  type="email" 
-                  value={form.email} 
-                  onChange={handleChange} 
-                  placeholder="example@domain.com" 
-                  className="input-field pr-10" 
-                  required 
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-bold">كلمة المرور</label>
-              <div className="relative">
-                <FaLock className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
-                <input 
-                  name="password" 
-                  type="password" 
-                  value={form.password} 
-                  onChange={handleChange} 
-                  className="input-field pr-10" 
-                  required 
-                  minLength={6} 
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-bold">المدينة</label>
-              <div className="relative">
-                <FaCity className="absolute right-3 top-1/2 -translate-y-1/2 text-textGray" />
-                <select name="city" value={form.city} onChange={handleChange} className="input-field pr-10">
-                  <option value="">اختر المدينة (اختياري)</option>
-                  {cities.map((c) => (
-                    <option key={c._id} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            </div>
-
-            {/* Handyman Specific Fields */}
             {role === 'handyman' && (
-              <>
-                <div className="border-t border-gray-200 pt-4">
-                  <h3 className="mb-4 text-lg font-bold text-secondary">معلومات الحرفي</h3>
-                  
-                  <div>
-                    <label className="mb-1 block text-sm font-bold">المهنة</label>
-                    <select 
-                      name="profession" 
-                      value={form.profession} 
-                      onChange={handleChange} 
-                      className="input-field" 
-                      required
-                    >
-                      <option value="">اختر المهنة</option>
-                      {professions.map((p) => (
-                        <option key={p._id} value={p.name}>{p.name}</option>
-                      ))}
-                    </select>
+              <div className="register-section">
+                <h3 className="register-section-title">معلومات الحرفي والمرفقات</h3>
+
+                <div className="register-grid register-grid--3">
+                  <div className="register-field">
+                    <label htmlFor="register-profession">المهنة</label>
+                    <div className="register-input-wrap">
+                      <span className="register-input-icon" aria-hidden="true"><FaHardHat /></span>
+                      <select
+                        id="register-profession"
+                        name="profession"
+                        value={form.profession}
+                        onChange={handleChange}
+                        className="register-input"
+                        required
+                        aria-required="true"
+                        aria-label="المهنة"
+                      >
+                        <option value="">اختر المهنة</option>
+                        {professions.map((p) => (
+                          <option key={p._id} value={p.name}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold">السعر (ج.م/ساعة)</label>
-                    <input 
-                      name="price" 
-                      type="number" 
-                      value={form.price} 
-                      onChange={handleChange} 
-                      className="input-field" 
-                      required 
-                      min={0} 
-                      step={0.5}
-                    />
+                  <div className="register-field">
+                    <label htmlFor="register-price">السعر (ج.م/س)</label>
+                    <div className="register-input-wrap">
+                      <span className="register-input-icon" aria-hidden="true"><FaCreditCard /></span>
+                      <input
+                        id="register-price"
+                        name="price"
+                        type="number"
+                        value={form.price}
+                        onChange={handleChange}
+                        className="register-input"
+                        required
+                        min={0}
+                        step={0.5}
+                        placeholder="0"
+                        aria-label="السعر بالساعة"
+                      />
+                    </div>
                   </div>
 
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold">سنوات الخبرة</label>
-                    <input 
-                      name="experienceYears" 
-                      type="number" 
-                      value={form.experienceYears} 
-                      onChange={handleChange} 
-                      className="input-field" 
-                      min={0} 
-                      placeholder="0"
-                    />
+                  <div className="register-field">
+                    <label htmlFor="register-experience">سنوات الخبرة</label>
+                    <div className="register-input-wrap">
+                      <span className="register-input-icon" aria-hidden="true"><FaCertificate /></span>
+                      <input
+                        id="register-experience"
+                        name="experienceYears"
+                        type="number"
+                        value={form.experienceYears}
+                        onChange={handleChange}
+                        className="register-input"
+                        min={0}
+                        placeholder="0"
+                        aria-label="سنوات الخبرة"
+                      />
+                    </div>
                   </div>
 
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold">نبذة تعريفية</label>
-                    <textarea 
-                      name="bio" 
-                      value={form.bio} 
-                      onChange={handleChange} 
-                      className="input-field" 
-                      rows="3" 
-                      placeholder="اكتب عن نفسك وخبراتك..."
-                    />
+                  <div className="register-field register-grid-span-2">
+                    <label htmlFor="register-address">العنوان</label>
+                    <div className="register-input-wrap">
+                      <span className="register-input-icon" aria-hidden="true"><FaCity /></span>
+                      <input
+                        id="register-address"
+                        name="address"
+                        value={form.address}
+                        onChange={handleChange}
+                        className="register-input"
+                        placeholder="العنوان بالتفصيل"
+                        aria-label="العنوان"
+                      />
+                    </div>
                   </div>
 
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold">العنوان</label>
-                    <input 
-                      name="address" 
-                      value={form.address} 
-                      onChange={handleChange} 
-                      className="input-field" 
-                      placeholder="العنوان بالتفصيل"
+                  <div className="register-field">
+                    <label htmlFor="register-bio">نبذة تعريفية</label>
+                    <div className="register-input-wrap">
+                      <span className="register-input-icon" aria-hidden="true"><FaUser /></span>
+                      <input
+                        id="register-bio"
+                        name="bio"
+                        value={form.bio}
+                        onChange={handleChange}
+                        className="register-input"
+                        placeholder="نبذة قصيرة عنك"
+                        aria-label="نبذة تعريفية"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="register-field">
+                    <label className="text-emergency">
+                      <FaIdCard className="inline mr-1" aria-hidden="true" /> البطاقة الشخصية *
+                    </label>
+                    <input
+                      id="nationalId"
+                      type="file"
+                      onChange={(e) => handleFileChange(e, 'nationalId')}
+                      className="hidden"
+                      accept="image/*,application/pdf"
+                      required={role === 'handyman'}
                     />
+                    <label htmlFor="nationalId" className="register-upload">
+                      <FaFileUpload aria-hidden="true" /> {files.nationalId ? 'تغيير الملف' : 'رفع الملف'}
+                    </label>
+                  </div>
+
+                  <div className="register-field">
+                    <label>
+                      <FaCertificate className="inline mr-1" aria-hidden="true" /> شهادة الخبرة
+                    </label>
+                    <input
+                      id="certificate"
+                      type="file"
+                      onChange={(e) => handleFileChange(e, 'certificate')}
+                      className="hidden"
+                      accept="image/*,application/pdf"
+                    />
+                    <label htmlFor="certificate" className="register-upload">
+                      <FaFileUpload aria-hidden="true" /> {files.certificate ? 'تغيير الملف' : 'رفع الملف'}
+                    </label>
+                  </div>
+
+                  <div className="register-field">
+                    <label>
+                      <FaCamera className="inline mr-1" aria-hidden="true" /> الصورة الشخصية
+                    </label>
+                    <input
+                      id="profileImage"
+                      type="file"
+                      onChange={(e) => handleFileChange(e, 'profileImage')}
+                      className="hidden"
+                      accept="image/*"
+                    />
+                    <label htmlFor="profileImage" className="register-upload">
+                      <FaCamera aria-hidden="true" /> {files.profileImage ? 'تغيير الصورة' : 'رفع صورة'}
+                    </label>
                   </div>
                 </div>
 
-                {/* File Uploads */}
-                <div className="border-t border-gray-200 pt-4">
-                  <h3 className="mb-4 text-lg font-bold text-secondary">المرفقات</h3>
-                  
-                  {/* National ID */}
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold text-red-600">
-                      <FaIdCard className="inline mr-1" /> صورة البطاقة الشخصية *
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <div className="relative flex-1">
-                        <input
-                          id="nationalId"
-                          type="file"
-                          onChange={(e) => handleFileChange(e, 'nationalId')}
-                          className="hidden"
-                          accept="image/*,application/pdf"
-                          required={role === 'handyman'}
-                        />
-                        <label
-                          htmlFor="nationalId"
-                          className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 px-4 py-3 text-sm text-gray-600 transition-colors hover:border-secondary hover:bg-secondary/5"
-                        >
-                          <FaFileUpload /> {files.nationalId ? 'تغيير الملف' : 'اختر ملف'}
-                        </label>
-                      </div>
-                      {files.nationalId && (
-                        <button
-                          type="button"
-                          onClick={() => removeFile('nationalId')}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                    {filePreviews.nationalId && filePreviews.nationalId !== 'pdf' && (
-                      <div className="mt-2">
-                        <img 
-                          src={filePreviews.nationalId} 
-                          alt="National ID" 
-                          className="max-h-32 rounded-lg border"
-                        />
-                      </div>
-                    )}
-                    {filePreviews.nationalId === 'pdf' && (
-                      <div className="mt-2 text-sm text-gray-500">
-                        📄 ملف PDF مرفوع
-                      </div>
-                    )}
-                    <p className="mt-1 text-xs text-gray-400">صورة أو PDF (حجم أقصى 5 ميجابايت)</p>
-                  </div>
-
-                  {/* Certificate */}
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold">
-                      <FaCertificate className="inline mr-1" /> شهادة الخبرة (اختياري)
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <div className="relative flex-1">
-                        <input
-                          id="certificate"
-                          type="file"
-                          onChange={(e) => handleFileChange(e, 'certificate')}
-                          className="hidden"
-                          accept="image/*,application/pdf"
-                        />
-                        <label
-                          htmlFor="certificate"
-                          className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 px-4 py-3 text-sm text-gray-600 transition-colors hover:border-secondary hover:bg-secondary/5"
-                        >
-                          <FaFileUpload /> {files.certificate ? 'تغيير الملف' : 'اختر ملف'}
-                        </label>
-                      </div>
-                      {files.certificate && (
-                        <button
-                          type="button"
-                          onClick={() => removeFile('certificate')}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                    {filePreviews.certificate && filePreviews.certificate !== 'pdf' && (
-                      <div className="mt-2">
-                        <img 
-                          src={filePreviews.certificate} 
-                          alt="Certificate" 
-                          className="max-h-32 rounded-lg border"
-                        />
-                      </div>
-                    )}
-                    <p className="mt-1 text-xs text-gray-400">صورة أو PDF (حجم أقصى 5 ميجابايت)</p>
-                  </div>
-
-                  {/* Profile Image */}
-                  <div className="mt-3">
-                    <label className="mb-1 block text-sm font-bold">
-                      <FaCamera className="inline mr-1" /> الصورة الشخصية (اختياري)
-                    </label>
-                    <div className="flex items-center gap-3">
-                      <div className="relative flex-1">
-                        <input
-                          id="profileImage"
-                          type="file"
-                          onChange={(e) => handleFileChange(e, 'profileImage')}
-                          className="hidden"
-                          accept="image/*"
-                        />
-                        <label
-                          htmlFor="profileImage"
-                          className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 px-4 py-3 text-sm text-gray-600 transition-colors hover:border-secondary hover:bg-secondary/5"
-                        >
-                          <FaCamera /> {files.profileImage ? 'تغيير الصورة' : 'اختر صورة'}
-                        </label>
-                      </div>
-                      {files.profileImage && (
-                        <button
-                          type="button"
-                          onClick={() => removeFile('profileImage')}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                    {filePreviews.profileImage && filePreviews.profileImage !== 'pdf' && (
-                      <div className="mt-2">
-                        <img 
-                          src={filePreviews.profileImage} 
-                          alt="Profile" 
-                          className="h-20 w-20 rounded-full border-2 border-secondary object-cover"
-                        />
-                      </div>
-                    )}
-                    <p className="mt-1 text-xs text-gray-400">صورة (حجم أقصى 5 ميجابايت)</p>
-                  </div>
-                </div>
-              </>
+                {!isHandymanFormValid() && (
+                  <p className="mt-2 text-center text-xs text-emergency" role="alert">
+                    * أكمل الحقول المطلوبة وارفع البطاقة الشخصية
+                  </p>
+                )}
+              </div>
             )}
 
-            {/* Terms */}
-            <label className="flex items-start gap-2 text-sm text-textGray">
-              <input 
-                type="checkbox" 
-                checked={agreed} 
-                onChange={(e) => setAgreed(e.target.checked)} 
-                className="mt-1 rounded" 
-                required 
-              />
-              <span>
-                أوافق على{' '}
-                <span className="text-primary">الشروط والأحكام</span> و{' '}
-                <span className="text-primary">سياسة الخصوصية</span> الخاصة بمنصة حرفي
-              </span>
-            </label>
+            <div className="register-actions">
+              <label className="flex max-w-sm items-start gap-2 text-xs leading-relaxed text-textGray">
+                <input
+                  type="checkbox"
+                  checked={agreed}
+                  onChange={(e) => setAgreed(e.target.checked)}
+                  className="mt-0.5 rounded border-borderGray text-primary focus:ring-primary"
+                  required
+                  aria-label="الموافقة على الشروط والأحكام"
+                />
+                <span>
+                  أوافق على <span className="font-semibold text-primary">الشروط والأحكام</span> و{' '}
+                  <span className="font-semibold text-primary">سياسة الخصوصية</span>
+                </span>
+              </label>
 
-            {/* Submit Button */}
-            <button 
-              type="submit" 
-              disabled={isLoading || uploading || !agreed || (role === 'handyman' && !isHandymanFormValid())} 
-              className="btn-secondary flex w-full items-center justify-center gap-2 py-4 text-base shadow-lg transition-all hover:-translate-y-1 hover:shadow-xl"
-            >
-              {(isLoading || uploading) ? (
-                <>
-                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  جاري التسجيل...
-                </>
-              ) : (
-                'إنشاء الحساب'
-              )}
-            </button>
+              <div className="register-actions-main">
+                <button
+                  type="submit"
+                  disabled={isLoading || uploading || !agreed || (role === 'handyman' && !isHandymanFormValid())}
+                  className="register-btn"
+                  aria-busy={isLoading || uploading}
+                  aria-label={isLoading || uploading ? 'جاري إنشاء الحساب' : 'إنشاء الحساب'}
+                >
+                  {(isLoading || uploading) ? (
+                    <>
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" aria-hidden="true" />
+                      جاري التسجيل...
+                    </>
+                  ) : (
+                    'إنشاء الحساب'
+                  )}
+                </button>
 
-            {role === 'handyman' && !isHandymanFormValid() && (
-              <p className="text-xs text-red-500 text-center">
-                * يرجى ملء جميع الحقول المطلوبة ورفع البطاقة الشخصية
-              </p>
-            )}
+                <p className="register-footer">
+                  لديك حساب؟{' '}
+                  <Link to="/login" className="font-bold text-primary transition-colors hover:text-secondary hover:underline" tabIndex={0}>
+                    سجل دخول
+                  </Link>
+                </p>
+              </div>
+            </div>
           </form>
-
-          <p className="mt-6 text-center text-sm text-textGray">
-            لديك حساب بالفعل؟{' '}
-            <Link to="/login" className="font-bold text-primary">تسجيل الدخول</Link>
-          </p>
-
-          <p className="mt-8 text-center text-xs text-textGray">
-            جميع الحقوق محفوظة © حرفي 2024
-          </p>
         </div>
       </div>
 
       <div
-        className="hidden flex-1 flex-col justify-center bg-primary px-12 text-white lg:flex"
+        className="register-sidebar auth-fade-in"
         style={{
-          backgroundImage:
-            'linear-gradient(rgba(15,76,117,0.9), rgba(15,76,117,0.95)), url(https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d5?w=1200)',
+          backgroundImage: 'url(https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d5?w=1200)',
           backgroundSize: 'cover',
+          backgroundPosition: 'center',
         }}
       >
-        <h2 className="mb-4 text-4xl font-bold">انضم إلى حرفي</h2>
-        <p className="mb-8 max-w-md text-white/80">
-          المنصة الرائدة في المملكة لربط الحرفيين الماهرين بأصحاب المنازل
-        </p>
-        <ul className="space-y-4">
-          {features.map(({ icon: Icon, text }) => (
-            <li key={text} className="flex items-center gap-3">
-              <Icon className="text-tertiary" size={20} />
-              {text}
-            </li>
-          ))}
-        </ul>
+        <div className="register-sidebar-overlay" aria-hidden="true" />
+        <div className="register-sidebar-content">
+          <div className="register-logo mb-6 h-14 w-14">
+            <FaHardHat size={22} aria-hidden="true" />
+          </div>
+          <h2 className="mb-3 text-4xl font-bold leading-tight">انضم إلى حرفي</h2>
+          <p className="mb-8 max-w-md text-base text-white/85">
+            المنصة الرائدة لربط الحرفيين الماهرين بأصحاب المنازل بثقة وأمان
+          </p>
+          <ul className="space-y-3">
+            {features.map(({ icon: Icon, text }) => (
+              <li key={text} className="register-feature">
+                <Icon className="shrink-0 text-secondary" size={18} aria-hidden="true" />
+                <span className="text-sm font-medium">{text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </div>
   );

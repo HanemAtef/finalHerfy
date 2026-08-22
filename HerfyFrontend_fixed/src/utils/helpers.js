@@ -36,6 +36,7 @@ export const ORDER_STATUS_LABELS = {
   accepted: 'بانتظار تأكيد السعر',
   price_confirmed: 'تم تأكيد السعر',
   'in-progress': 'قيد التنفيذ',
+  arrived: 'وصل الحرفي',
   completed: 'مكتمل',
   cancelled: 'ملغي',
   disputed: 'قيد النزاع',
