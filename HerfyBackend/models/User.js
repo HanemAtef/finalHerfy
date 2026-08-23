@@ -85,22 +85,6 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-
-    monthlyCancellationCount: {
-      type: Number,
-      default: 0,
-    },
-
-    monthlyCancellationMonth: {
-      type: Number,
-      default: new Date().getMonth(),
-    },
-
-    monthlyCancellationYear: {
-      type: Number,
-      default: new Date().getFullYear(),
-    },
-
     isPenalized: {
       type: Boolean,
       default: false,
@@ -125,6 +109,10 @@ const userSchema = new mongoose.Schema(
     // isBanned is already checked.
     deletedAt: {
       type: Date,
+      default: null,
+    },
+    stripeCustomerId: {
+      type: String,
       default: null,
     },
     // References ServiceType/City by their stable `key`/name so the admin

@@ -430,14 +430,76 @@ const autoVerifyAll = async (req, res) => {
 // ========== 8. Wallets: list handymen with outstanding commission debt ==========
 const getWallets = async (req, res) => {
   try {
-    const handymen = await Handyman.find({ walletBalance: { $gt: 0 } })
-      .populate("userId", "name email phone")
+    const handymen = await Handyman.find({
+      $or: [{ walletBalance: { $gt: 0 } }, { pendingEarnings: { $gt: 0 } }],
+    })
+      .populate('userId', 'name email phone')
       .sort({ walletBalance: -1 });
 
     res.status(200).json({ data: handymen });
   } catch (error) {
     console.log(error);
-    res.status(500).json({ msg: "Server error", error: error.message });
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// ========== Payout: admin marks handyman earnings as paid out ==========
+const payoutHandyman = async (req, res) => {
+  try {
+    const { handymanId } = req.params;
+    const { note = '' } = req.body;
+    const PayoutHistory = require('../models/PayoutHistory');
+
+    const handyman = await Handyman.findById(handymanId);
+    if (!handyman) return res.status(404).json({ msg: 'Handyman not found' });
+    if (!handyman.pendingEarnings || handyman.pendingEarnings <= 0) {
+      return res.status(400).json({ msg: 'لا توجد مستحقات معلقة لهذا الحرفي' });
+    }
+
+    const amount = handyman.pendingEarnings;
+    handyman.totalPaidOut = (handyman.totalPaidOut || 0) + amount;
+    handyman.pendingEarnings = 0;
+    await handyman.save();
+
+    await PayoutHistory.create({
+      handymanId: handyman._id,
+      amount,
+      processedBy: req.user._id,
+      note,
+    });
+
+    await logAction(
+      req.user._id, 'wallet.payout', 'Handyman', handyman._id, note,
+      { amount }
+    );
+
+    const io = req.app.get('io');
+    await createNotification(
+      io, handyman.userId, 'payment_confirmed',
+      'تم تحويل مستحقاتك',
+      `تم تحويل مبلغ ${amount} ج.م إلى حسابك.`,
+      { amount }
+    );
+
+    res.status(200).json({ msg: 'تم تسجيل التحويل بنجاح', amount, handyman });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// ========== Payout: get payout history for a handyman ==========
+const getPayoutHistory = async (req, res) => {
+  try {
+    const { handymanId } = req.params;
+    const PayoutHistory = require('../models/PayoutHistory');
+    const history = await PayoutHistory.find({ handymanId })
+      .populate('processedBy', 'name')
+      .sort({ createdAt: -1 });
+    res.status(200).json({ data: history });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
   }
 };
 
@@ -935,6 +997,8 @@ module.exports = {
   // Wallet Management
   getWallets,
   settleWallet,
+  payoutHandyman,
+  getPayoutHistory,
   
   // Announcements
   broadcastAnnouncement,

@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Handyman = require("../models/Handyman");
 const axios = require("axios");
 const mongoose = require("mongoose");
+const stripe = require("../config/stripe");
 const { createNotification } = require("./notificationController");
 const { cleanupThrottle } = require("../socket/liveTrackingThrottle");
 const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
@@ -947,6 +948,62 @@ const markOnTheWay = async (req, res) => {
   }
 };
 
+// ========== Create Stripe Payment Intent ==========
+// POST /api/orders/:id/create-payment-intent
+const createStripePaymentIntent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = await Order.findById(id);
+
+    if (!order) return res.status(404).json({ msg: "Order not found" });
+
+    if (req.user.id !== order.customerId?.toString() && req.user.role !== "admin") {
+      return res.status(403).json({ msg: "Only the customer on this order can initiate payment" });
+    }
+
+    if (order.status !== "price_confirmed") {
+      return res.status(400).json({ msg: "Payment can only be initiated after price is confirmed" });
+    }
+
+    if (order.paymentStatus === "paid") {
+      return res.status(400).json({ msg: "This order has already been paid" });
+    }
+
+    // Amount always read from DB — never trusted from frontend
+    const amountInCents = Math.round((order.totalPrice || order.price || 0) * 100);
+    if (amountInCents <= 0) {
+      return res.status(400).json({ msg: "Order has no valid price to charge" });
+    }
+
+    // Reuse existing PaymentIntent if still usable
+    if (order.stripePaymentIntentId) {
+      const existing = await stripe.paymentIntents.retrieve(order.stripePaymentIntentId);
+      if (["requires_payment_method", "requires_confirmation", "requires_action"].includes(existing.status)) {
+        return res.json({ clientSecret: existing.client_secret });
+      }
+    }
+
+    const paymentIntent = await stripe.paymentIntents.create(
+      {
+        amount: amountInCents,
+        currency: "egp",
+        metadata: { orderId: id, customerId: req.user.id },
+      },
+      { idempotencyKey: `order_${id}_${amountInCents}` }
+    );
+
+    order.stripePaymentIntentId = paymentIntent.id;
+    order.paymentMethod = "card";
+    order.paymentStatus = "pending";
+    await order.save();
+
+    res.json({ clientSecret: paymentIntent.client_secret });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
 module.exports = {
   createOrder,
   getOrder,
@@ -959,4 +1016,5 @@ module.exports = {
   requestReschedule,
   markOnTheWay,
   confirmCashPayment,
+  createStripePaymentIntent,
 };

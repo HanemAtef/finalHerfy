@@ -12,6 +12,8 @@ const {
   autoVerifyAll,
   getWallets,
   settleWallet,
+  payoutHandyman,
+  getPayoutHistory,
   getDashboardChart,
   broadcastAnnouncement,
   getUserDetail,
@@ -97,6 +99,8 @@ router.get("/audit-logs", getAuditLogs);
 // =====================================================
 router.get("/wallets", getWallets);
 router.patch("/wallets/:handymanId/settle", settleWallet);
+router.post("/wallets/:handymanId/payout", payoutHandyman);
+router.get("/wallets/:handymanId/history", getPayoutHistory);
 
 // =====================================================
 // ========== REFERENCE DATA ==========

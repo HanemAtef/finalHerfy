@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { FaWrench, FaBolt, FaChevronLeft, FaArrowRight, FaComments } from 'react-icons/fa';
+import { FaWrench, FaBolt, FaChevronLeft, FaArrowRight, FaComments, FaCreditCard } from 'react-icons/fa';
 import { getCustomerOrders } from '../../store/slices/orderSlice';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
@@ -90,6 +90,15 @@ export default function CustomerDashboard() {
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[order.status] || ''}`}>
                       {ORDER_STATUS_LABELS[order.status] || order.status}
                     </span>
+                    {order.paymentMethod === 'card' && order.paymentStatus === 'pending' && (
+                      <Link
+                        to={`/customer/payment/${order._id}`}
+                        className="mt-1 flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <FaCreditCard size={10} /> أكمل الدفع
+                      </Link>
+                    )}
                   </div>
                   <FaChevronLeft className="text-textGray shrink-0" />
                   </Link>

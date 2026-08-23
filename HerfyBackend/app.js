@@ -21,21 +21,20 @@ process.on("uncaughtException", (err) => {
 const app = express();
 const server = http.createServer(app);
 
-
 const ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"];
 
-// Enable CORS (must be before rate limiters and other middlewares)
+// Enable CORS
 app.use(cors({
   origin: ALLOWED_ORIGINS,
-  methods: ["GET", "POST", "PUT","PATCH", "DELETE", "OPTIONS"],
-  credentials: true
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  credentials: true,
 }));
 
 // Set security HTTP headers
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
-  }),
+  })
 );
 
 // Development logging
@@ -43,23 +42,22 @@ if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
+// Stripe webhook — MUST be registered before express.json() to preserve raw body
+app.use("/api/webhooks", require("./routes/webhookRoutes"));
+
+// Body parsers
 app.use(express.json({ limit: "10kb" }));
 app.use(express.urlencoded({ extended: true, limit: "10kb" }));
 
 // Limit requests from same API
-const limiter = rateLimit({
-  max: 1000,
-  windowMs: 15 * 60 * 1000,
-  message: "Too many requests from this IP, please try again in 15 minutes!",
-});
-app.use("/api", limiter);
-
-// Body parser, reading data from body into req.body
-// Body parsers MUST come before rate limiters and validation middleware
-
+// const limiter = rateLimit({
+//   max: 1000,
+//   windowMs: 15 * 60 * 1000,
+//   message: "Too many requests from this IP, please try again in 15 minutes!",
+// });
+// app.use("/api", limiter);
 
 // Data sanitization against NoSQL query injection
-// Custom wrapper to prevent Express 5 TypeError: Cannot set property query
 app.use((req, res, next) => {
   if (req.body) mongoSanitize.sanitize(req.body, { replaceWith: "_" });
   if (req.params) mongoSanitize.sanitize(req.params, { replaceWith: "_" });
@@ -70,32 +68,10 @@ app.use((req, res, next) => {
 // Prevent parameter pollution
 app.use(hpp());
 
-// Moderate rate limiter for all write endpoints
-const globalWriteLimiter = rateLimit({
-  windowMs: (parseInt(process.env.RATE_LIMIT_GLOBAL_WINDOW) || 15) * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_GLOBAL_MAX) || 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    status: "error",
-    msg: "Too many requests, please try again later.",
-  },
-});
-
-// Apply write limiter to all POST, PUT, PATCH, DELETE requests
-// app.use((req, res, next) => {
-//   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
-//     return globalWriteLimiter(req, res, next);
-//   }
-//   next();
-// });
-
-// Serve uploaded images statically (e.g. http://localhost:3000/uploads/xxx.jpg)
+// Serve uploaded images statically
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // ========== Socket.IO ==========
-// SECURITY FIX (H4): previously origin: "*" — inconsistent with, and wider
-// than, the REST CORS policy above. Now matches it exactly.
 const io = new Server(server, {
   cors: {
     origin: ALLOWED_ORIGINS,
@@ -103,23 +79,18 @@ const io = new Server(server, {
   },
 });
 
-// Socket Authentication Middleware
 const socketAuth = require("./socket/socketAuth");
 io.use(socketAuth);
 
-// Chat Socket
 const registerChatSocket = require("./socket/chatSocket");
 registerChatSocket(io);
 
-// Live Tracking Socket
 const liveTrackingSocket = require("./socket/livetracking.socket");
 liveTrackingSocket(io);
 
-// Notification Socket
 const notificationSocket = require("./socket/notification.socket");
 notificationSocket(io);
 
-// Store io instance for use in controllers/routes
 app.set("io", io);
 
 // ========== Database ==========
@@ -131,7 +102,6 @@ app.get("/", (req, res) => {
   res.send("Harfey API is running");
 });
 
-// ========== Routes ==========
 app.use("/api/users", require("./routes/authRoutes"));
 app.use("/api/handymen", require("./routes/handymanRoutes"));
 app.use("/api/orders", require("./routes/orderRoutes"));
@@ -143,6 +113,8 @@ app.use("/api/notifications", require("./routes/notificationRoutes"));
 app.use("/api/uploads", require("./routes/uploadRoutes"));
 app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
+app.use("/api/payments", require("./routes/paymentRoutes"));
+app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
 
 // Seed the ServiceType collection from the old hardcoded profession list
 // on first boot, so existing handyman records keep working before an
@@ -150,8 +122,8 @@ app.use("/api/reports", require("./routes/reportRoutes"));
 require("./controllers/referenceDataController").ensureSeeded().catch((e) =>
   console.log("ServiceType seed skipped:", e.message)
 );
-// ========== Server ==========
-// Global error handling middleware
+
+// ========== Global Error Handler ==========
 app.use((err, req, res, next) => {
   console.error("GLOBAL ERROR HANDLER CAUGHT:", err);
   err.statusCode = err.statusCode || 500;
@@ -165,7 +137,6 @@ app.use((err, req, res, next) => {
       stack: err.stack,
     });
   } else {
-    // Production: don't leak error details
     res.status(err.statusCode).json({
       status: err.status,
       message: err.isOperational ? err.message : "Something went very wrong!",
@@ -173,11 +144,11 @@ app.use((err, req, res, next) => {
   }
 });
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 5000;
 
 if (process.env.NODE_ENV !== "test") {
   server.listen(port, () => {
-    console.log(` Server is running on port ${port}`);
+    console.log(`Server is running on port ${port}`);
   });
 }
 

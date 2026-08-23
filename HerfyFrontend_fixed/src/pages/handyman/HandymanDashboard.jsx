@@ -404,6 +404,20 @@ export default function HandymanDashboard() {
         </div>
       )}
 
+      {analytics?.pendingEarnings > 0 && (
+        <div className="card mb-6 flex flex-wrap items-center justify-between gap-3 border-r-4 border-tertiary bg-tertiary/5">
+          <div>
+            <p className="font-bold text-textDark">
+              مستحقاتك من الدفع الإلكتروني: <span className="text-tertiary">{formatPrice(analytics.pendingEarnings)}</span>
+            </p>
+            <p className="text-sm text-textGray">
+              سيتم تحويل هذا المبلغ إليك من فريق الدعم قريباً
+            </p>
+          </div>
+          <span className="rounded-full bg-tertiary/20 px-3 py-1 text-xs font-bold text-tertiary">قيد التحويل</span>
+        </div>
+      )}
+
       {monthlyStats && (
         <MonthlyTargetBar
           completed={monthlyStats.monthlyCompleted}

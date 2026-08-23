@@ -40,6 +40,9 @@ import AdminNotificationsPage from './pages/admin/AdminNotificationsPage';
 
 import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
+import OrderPaymentPage from './pages/payment/OrderPaymentPage';
+import PaymentSuccess from './pages/payment/PaymentSuccess';
+import PaymentCancel from './pages/payment/PaymentCancel';
 
 
 
@@ -127,6 +130,18 @@ function App() {
               </ProtectedRoute>
             }
           />
+
+          {/* Payment */}
+          <Route
+            path="/customer/payment/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <OrderPaymentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/payment/success" element={<PaymentSuccess />} />
+          <Route path="/payment/cancel" element={<PaymentCancel />} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
