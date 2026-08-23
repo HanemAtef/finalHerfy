@@ -29,9 +29,9 @@ const sendEmail = async (email, otp) => {
         </div>
       `,
     });
-    console.log(`✅ Password reset email sent to ${email}`);
+    console.log(` Password reset email sent to ${email}`);
   } catch (err) {
-    console.error(`❌ Failed to send reset email to ${email}:`, err.message);
+    console.error(` Failed to send reset email to ${email}:`, err.message);
   }
 };
 

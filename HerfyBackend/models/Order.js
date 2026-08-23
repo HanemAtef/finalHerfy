@@ -93,7 +93,6 @@
       },
 
       
-  // حقول التتبع المباشر
   handymanLiveLocation: {
       type: {
           type: String,

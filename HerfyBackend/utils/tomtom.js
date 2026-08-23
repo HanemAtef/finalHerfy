@@ -3,8 +3,7 @@ const TOMTOM_API_KEY = process.env.TOMTOM_API_KEY;
 // Strip trailing slash — prevents double-slash when appending /routing/1/...
 const TOMTOM_API_URL = (process.env.TOMTOM_API_URL || 'https://api.tomtom.com').replace(/\/+$/, '');
 
-console.log('🔑 TOMTOM_API_KEY =', TOMTOM_API_KEY ? 'PRESENT' : 'MISSING');
-console.log('🌐 TOMTOM_API_URL =', TOMTOM_API_URL);
+
 
 /**
  * Calculate route between two points using TomTom Routing API.
@@ -37,7 +36,7 @@ const calculateRoute = async (origin, destination) => {
     !Number.isFinite(origin.lat) || !Number.isFinite(origin.lng) ||
     !Number.isFinite(destination.lat) || !Number.isFinite(destination.lng)
   ) {
-    console.error('❌ TOMTOM FAILURE REASON = Invalid coordinates passed to calculateRoute');
+    console.error(' TOMTOM FAILURE REASON = Invalid coordinates passed to calculateRoute');
     console.error('   origin =', origin, ' destination =', destination);
     return { distance: null, eta: null, trafficDelay: null, arrivalTime: null, geometry: null, isFallback: false };
   }
@@ -48,7 +47,7 @@ const calculateRoute = async (origin, destination) => {
     Math.abs(origin.lng - destination.lng) < 0.00001;
 
   if (sameLocation) {
-    console.log('✅ [TomTom] Same location detected — returning zero route (arrived)');
+    console.log(' [TomTom] Same location detected — returning zero route (arrived)');
     return {
       distance: 0,
       eta: 0,
