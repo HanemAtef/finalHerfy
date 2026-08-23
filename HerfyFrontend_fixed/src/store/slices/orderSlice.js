@@ -13,6 +13,30 @@ export const createOrder = createAsyncThunk(
   }
 );
 
+export const createPaymentIntent = createAsyncThunk(
+  'orders/createPaymentIntent',
+  async (orderId, { rejectWithValue }) => {
+    try {
+      const response = await orderService.createPaymentIntent(orderId);
+      return response.data; // { clientSecret }
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل تهيئة الدفع' });
+    }
+  }
+);
+
+export const confirmCashPayment = createAsyncThunk(
+  'orders/confirmCashPayment',
+  async (orderId, { rejectWithValue }) => {
+    try {
+      const response = await orderService.confirmCashPayment(orderId);
+      return response.data.order || response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل تأكيد الدفع الكاش' });
+    }
+  }
+);
+
 export const getCustomerOrders = createAsyncThunk(
   'orders/getCustomerOrders',
   async (customerId, { rejectWithValue }) => {
@@ -146,6 +170,11 @@ const orderSlice = createSlice({
         state.orders.unshift(action.payload);
       })
       .addCase(createOrder.rejected, rejected)
+      .addCase(createPaymentIntent.pending, pending)
+      .addCase(createPaymentIntent.fulfilled, (state) => {
+        state.isLoading = false;
+      })
+      .addCase(createPaymentIntent.rejected, rejected)
       .addCase(getCustomerOrders.pending, pending)
       .addCase(getCustomerOrders.fulfilled, (state, action) => {
         state.isLoading = false;

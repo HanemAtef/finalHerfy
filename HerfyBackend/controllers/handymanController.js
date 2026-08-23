@@ -537,6 +537,8 @@ const getHandymanAnalytics = async (req, res) => {
       totalReviews: ratingStats[0]?.totalReviews || 0,
       isAvailable: handyman.isAvailable,
       walletBalance: handyman.walletBalance || 0,
+      pendingEarnings: handyman.pendingEarnings || 0,
+      totalPaidOut: handyman.totalPaidOut || 0,
       isSuspended: handyman.isSuspended || false,
       suspendedReason: handyman.suspendedReason || null,
       registrationStatus: handyman.registrationStatus,
