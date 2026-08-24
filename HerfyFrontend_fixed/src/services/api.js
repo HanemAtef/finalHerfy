@@ -154,3 +154,6 @@ export const adminService = {
   payoutHandyman: (handymanId, data) => api.post(`/admin/wallets/${handymanId}/payout`, data),
   getPayoutHistory: (handymanId) => api.get(`/admin/wallets/${handymanId}/history`),
 };
+export const chatbotService = {
+  ask: (data) => api.post('/chatbot/ask', data),
+};

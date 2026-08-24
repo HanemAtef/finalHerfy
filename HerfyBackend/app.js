@@ -10,7 +10,7 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const mongoSanitize = require("express-mongo-sanitize");
 const hpp = require("hpp");
-
+const chatbotRoutes = require('./routes/chatbotRoutes');
 // Global error handlers for uncaught exceptions
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION!  Shutting down...");
@@ -115,7 +115,7 @@ app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
-
+app.use("/api/chatbot", chatbotRoutes);
 // Seed the ServiceType collection from the old hardcoded profession list
 // on first boot, so existing handyman records keep working before an
 // admin has touched the new reference-data UI.

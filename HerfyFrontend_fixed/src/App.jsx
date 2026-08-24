@@ -44,7 +44,7 @@ import MyReportsPage from './pages/shared/MyReportsPage';
 import OrderPaymentPage from './pages/payment/OrderPaymentPage';
 import PaymentSuccess from './pages/payment/PaymentSuccess';
 import PaymentCancel from './pages/payment/PaymentCancel';
-
+import ChatbotWidget from './components/chatbot/ChatbotWidget';
 
 
 function App() {
@@ -155,6 +155,7 @@ function App() {
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+         <ChatbotWidget />
       </AuthInit>
     </BrowserRouter>
   );
