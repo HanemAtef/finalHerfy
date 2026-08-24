@@ -17,8 +17,9 @@ import {
   FaMapMarkerAlt,
   FaWalking,
   FaWrench,
+  FaCreditCard,
 } from 'react-icons/fa';
-import { fetchOrderById, updateOrderStatus, confirmOrderPrice } from '../../store/slices/orderSlice';
+import { fetchOrderById, updateOrderStatus, confirmOrderPrice, selectPaymentMethod } from '../../store/slices/orderSlice';
 import { connectSocket, getSocketInstanceId } from '../../socket/socket';
 import { reportService } from '../../services/api';
 import TrackingMap from '../../components/Map/TrackingMap';
@@ -677,6 +678,7 @@ export default function TrackingPage() {
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
   const handleCancel = () => {
+    if (!window.confirm('هل أنت متأكد من إلغاء الطلب؟')) return;
     dispatch(updateOrderStatus({ id: orderId, status: 'cancelled' }));
   };
 
@@ -688,6 +690,13 @@ export default function TrackingPage() {
     await reportService.fileReport(orderId, { reason });
     setReportSent(true);
     dispatch(fetchOrderById(orderId));
+  };
+
+  const handleSelectPaymentMethod = async (method) => {
+    const result = await dispatch(selectPaymentMethod({ orderId, paymentMethod: method }));
+    if (!result.error && method === 'card') {
+      navigate(`/customer/payment/${orderId}`);
+    }
   };
 
   const ReportButton = () =>
@@ -787,14 +796,19 @@ export default function TrackingPage() {
 
   // ===== COMPLETED =====
   if (status === 'completed') {
+    const isPaid = currentOrder.paymentStatus === 'paid';
+    const noMethodSelected = !currentOrder.paymentMethod && !isPaid;
+    const cashPending = currentOrder.paymentMethod === 'cash' && currentOrder.paymentStatus === 'pending';
+    const cardPending = currentOrder.paymentMethod === 'card' && currentOrder.paymentStatus === 'pending';
+
     return (
       <div className="fixed inset-0 flex flex-col overflow-y-auto bg-white">
         <Header title="الطلب" />
         <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
           <FaCheckCircle className="text-tertiary" size={48} />
           <h2 className="text-xl font-bold text-textDark">تم إنجاز الطلب بنجاح</h2>
-          <p className="text-sm text-textGray">لا تنسَ تقييم {handyman.name || 'الحرفي'}</p>
 
+          {/* Order details */}
           <div className="card w-full max-w-sm text-right">
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-textGray">رقم الطلب</span>
@@ -809,16 +823,70 @@ export default function TrackingPage() {
               <span className="font-medium text-textDark">{handyman.name || '—'}</span>
             </div>
             <div className="mb-2 flex justify-between text-sm">
-              <span className="text-textGray">المبلغ المدفوع</span>
-              <span className="font-bold text-secondary">{formatPrice(currentOrder.price)}</span>
+              <span className="text-textGray">المبلغ المستحق</span>
+              <span className="font-bold text-secondary">{formatPrice(currentOrder.price ?? currentOrder.totalPrice ?? currentOrder.estimatedPrice)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-textGray">حالة الدفع</span>
-              <span className={currentOrder.paymentStatus === 'paid' ? 'font-medium text-tertiary' : 'font-medium text-emergency'}>
-                {currentOrder.paymentStatus === 'paid' ? 'تم الدفع' : 'لم يتم الدفع بعد'}
+              <span className={isPaid ? 'font-medium text-tertiary' : 'font-medium text-emergency'}>
+                {isPaid ? 'تم الدفع' : 'لم يتم الدفع بعد'}
               </span>
             </div>
           </div>
+
+          {/* Payment method selection — only after completion, only if not paid */}
+          {noMethodSelected && (
+            <div className="w-full max-w-sm space-y-3">
+              <p className="text-sm font-bold text-textDark">اختر طريقة الدفع</p>
+              <button
+                type="button"
+                onClick={() => handleSelectPaymentMethod('cash')}
+                className="btn-secondary flex w-full items-center justify-center gap-2"
+              >
+                <FaMoneyBillWave /> الدفع نقدًا
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectPaymentMethod('card')}
+                className="btn-secondary flex w-full items-center justify-center gap-2"
+              >
+                <FaCreditCard /> الدفع بالبطاقة
+              </button>
+            </div>
+          )}
+
+          {/* Cash selected — waiting for handyman confirmation */}
+          {cashPending && (
+            <div className="w-full max-w-sm rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              <FaMoneyBillWave className="inline ml-1" />
+              تم اختيار الدفع نقدًا. يرجى دفع المبلغ للحرفي.
+              <p className="mt-1 text-xs">في انتظار تأكيد الحرفي...</p>
+            </div>
+          )}
+
+          {/* Card selected — payment pending */}
+          {cardPending && (
+            <div className="w-full max-w-sm space-y-3">
+              <div className="rounded-xl bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                <FaCreditCard className="inline ml-1" />
+                الدفع بالبطاقة قيد الانتظار
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate(`/customer/payment/${orderId}`)}
+                className="btn-secondary flex w-full items-center justify-center gap-2"
+              >
+                <FaCreditCard /> متابعة الدفع
+              </button>
+            </div>
+          )}
+
+          {/* Payment completed */}
+          {isPaid && (
+            <div className="flex items-center gap-2 rounded-xl bg-green-50 px-4 py-3 text-sm font-bold text-green-700">
+              <FaCheckCircle /> تم الدفع بنجاح
+            </div>
+          )}
 
           {currentOrder.completionImage && (
             <div className="w-full max-w-sm text-right">
@@ -920,7 +988,7 @@ export default function TrackingPage() {
 
   // ===== price_confirmed & handyman hasn't started heading over yet =====
   if (status === 'price_confirmed' && !currentOrder.isHandymanOnTheWay) {
-    const canPayByCard = currentOrder.paymentStatus !== 'paid';
+    // Payment is now only available AFTER completion — no pre-payment here
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
         <Header title={currentOrder.requestType === 'scheduled' ? 'موعد الطلب' : 'جاري التجهيز'} />
@@ -946,26 +1014,7 @@ export default function TrackingPage() {
             </>
           )}
 
-          {/* Payment options */}
-          {canPayByCard && (
-            <div className="w-full max-w-sm space-y-3">
-              <p className="text-sm font-bold text-textDark">اختر طريقة الدفع</p>
-              <button
-                type="button"
-                onClick={() => navigate(`/customer/payment/${orderId}`)}
-                className="btn-secondary flex w-full items-center justify-center gap-2"
-              >
-                <FaCreditCard /> ادفع بالكارت الآن
-              </button>
-              <p className="text-xs text-textGray">أو ادفع كاش للحرفي عند الانتهاء</p>
-            </div>
-          )}
-
-          {currentOrder.paymentStatus === 'paid' && (
-            <div className="flex items-center gap-2 rounded-xl bg-green-50 px-4 py-3 text-sm font-bold text-green-700">
-              <FaCheckCircle /> تم الدفع إلكترونياً بنجاح
-            </div>
-          )}
+          {/* No payment UI at price_confirmed — payment happens after completion */}
 
           <div className="flex w-full max-w-sm gap-4">
             <a
@@ -1036,6 +1085,14 @@ export default function TrackingPage() {
           <Link to={`/chat/${orderId}`} className="btn-primary flex items-center gap-2">
             <FaComments /> فتح المحادثة
           </Link>
+          <button
+            type="button"
+            onClick={handleCancel}
+            disabled={isLoading}
+            className="flex items-center gap-2 rounded-xl border-2 border-emergency px-6 py-3 font-bold text-emergency disabled:opacity-50"
+          >
+            <FaTimes /> إلغاء الطلب
+          </button>
           <ReportButton />
         </div>
         {reportOpen && (

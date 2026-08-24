@@ -3,7 +3,10 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements, useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 import { createSubscription } from '../../services/stripeService';
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
+const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
+const stripePromise = stripePublishableKey
+  ? loadStripe(stripePublishableKey)
+  : Promise.reject(new Error('Stripe publishable key is not configured.'));
 
 const PLANS = [
   { id: 'monthly', label: 'Monthly Plan', price: '$9.99/mo' },

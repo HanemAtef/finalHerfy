@@ -20,6 +20,7 @@ import ReviewPage from './pages/customer/ReviewPage';
 import CustomerDashboard from './pages/customer/CustomerDashboard';
 import CustomerProfilePage from './pages/customer/CustomerProfilePage';
 import NotificationsPage from './pages/customer/NotificationsPage';
+import CustomerOrderDetailsPage from './pages/customer/CustomerOrderDetailsPage';
 
 import HandymanDashboard from './pages/handyman/HandymanDashboard';
 import HandymanOrdersPage from './pages/handyman/HandymanOrdersPage';
@@ -137,6 +138,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['customer']}>
                 <OrderPaymentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/customer/orders/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <CustomerOrderDetailsPage />
               </ProtectedRoute>
             }
           />

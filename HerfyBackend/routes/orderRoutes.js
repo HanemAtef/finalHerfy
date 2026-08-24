@@ -20,6 +20,7 @@ const {
   markOnTheWay,
   confirmCashPayment,
   createStripePaymentIntent,
+  selectPaymentMethod,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
 
@@ -39,10 +40,13 @@ router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrde
 router.patch("/:id/confirm-price", idempotency, confirmPrice);
 router.patch("/:id/on-the-way", markOnTheWay);
 
-// ========== Payment: cash (existing flow — untouched) ==========
+// ========== Payment: method selection (customer chooses cash or card after completion) ==========
+router.patch("/:id/select-payment-method", idempotency, selectPaymentMethod);
+
+// ========== Payment: cash (handyman confirms receipt) ==========
 router.patch("/:id/confirm-payment", idempotency, confirmCashPayment);
 
-// ========== Payment: card (new Stripe flow — parallel to cash) ==========
+// ========== Payment: card (Stripe PaymentIntent — created only after completion) ==========
 router.post("/:id/create-payment-intent", createStripePaymentIntent);
 
 // ========== Other ==========

@@ -7,6 +7,7 @@ const reviewSchema = require("../validations/reviewSchema");
 
 const {
   addReview,
+  getOrderReview,
   getHandymanReviews,
   getCustomersReviews,
 } = require("../controllers/reviewController");
@@ -14,6 +15,7 @@ const {
 router.use(authMiddleware);
 
 router.post("/addreview", validate(reviewSchema), addReview);
+router.get("/order/:orderId", getOrderReview);
 router.get("/handyman/:handymanId", getHandymanReviews);
 router.get("/customer/:customerId", getCustomersReviews);
 

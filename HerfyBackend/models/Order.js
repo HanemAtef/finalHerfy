@@ -43,6 +43,11 @@ const orderSchema = new mongoose.Schema(
       type: Number,
     },
 
+    serviceAmount: {
+      type: Number,
+      default: 0,
+    },
+
     penaltyAmount: {
       type: Number,
       default: 0,
@@ -187,11 +192,10 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Payment
     paymentMethod: {
       type: String,
       enum: ["cash", "card"],
-      default: "cash",
+      default: null,
     },
 
     paymentStatus: {

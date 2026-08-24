@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 
 // orderId is passed so the return_url carries it for the success page
-export default function CheckoutForm({ orderId, amount }) {
+export default function CheckoutForm({ orderId, amount, penaltyMode }) {
   const stripe = useStripe();
   const elements = useElements();
   const [error, setError] = useState(null);
@@ -15,7 +15,14 @@ export default function CheckoutForm({ orderId, amount }) {
     setLoading(true);
     setError(null);
 
-    const { error: submitError } = await elements.submit();
+    let submitError;
+    try {
+      ({ error: submitError } = await elements.submit());
+    } catch (submitException) {
+      setError(submitException.message || 'The payment form could not be initialized.');
+      setLoading(false);
+      return;
+    }
     if (submitError) {
       setError(submitError.message);
       setLoading(false);
@@ -25,7 +32,7 @@ export default function CheckoutForm({ orderId, amount }) {
     const { error: confirmError } = await stripe.confirmPayment({
       elements,
       confirmParams: {
-        return_url: `${window.location.origin}/payment/success?orderId=${orderId}`,
+        return_url: `${window.location.origin}/payment/success?orderId=${orderId}${penaltyMode ? '&penalty=1' : ''}`,
       },
     });
 
@@ -43,7 +50,11 @@ export default function CheckoutForm({ orderId, amount }) {
           المبلغ المطلوب: {amount} ج.م
         </p>
       )}
-      <PaymentElement />
+      <PaymentElement
+        onLoadError={({ error: loadError }) => {
+          setError(loadError?.message || 'The payment form could not be initialized.');
+        }}
+      />
       {error && <p className="text-red-600 text-sm">{error}</p>}
       <button
         type="submit"

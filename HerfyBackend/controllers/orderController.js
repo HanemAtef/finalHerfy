@@ -10,6 +10,8 @@ const { cleanupThrottle } = require("../socket/liveTrackingThrottle");
 const { WALLET_DEBT_SUSPENSION_REASON } = require("../utils/constants");
 const { calculateRoute } = require("../utils/tomtom");
 
+const MAX_IN_PROGRESS_ORDERS = 2;
+
 
 // ========== 1. create order ==========
 const createOrder = async (req, res) => {
@@ -36,9 +38,10 @@ const createOrder = async (req, res) => {
       return res.status(404).json({ msg: "Customer not found" });
     }
 
-    if (customer.penaltyCount && customer.penaltyCount >= 3) {
+    if (customer.penaltyAmount && customer.penaltyAmount > 0) {
       return res.status(403).json({
-        msg: "You have been penalized for multiple cancellations. Please pay your fines to continue.",
+        msg: "You have an outstanding penalty of " + customer.penaltyAmount + " EGP. Please settle it before creating a new order.",
+        penaltyAmount: customer.penaltyAmount,
       });
     }
 
@@ -64,8 +67,11 @@ const createOrder = async (req, res) => {
     }
 
     let finalPrice = estimatedPrice || 0;
-    let penaltyAmount = customer.penaltyAmount || 0;
-    let totalPrice = finalPrice + penaltyAmount;
+    // New orders never carry the customer's outstanding penalty —
+    // the customer is blocked from creating orders until penaltyAmount = 0.
+    let serviceAmount = finalPrice;
+    let penaltyAmount = 0;
+    let totalPrice = serviceAmount + penaltyAmount;
 
     const commissionRate = isEmergencyBool ? 15 : 10;
 
@@ -78,6 +84,7 @@ const createOrder = async (req, res) => {
       requestType,
       scheduledDate,
       estimatedPrice: finalPrice,
+      serviceAmount,
       penaltyAmount,
       totalPrice,
       customerLocation: {
@@ -335,24 +342,32 @@ const updateOrderStatus = async (req, res) => {
           console.log('[ORDER] Tracking expired - penalty waived');
           order.penaltyAmount = 0;
         } else {
+          // Progressive penalty: 50 + (penaltyCount * 10)
+          // No accumulation: penaltyAmount is ASSIGNED the current penalty, not added.
+          // Read current penaltyCount to calculate the penalty, then apply atomically.
           const customer = await User.findById(order.customerId);
           if (customer) {
-            customer.penaltyCount = (customer.penaltyCount || 0) + 1;
-            customer.penaltyAmount = (customer.penaltyAmount || 0) + 50;
-            if (customer.penaltyCount >= 3) {
-              customer.isPenalized = true;
-            }
-            await customer.save();
+            const currentPenaltyCount = customer.penaltyCount || 0;
+            const penaltyForCancellation = 50 + (currentPenaltyCount * 10);
+            // Atomic: $inc penaltyCount + $set penaltyAmount in one operation.
+            const updatedCustomer = await User.findByIdAndUpdate(
+              order.customerId,
+              {
+                $inc: { penaltyCount: 1 },
+                $set: { penaltyAmount: penaltyForCancellation },
+              },
+              { new: true }
+            );
+            const io = req.app.get('io');
+            await createNotification(
+              io,
+              order.customerId,
+              'penalty_warning',
+              ' Penalty Warning',
+              `You have been charged a ${penaltyForCancellation} EGP penalty. Total penalized cancellations: ${updatedCustomer?.penaltyCount || 0}`,
+              { orderId: order._id, penaltyCount: updatedCustomer?.penaltyCount || 0, penaltyAmount: penaltyForCancellation }
+            );
           }
-          const io = req.app.get('io');
-          await createNotification(
-            io,
-            order.customerId,
-            'penalty_warning',
-            ' Penalty Warning',
-            `You have been charged a 50 EGP penalty. Total penalties: ${customer?.penaltyCount || 0}`,
-            { orderId: order._id, penaltyCount: customer?.penaltyCount || 0 }
-          );
         }
       }
 
@@ -399,14 +414,16 @@ const updateOrderStatus = async (req, res) => {
 
       // FIX (M3): the count-check-then-write below used to be a classic
       // TOCTOU race — two concurrent "accept" requests for the same
-      // handyman could both read count < 3 before either write completed,
-      // letting the 3-order cap be exceeded. Wrap the recheck + reservation
+      // handyman could both read below the cap before either write completed,
+      // letting the in-progress order cap be exceeded. Wrap the recheck + reservation
       // in a transaction so only one of them can win the last slot.
       // (Falls back to the old non-transactional check if the deployment's
       // MongoDB doesn't support transactions — e.g. a standalone dev
       // instance — so this can't break local/dev setups.)
       if (price !== undefined) {
         order.price = price;
+        order.serviceAmount = price;
+        order.totalPrice = price + (order.penaltyAmount || 0);
       }
       order.status = "accepted";
 
@@ -418,7 +435,7 @@ const updateOrderStatus = async (req, res) => {
             status: "in-progress",
           }).session(session);
 
-          if (raceCount >= 3) {
+          if (raceCount >= MAX_IN_PROGRESS_ORDERS) {
             const capError = new Error("IN_PROGRESS_CAP_REACHED");
             capError.isCapError = true;
             throw capError;
@@ -430,7 +447,7 @@ const updateOrderStatus = async (req, res) => {
       } catch (txErr) {
         if (txErr.isCapError) {
           return res.status(400).json({
-            msg: "You have reached the maximum number of in-progress orders (3). Please complete one first.",
+            msg: "You have reached the maximum number of in-progress orders (2). Please complete one first.",
           });
         }
         // Transactions unsupported in this environment (e.g. standalone
@@ -441,9 +458,9 @@ const updateOrderStatus = async (req, res) => {
           handymanId: order.handymanId,
           status: "in-progress",
         });
-        if (inProgressOrders >= 3) {
+        if (inProgressOrders >= MAX_IN_PROGRESS_ORDERS) {
           return res.status(400).json({
-            msg: "You have reached the maximum number of in-progress orders (3). Please complete one first.",
+            msg: "You have reached the maximum number of in-progress orders (2). Please complete one first.",
           });
         }
       } finally {
@@ -486,7 +503,15 @@ const updateOrderStatus = async (req, res) => {
         status: "in-progress",
       });
 
-      if (inProgressCount >= 3) {
+      if (inProgressCount >= MAX_IN_PROGRESS_ORDERS) {
+        return res.status(400).json({
+          msg: "You have reached the maximum number of in-progress orders (2). Please complete one first.",
+        });
+      }
+
+      // This transition will occupy the final available slot, so hide the
+      // handyman from new offers immediately after it succeeds.
+      if (inProgressCount + 1 >= MAX_IN_PROGRESS_ORDERS) {
         await Handyman.findOneAndUpdate(
           { userId: order.handymanId },
           { isAvailable: false }
@@ -523,7 +548,7 @@ const updateOrderStatus = async (req, res) => {
       });
 
       const updateQuery = { $inc: { completedOrders: 1 } };
-      if (inProgressCount < 3) {
+      if (inProgressCount <= MAX_IN_PROGRESS_ORDERS) {
         updateQuery.isAvailable = true;
       }
       await Handyman.findOneAndUpdate(
@@ -767,20 +792,24 @@ const confirmCashPayment = async (req, res) => {
       return res.status(400).json({ msg: "Payment already confirmed" });
     }
 
+    if (order.paymentMethod !== 'cash') {
+      return res.status(400).json({ msg: 'Cash confirmation is only available for cash payments' });
+    }
+
     order.paymentStatus = "paid";
     order.paidAt = new Date();
     await order.save();
 
-    // BUG FIX (C8): collect the penalty that was snapshotted onto this
-    // order at creation time — this is the point the debt is actually
-    // being paid in cash alongside the job, so this is when it should
-    // come off the customer's outstanding balance (not at order creation).
+    // Settle legacy penalty: only if the order actually carried a penalty
+    // (new orders always have penaltyAmount = 0 since the customer is blocked).
+    // Sets customer.penaltyAmount to 0 (not subtraction) — there is only one
+    // outstanding penalty at a time (no accumulation). Atomic + idempotent:
+    // the $gt: 0 condition means a duplicate request does nothing.
     if (order.penaltyAmount > 0) {
-      const customer = await User.findById(order.customerId);
-      if (customer) {
-        customer.penaltyAmount = Math.max(0, (customer.penaltyAmount || 0) - order.penaltyAmount);
-        await customer.save();
-      }
+      await User.findOneAndUpdate(
+        { _id: order.customerId, penaltyAmount: { $gt: 0 } },
+        { $set: { penaltyAmount: 0 } }
+      );
     }
 
     // The customer paid the handyman in cash directly, so the platform's
@@ -955,14 +984,19 @@ const createStripePaymentIntent = async (req, res) => {
     const { id } = req.params;
     const order = await Order.findById(id);
 
+    console.log('[Payment] orderId:', id);
+    console.log('[Payment] order.status:', order?.status);
+    console.log('[Payment] user.id:', req.user?.id);
+    console.log('[Payment] stripe configured:', Boolean(process.env.STRIPE_SECRET_KEY));
+
     if (!order) return res.status(404).json({ msg: "Order not found" });
 
     if (req.user.id !== order.customerId?.toString() && req.user.role !== "admin") {
       return res.status(403).json({ msg: "Only the customer on this order can initiate payment" });
     }
 
-    if (order.status !== "price_confirmed") {
-      return res.status(400).json({ msg: "Payment can only be initiated after price is confirmed" });
+    if (order.status !== "completed") {
+      return res.status(400).json({ msg: "Payment can only be initiated after the order is completed" });
     }
 
     if (order.paymentStatus === "paid") {
@@ -987,7 +1021,11 @@ const createStripePaymentIntent = async (req, res) => {
       {
         amount: amountInCents,
         currency: "egp",
-        metadata: { orderId: id, customerId: req.user.id },
+        metadata: {
+          orderId: id,
+          customerId: req.user.id,
+          handymanId: order.handymanId?.toString(),
+        },
       },
       { idempotencyKey: `order_${id}_${amountInCents}` }
     );
@@ -1004,6 +1042,75 @@ const createStripePaymentIntent = async (req, res) => {
   }
 };
 
+// ========== Customer selects payment method (cash or card) after completion ==========
+const selectPaymentMethod = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { paymentMethod } = req.body;
+
+    if (!['cash', 'card'].includes(paymentMethod)) {
+      return res.status(400).json({ msg: 'paymentMethod must be either "cash" or "card"' });
+    }
+
+    const order = await Order.findById(id);
+    if (!order) {
+      return res.status(404).json({ msg: 'Order not found' });
+    }
+
+    // Only the customer who owns the order can select a payment method
+    if (req.user.id !== order.customerId?.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ msg: 'Only the customer on this order can select a payment method' });
+    }
+
+    if (order.status !== 'completed') {
+      return res.status(400).json({ msg: 'Payment method can only be selected after the order is completed' });
+    }
+
+    if (order.paymentStatus === 'paid') {
+      return res.status(400).json({ msg: 'This order has already been paid — payment method cannot be changed' });
+    }
+
+    // Prevent switching away from card if a PaymentIntent is already in flight
+    // (requires_payment_method / requires_confirmation / requires_action).
+    // Abandoning it would leave a dangling PI in Stripe.
+    if (order.paymentMethod === 'card' && order.stripePaymentIntentId && paymentMethod !== 'card') {
+      try {
+        const existing = await stripe.paymentIntents.retrieve(order.stripePaymentIntentId);
+        if (['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(existing.status)) {
+          return res.status(400).json({
+            msg: 'A card payment is already in progress. Complete or cancel it before switching to cash.',
+          });
+        }
+      } catch (_) {
+        // PI might be deleted in Stripe — allow switching
+      }
+    }
+
+    order.paymentMethod = paymentMethod;
+    order.paymentStatus = 'pending';
+    await order.save();
+
+    // Notify the handyman that the customer has selected a payment method
+    const io = req.app.get('io');
+    await createNotification(
+      io,
+      order.handymanId,
+      'payment_method_selected',
+      'Payment Method Selected',
+      paymentMethod === 'cash'
+        ? 'The customer chose to pay in cash. Please confirm receipt when paid.'
+        : 'The customer chose to pay by card.',
+      { orderId: order._id, paymentMethod }
+    );
+
+    res.status(200).json({ msg: 'Payment method selected', order });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+
 module.exports = {
   createOrder,
   getOrder,
@@ -1017,4 +1124,5 @@ module.exports = {
   markOnTheWay,
   confirmCashPayment,
   createStripePaymentIntent,
+  selectPaymentMethod,
 };

@@ -4,7 +4,10 @@ import { Elements } from '@stripe/react-stripe-js';
 import CheckoutForm from './CheckoutForm';
 import { createPaymentIntent } from '../../services/stripeService';
 
-const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
+const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
+const stripePromise = stripePublishableKey
+  ? loadStripe(stripePublishableKey)
+  : Promise.reject(new Error('Stripe publishable key is not configured.'));
 
 // Mirror of the server-side PRODUCT_CATALOG — only IDs and display info here,
 // prices are always calculated server-side.

@@ -33,6 +33,9 @@
     reviewSchema.index({ handymanId: 1 });
     reviewSchema.index({ customerId: 1 });
     reviewSchema.index({ orderId: 1 });
+    // A customer can leave only one review for a given order. The controller
+    // also checks this, while the unique index closes concurrent-request gaps.
+    reviewSchema.index({ customerId: 1, orderId: 1 }, { unique: true });
 
     const Review = mongoose.model("Review", reviewSchema);
     module.exports = Review;

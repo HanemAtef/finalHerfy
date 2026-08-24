@@ -37,6 +37,18 @@ export const confirmCashPayment = createAsyncThunk(
   }
 );
 
+export const selectPaymentMethod = createAsyncThunk(
+  'orders/selectPaymentMethod',
+  async ({ orderId, paymentMethod }, { rejectWithValue }) => {
+    try {
+      const response = await orderService.selectPaymentMethod(orderId, { paymentMethod });
+      return response.data.order || response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل اختيار طريقة الدفع' });
+    }
+  }
+);
+
 export const getCustomerOrders = createAsyncThunk(
   'orders/getCustomerOrders',
   async (customerId, { rejectWithValue }) => {
@@ -234,7 +246,27 @@ const orderSlice = createSlice({
           o._id === action.payload._id ? action.payload : o
         );
       })
-      .addCase(markOrderOnTheWay.rejected, rejected);
+      .addCase(markOrderOnTheWay.rejected, rejected)
+      // --- selectPaymentMethod ---
+      .addCase(selectPaymentMethod.pending, pending)
+      .addCase(selectPaymentMethod.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.currentOrder = action.payload;
+        state.orders = state.orders.map((o) =>
+          o._id === action.payload._id ? action.payload : o
+        );
+      })
+      .addCase(selectPaymentMethod.rejected, rejected)
+      // --- confirmCashPayment ---
+      .addCase(confirmCashPayment.pending, pending)
+      .addCase(confirmCashPayment.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.currentOrder = action.payload;
+        state.orders = state.orders.map((o) =>
+          o._id === action.payload._id ? action.payload : o
+        );
+      })
+      .addCase(confirmCashPayment.rejected, rejected);
   },
 });
 

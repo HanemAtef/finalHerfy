@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { FaArrowRight, FaMapMarkerAlt, FaBolt, FaCalendarAlt, FaCamera, FaTimes } from 'react-icons/fa';
+import { FaArrowRight, FaMapMarkerAlt, FaBolt, FaCalendarAlt, FaCamera, FaTimes, FaExclamationTriangle } from 'react-icons/fa';
 import { handymanService, uploadService } from '../../services/api';
 import { createOrder } from '../../store/slices/orderSlice';
 import { fetchCurrentLocation } from '../../store/slices/locationSlice';
-import LoadingSpinner from '../../components/common/LoadingSpinner';
 import LocationLabel from '../../components/common/LocationLabel';
 import { formatPrice } from '../../utils/helpers';
 
@@ -21,6 +20,7 @@ export default function CreateOrderPage() {
   }, [dispatch]);
   const { latitude, longitude, status: locationStatus } = useSelector((state) => state.location);
   const location = latitude != null ? { latitude, longitude } : null;
+  const { user } = useSelector((state) => state.auth);
   const { isLoading, error } = useSelector((state) => state.orders);
   const [handyman, setHandyman] = useState(null);
   const [requestType, setRequestType] = useState('instant');
@@ -28,6 +28,7 @@ export default function CreateOrderPage() {
   const [scheduledDate, setScheduledDate] = useState('');
   const [images, setImages] = useState([]);
   const [uploadingImages, setUploadingImages] = useState(false);
+  const [penaltyBlock, setPenaltyBlock] = useState(null);
 
   useEffect(() => {
     handymanService.getById(handymanId).then((res) => setHandyman(res.data)).catch(() => {});
@@ -71,6 +72,17 @@ export default function CreateOrderPage() {
     const result = await dispatch(createOrder(payload));
     if (createOrder.fulfilled.match(result)) {
       navigate(`/customer/tracking/${result.payload._id}`);
+    } else if (createOrder.rejected.match(result)) {
+      const message = result.payload?.msg || '';
+      const hasOutstandingPenalty =
+        result.payload?.penaltyAmount > 0 || /outstanding penalty/i.test(message);
+
+      if (hasOutstandingPenalty) {
+        setPenaltyBlock({
+          ...result.payload,
+          penaltyAmount: result.payload?.penaltyAmount || user?.penaltyAmount,
+        });
+      }
     }
   };
 
@@ -83,8 +95,26 @@ export default function CreateOrderPage() {
         <h1 className="text-xl font-bold text-primary">إنشاء طلب</h1>
       </div>
 
-      {error && (
+      {error && !penaltyBlock && (
         <div className="mb-4 rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">{error}</div>
+      )}
+
+      {penaltyBlock && (
+        <div className="mb-4 rounded-lg bg-secondary/10 p-4">
+          <div className="mb-2 flex items-center gap-2 text-secondary">
+            <FaExclamationTriangle />
+            <span className="font-bold">غرامة مستحقة</span>
+          </div>
+          <p className="mb-3 text-sm text-textDark">
+            لديك غرامة مستحقة بقيمة {penaltyBlock.penaltyAmount} ج.م. يجب تسوية الغرامة قبل إنشاء طلب جديد.
+          </p>
+          <Link
+            to="/customer/profile"
+            className="inline-block rounded-lg bg-secondary px-4 py-2 text-sm font-bold text-white transition-all hover:bg-secondary/90"
+          >
+            تسوية الغرامة
+          </Link>
+        </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-5">

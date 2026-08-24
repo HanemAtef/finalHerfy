@@ -85,10 +85,6 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    isPenalized: {
-      type: Boolean,
-      default: false,
-    },
     // Same bug as penaltyAmount above: adminControllers.toggleUserBan has
     // always set `user.isBanned = ...` and saved it, but without this field
     // declared on the schema Mongoose silently dropped it — banning a user
