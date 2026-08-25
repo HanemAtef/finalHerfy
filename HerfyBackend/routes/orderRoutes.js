@@ -1,17 +1,14 @@
 const express = require("express");
 const router = express.Router();
 
-const {
-  authMiddleware,
-  allowedToMiddleware,
-} = require("../middlewares/authMiddleware");
+const { authMiddleware, allowedToMiddleware } = require("../middlewares/authMiddleware");
 const validate = require("../middlewares/validationMiddleware");
 const createOrderSchema = require("../validations/createOrderSchema");
 const updateOrderSchema = require("../validations/updateOrderSchema");
 const idempotency = require("../middlewares/idempotencyMiddleware");
 
 const {
-   createOrder,
+  createOrder,
   getOrder,
   getCustomerOrders,
   getHandymanOrders,
@@ -22,45 +19,39 @@ const {
   requestReschedule,
   markOnTheWay,
   confirmCashPayment,
+  createStripePaymentIntent,
+  selectPaymentMethod,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
 
-// All routes require authentication
 router.use(authMiddleware);
 
 // ========== Customer only ==========
 router.post("/create", allowedToMiddleware("customer", "admin"), idempotency, validate(createOrderSchema), createOrder);
 
-// ========== Customer, Handyman, or Admin (controller handles) ==========
-// NOTE: keep this AFTER the more specific /customer/:id and /handyman/:id
-// routes below it — otherwise "/:id" would greedily match paths like
-// "/customer/..." is safe here (different segment count), but keeping the
-// specific routes first is still the correct, non-fragile ordering.
-router.get(
-  "/customer/:customerId",
-  allowedToMiddleware("customer", "admin"),
-  getCustomerOrders,
-);
-
-router.get(
-  "/handyman/:handymanId",
-  allowedToMiddleware("handyman", "admin"),
-  getHandymanOrders,
-);
-
+// ========== Queries ==========
+router.get("/customer/:customerId", allowedToMiddleware("customer", "admin"), getCustomerOrders);
+router.get("/handyman/:handymanId", allowedToMiddleware("handyman", "admin"), getHandymanOrders);
 router.get("/handyman/:handymanId/pending", getPendingOrders);
-
 router.get("/:id", getOrder);
 
-// ========== Update order status (controller handles permissions) ==========
-router.patch("/:id/status", validate(updateOrderSchema), updateOrderStatus);
-router.patch("/:id/confirm-price", authMiddleware, confirmPrice);
+// ========== Status transitions ==========
 router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrderStatus);
-router.patch("/:id/confirm-price", idempotency, authMiddleware, confirmPrice);
-// router.patch("/:id/confirm-payment", idempotency, authMiddleware, confirmCashPayment);
-router.patch("/:id/confirm-payment", idempotency, authMiddleware, confirmCashPayment);
-router.patch("/:id/on-the-way", authMiddleware, markOnTheWay);
-router.post("/:id/reschedule-request", authMiddleware, requestReschedule);
-router.post("/:id/reschedule-response", authMiddleware, respondReschedule);
-router.post("/:orderId/report", authMiddleware, createReport);
+router.patch("/:id/confirm-price", idempotency, confirmPrice);
+router.patch("/:id/on-the-way", markOnTheWay);
+
+// ========== Payment: method selection (customer chooses cash or card after completion) ==========
+router.patch("/:id/select-payment-method", idempotency, selectPaymentMethod);
+
+// ========== Payment: cash (handyman confirms receipt) ==========
+router.patch("/:id/confirm-payment", idempotency, confirmCashPayment);
+
+// ========== Payment: card (Stripe PaymentIntent — created only after completion) ==========
+router.post("/:id/create-payment-intent", createStripePaymentIntent);
+
+// ========== Other ==========
+router.post("/:id/reschedule-request", requestReschedule);
+router.post("/:id/reschedule-response", respondReschedule);
+router.post("/:orderId/report", createReport);
+
 module.exports = router;

@@ -11,9 +11,11 @@ import {
   FaCamera,
   FaFlag,
   FaBan,
+  FaMoneyBillWave,
+  FaCheckCircle,
 } from "react-icons/fa";
 
-import { fetchOrderById, updateOrderStatus, markOrderOnTheWay } from '../../store/slices/orderSlice';
+import { fetchOrderById, updateOrderStatus, markOrderOnTheWay, confirmCashPayment } from '../../store/slices/orderSlice';
 import { uploadService, reportService } from '../../services/api';
 import { connectSocket, getSocketInstanceId } from '../../socket/socket';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -96,6 +98,8 @@ export default function HandymanOrderDetailsPage() {
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
+  const [confirmingCash, setConfirmingCash] = useState(false);
+  const [cashConfirmed, setCashConfirmed] = useState(false);
   const [gpsPermissionDenied, setGpsPermissionDenied] = useState(false);
   // initializing → waiting for getCurrentPosition | ready | denied | error
   const [gpsStatus, setGpsStatus] = useState('initializing');
@@ -1041,6 +1045,22 @@ export default function HandymanOrderDetailsPage() {
     });
   };
 
+  // Confirm cash payment received from customer
+  const handleConfirmCash = async () => {
+    setConfirmingCash(true);
+    try {
+      const result = await dispatch(confirmCashPayment(id));
+      if (!result.error) {
+        setCashConfirmed(true);
+        dispatch(fetchOrderById(id));
+      }
+    } catch (err) {
+      console.error('Cash confirmation failed:', err);
+    } finally {
+      setConfirmingCash(false);
+    }
+  };
+
   // On the way — blocked until valid initial GPS fix
   const handleOnTheWay = () => {
     if (!initialGpsReadyRef.current || gpsStatus !== 'ready' || !handymanLocRef.current) {
@@ -1303,8 +1323,71 @@ export default function HandymanOrderDetailsPage() {
             </div>
           )}
 
+          <div className="flex justify-between">
+            <span className="text-textGray">طريقة الدفع</span>
+            <span className={`font-medium ${
+              currentOrder.paymentMethod === 'card' ? 'text-primary' : 'text-textDark'
+            }`}>
+              {currentOrder.paymentMethod === 'card' ? '💳 بطاقة إلكترونية' : '💵 كاش'}
+            </span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-textGray">حالة الدفع</span>
+            <span className={`font-medium ${
+              currentOrder.paymentStatus === 'paid'
+                ? 'text-green-600'
+                : currentOrder.paymentStatus === 'pending'
+                ? 'text-secondary'
+                : 'text-emergency'
+            }`}>
+              {{
+                paid: '✅ تم الدفع',
+                pending: '⏳ في الانتظار',
+                unpaid: '❌ لم يُدفع',
+                failed: '❌ فشل الدفع',
+                refunded: '↩️ مُسترد',
+              }[currentOrder.paymentStatus] || currentOrder.paymentStatus}
+            </span>
+          </div>
+
         </div>
       </div>
+
+      {/* Cash Payment Confirmation — handyman confirms receipt */}
+      {currentOrder.status === 'completed' &&
+        currentOrder.paymentMethod === 'cash' &&
+        currentOrder.paymentStatus !== 'paid' && (
+        <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+          {cashConfirmed || currentOrder.paymentStatus === 'paid' ? (
+            <div className="flex items-center gap-2 text-tertiary">
+              <FaCheckCircle size={18} />
+              <span className="text-lg font-bold">تم تأكيد استلام الدفع النقدي</span>
+            </div>
+          ) : (
+            <>
+              <div className="mb-4 flex items-center gap-2 text-primary">
+                <FaMoneyBillWave size={18} />
+                <span className="text-lg font-bold">الدفع نقدًا</span>
+              </div>
+              <div className="mb-4 flex justify-between text-sm">
+                <span className="text-textGray">المبلغ المستحق</span>
+                <span className="font-bold text-secondary">
+                  {formatPrice(currentOrder.price ?? currentOrder.totalPrice ?? currentOrder.estimatedPrice)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleConfirmCash}
+                disabled={confirmingCash}
+                className="btn-secondary w-full disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {confirmingCash ? 'جاري التأكيد...' : 'تأكيد استلام المبلغ'}
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Location */}
       <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">

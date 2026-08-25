@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { FaWrench, FaBolt, FaChevronLeft, FaArrowRight, FaComments } from 'react-icons/fa';
+import { FaWrench, FaBolt, FaChevronLeft, FaArrowRight, FaComments, FaCreditCard, FaMoneyBillWave, FaExclamationTriangle } from 'react-icons/fa';
 import { getCustomerOrders } from '../../store/slices/orderSlice';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
@@ -47,6 +47,27 @@ export default function CustomerDashboard() {
         </div>
       </div>
 
+
+      {/* Penalty warning banner */}
+      {user?.penaltyAmount > 0 && (
+        <div className="mb-6 flex items-center justify-between rounded-2xl bg-secondary/10 p-4">
+          <div className="flex items-center gap-3">
+            <FaExclamationTriangle className="text-secondary" size={24} />
+            <div>
+              <p className="font-bold text-secondary">غرامة مستحقة</p>
+              <p className="text-sm text-textDark">
+                لديك غرامة بقيمة {user.penaltyAmount} ج.م. سدد الغرامة قبل إنشاء طلب جديد.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/customer/profile"
+            className="shrink-0 rounded-lg bg-secondary px-4 py-2 text-sm font-bold text-white transition-all hover:bg-secondary/90"
+          >
+            تسوية
+          </Link>
+        </div>
+      )}
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div className="card bg-primary text-white">
           <p className="text-sm opacity-80">ملخص النشاط</p>
@@ -71,11 +92,9 @@ export default function CustomerDashboard() {
                   className="flex items-center gap-2 rounded-xl border border-borderGray p-2 transition hover:shadow-sm"
                 >
                   <Link
-                    to={
-                      order.status === 'completed'
-                        ? `/customer/review/${order._id}`
-                        : `/customer/tracking/${order._id}`
-                    }
+                    to={['completed', 'cancelled'].includes(order.status)
+                      ? `/customer/orders/${order._id}`
+                      : `/customer/tracking/${order._id}`}
                     className="flex min-w-0 flex-1 items-center gap-4 p-2"
                   >
                   <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -90,6 +109,41 @@ export default function CustomerDashboard() {
                     <span className={`text-xs px-2 py-0.5 rounded-full ${statusColors[order.status] || ''}`}>
                       {ORDER_STATUS_LABELS[order.status] || order.status}
                     </span>
+                    {order.status === 'completed' && order.paymentStatus !== 'paid' && (
+                      order.paymentMethod === 'cash' && order.paymentStatus === 'pending' ? (
+                        <span className="mt-1 flex items-center gap-1 text-xs font-bold text-amber-600">
+                          <FaMoneyBillWave size={10} /> في انتظار تأكيد الدفع
+                        </span>
+                      ) : order.paymentMethod === 'card' && order.paymentStatus === 'pending' ? (
+                        <button
+                          type="button"
+                          className="mt-1 flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+                          // This control is rendered inside the order's review Link.
+                          // Stopping propagation alone does not stop an anchor's default
+                          // navigation, which previously sent the user to review right
+                          // after this handler navigated to the payment page.
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            navigate(`/customer/payment/${order._id}`);
+                          }}
+                        >
+                          <FaCreditCard size={10} /> متابعة الدفع
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="mt-1 flex items-center gap-1 text-xs font-bold text-blue-600 hover:underline"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            navigate(`/customer/tracking/${order._id}`);
+                          }}
+                        >
+                          <FaCreditCard size={10} /> ادفع الآن
+                        </button>
+                      )
+                    )}
                   </div>
                   <FaChevronLeft className="text-textGray shrink-0" />
                   </Link>

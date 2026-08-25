@@ -22,7 +22,7 @@ const addReview =async(req,res)=>{
     }
 
     //check for if the comment is exist
-   const existingReview = await Review.findOne({ orderId });
+   const existingReview = await Review.findOne({ customerId: req.user.id, orderId });
     if (existingReview) {
         return res.status(400).json({ msg: "You have already reviewed this order" });
     }
@@ -49,8 +49,29 @@ const review = await Review.create({
       review,
     });
   } catch (error) {
+    if (error?.code === 11000) {
+      return res.status(409).json({ msg: "You have already reviewed this order" });
+    }
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
+// Returns the logged-in customer's review for one of their own orders.
+const getOrderReview = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await Order.findById(orderId).select('customerId');
+    if (!order) return res.status(404).json({ msg: 'Order not found' });
+    if (order.customerId.toString() !== req.user.id) {
+      return res.status(403).json({ msg: 'You are not authorized to view this review' });
+    }
+
+    const review = await Review.findOne({ orderId, customerId: req.user.id });
+    res.status(200).json({ review });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
   }
 };
 
@@ -87,4 +108,4 @@ const getCustomersReviews= async(req,res)=>{
 ///////////////////////////////////////////////
 
 
-module.exports = { addReview, getHandymanReviews,getCustomersReviews };
+module.exports = { addReview, getOrderReview, getHandymanReviews, getCustomersReviews };

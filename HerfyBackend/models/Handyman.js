@@ -76,6 +76,17 @@ const handymanSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // Earnings from card-paid orders waiting to be transferred to the handyman
+    pendingEarnings: {
+      type: Number,
+      default: 0,
+    },
+
+    totalPaidOut: {
+      type: Number,
+      default: 0,
+    },
+
     penaltyAmount: {
       type: Number,
       default: 0,

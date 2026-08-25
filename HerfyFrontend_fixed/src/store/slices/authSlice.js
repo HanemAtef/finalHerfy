@@ -186,7 +186,8 @@ const initialState = {
   user: null,
   token: localStorage.getItem('token') || null,
   isAuthenticated: !!localStorage.getItem('token'),
-  isLoading: false,
+  // A persisted token must be verified before ProtectedRoute can redirect.
+  isLoading: !!localStorage.getItem('token'),
   error: null,
   pendingVerificationEmail: null,
   // ===== NEW: Handyman registration status =====

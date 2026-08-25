@@ -13,6 +13,42 @@ export const createOrder = createAsyncThunk(
   }
 );
 
+export const createPaymentIntent = createAsyncThunk(
+  'orders/createPaymentIntent',
+  async (orderId, { rejectWithValue }) => {
+    try {
+      const response = await orderService.createPaymentIntent(orderId);
+      return response.data; // { clientSecret }
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل تهيئة الدفع' });
+    }
+  }
+);
+
+export const confirmCashPayment = createAsyncThunk(
+  'orders/confirmCashPayment',
+  async (orderId, { rejectWithValue }) => {
+    try {
+      const response = await orderService.confirmCashPayment(orderId);
+      return response.data.order || response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل تأكيد الدفع الكاش' });
+    }
+  }
+);
+
+export const selectPaymentMethod = createAsyncThunk(
+  'orders/selectPaymentMethod',
+  async ({ orderId, paymentMethod }, { rejectWithValue }) => {
+    try {
+      const response = await orderService.selectPaymentMethod(orderId, { paymentMethod });
+      return response.data.order || response.data;
+    } catch (error) {
+      return rejectWithValue(error.response?.data || { msg: 'فشل اختيار طريقة الدفع' });
+    }
+  }
+);
+
 export const getCustomerOrders = createAsyncThunk(
   'orders/getCustomerOrders',
   async (customerId, { rejectWithValue }) => {
@@ -146,6 +182,11 @@ const orderSlice = createSlice({
         state.orders.unshift(action.payload);
       })
       .addCase(createOrder.rejected, rejected)
+      .addCase(createPaymentIntent.pending, pending)
+      .addCase(createPaymentIntent.fulfilled, (state) => {
+        state.isLoading = false;
+      })
+      .addCase(createPaymentIntent.rejected, rejected)
       .addCase(getCustomerOrders.pending, pending)
       .addCase(getCustomerOrders.fulfilled, (state, action) => {
         state.isLoading = false;
@@ -205,7 +246,27 @@ const orderSlice = createSlice({
           o._id === action.payload._id ? action.payload : o
         );
       })
-      .addCase(markOrderOnTheWay.rejected, rejected);
+      .addCase(markOrderOnTheWay.rejected, rejected)
+      // --- selectPaymentMethod ---
+      .addCase(selectPaymentMethod.pending, pending)
+      .addCase(selectPaymentMethod.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.currentOrder = action.payload;
+        state.orders = state.orders.map((o) =>
+          o._id === action.payload._id ? action.payload : o
+        );
+      })
+      .addCase(selectPaymentMethod.rejected, rejected)
+      // --- confirmCashPayment ---
+      .addCase(confirmCashPayment.pending, pending)
+      .addCase(confirmCashPayment.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.currentOrder = action.payload;
+        state.orders = state.orders.map((o) =>
+          o._id === action.payload._id ? action.payload : o
+        );
+      })
+      .addCase(confirmCashPayment.rejected, rejected);
   },
 });
 

@@ -34,6 +34,7 @@
     "nodemailer": "^8.0.10",
     "nodemon": "^3.1.14",
     "socket.io": "^4.8.3",
+    "stripe": "^22.5.0",
     "swagger-jsdoc": "^6.3.0",
     "swagger-ui-express": "^5.0.1"
   },

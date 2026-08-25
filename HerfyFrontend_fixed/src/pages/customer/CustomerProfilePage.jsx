@@ -10,9 +10,11 @@ import {
   FaCamera,
   FaArrowRight,
   FaFlag,
+  FaExclamationTriangle,
 } from "react-icons/fa";
-import { logoutUser, updateProfile } from "../../store/slices/authSlice";
+import { logoutUser, updateProfile, getMe } from "../../store/slices/authSlice";
 import { getCustomerOrders } from "../../store/slices/orderSlice";
+import PenaltySettlementModal from "../../components/customer/PenaltySettlementModal";
 import { uploadService } from "../../services/api";
 import {
   formatDate,
@@ -40,6 +42,7 @@ export default function CustomerProfilePage() {
   const [form, setForm] = useState({ name: "", phone: "" });
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
+  const [showPenaltyModal, setShowPenaltyModal] = useState(false);
 
   useEffect(() => {
     if (user?._id) dispatch(getCustomerOrders(user._id));
@@ -60,6 +63,7 @@ export default function CustomerProfilePage() {
       setTimeout(() => setSavedMsg(""), 3000);
     }
   };
+
 
   const handleAvatarChange = async (e) => {
     const file = e.target.files?.[0];
@@ -241,8 +245,30 @@ export default function CustomerProfilePage() {
               {/* قيمة الجزاءات */}
               <div className="flex justify-between border-t border-white/20 pt-3">
                 <span>قيمة الجزاءات</span>
-                <span className="font-bold">{user.penaltyAmount || 0} ج.م</span>
+                <span className={`font-bold ${user.penaltyAmount > 0 ? 'text-secondary' : ''}`}>
+                  {user.penaltyAmount || 0} ج.م
+                </span>
               </div>
+
+              {/* تنبيه الغرامة المستحقة */}
+              {user.penaltyAmount > 0 && (
+                <div className="mt-3 rounded-lg bg-secondary/20 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-secondary">
+                    <FaExclamationTriangle size={14} />
+                    <span className="text-xs font-bold">غرامة مستحقة</span>
+                  </div>
+                  <p className="mb-2 text-xs opacity-90">
+                    لديك غرامة بقيمة {user.penaltyAmount} ج.م. يجب تسويتها قبل إنشاء طلب جديد.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowPenaltyModal(true)}
+                    className="w-full rounded-lg bg-secondary px-3 py-2 text-xs font-bold text-white transition-all hover:bg-secondary/90"
+                  >
+                    تسوية الغرامة
+                  </button>
+                </div>
+              )}
 
               {/* الحالة */}
               <div className="flex items-center justify-between border-t border-white/20 pt-3">
@@ -294,6 +320,15 @@ export default function CustomerProfilePage() {
           )}
         </div>
       </form>
+
+      {/* Penalty Settlement Modal */}
+      {showPenaltyModal && user?.penaltyAmount > 0 && (
+        <PenaltySettlementModal
+          penaltyAmount={user.penaltyAmount}
+          penaltyCount={user.penaltyCount}
+          onClose={() => setShowPenaltyModal(false)}
+        />
+      )}
     </div>
   );
 }

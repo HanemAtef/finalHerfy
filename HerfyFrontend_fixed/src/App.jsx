@@ -20,6 +20,7 @@ import ReviewPage from './pages/customer/ReviewPage';
 import CustomerDashboard from './pages/customer/CustomerDashboard';
 import CustomerProfilePage from './pages/customer/CustomerProfilePage';
 import NotificationsPage from './pages/customer/NotificationsPage';
+import CustomerOrderDetailsPage from './pages/customer/CustomerOrderDetailsPage';
 
 import HandymanDashboard from './pages/handyman/HandymanDashboard';
 import HandymanOrdersPage from './pages/handyman/HandymanOrdersPage';
@@ -40,7 +41,10 @@ import AdminNotificationsPage from './pages/admin/AdminNotificationsPage';
 
 import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
-
+import OrderPaymentPage from './pages/payment/OrderPaymentPage';
+import PaymentSuccess from './pages/payment/PaymentSuccess';
+import PaymentCancel from './pages/payment/PaymentCancel';
+import ChatbotWidget from './components/chatbot/ChatbotWidget';
 
 
 function App() {
@@ -128,9 +132,30 @@ function App() {
             }
           />
 
+          {/* Payment */}
+          <Route
+            path="/customer/payment/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <OrderPaymentPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/customer/orders/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <CustomerOrderDetailsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/payment/success" element={<PaymentSuccess />} />
+          <Route path="/payment/cancel" element={<PaymentCancel />} />
+
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+         <ChatbotWidget />
       </AuthInit>
     </BrowserRouter>
   );

@@ -66,12 +66,21 @@ export const orderService = {
   getPendingOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}/pending`),
   updateStatus: (id, data) => api.patch(`/orders/${id}/status`, data),
   confirmPrice: (id, data) => api.patch(`/orders/${id}/confirm-price`, data),
+  confirmCashPayment: (id) => api.patch(`/orders/${id}/confirm-payment`),
+  selectPaymentMethod: (id, data) => api.patch(`/orders/${id}/select-payment-method`, data),
+  createPaymentIntent: (id) => api.post(`/orders/${id}/create-payment-intent`),
   markOnTheWay: (id) => api.patch(`/orders/${id}/on-the-way`),
   dispute: (id, data) => api.patch(`/orders/${id}/dispute`, data),
 };
 
+export const penaltyService = {
+  createPaymentIntent: () => api.post('/payments/penalty/create-intent'),
+  confirmCashSettlement: (customerId) => api.patch('/payments/penalty/confirm-cash', { customerId }),
+};
+
 export const reviewService = {
   create: (data) => api.post('/reviews/addreview', data),
+  getByOrder: (orderId) => api.get(`/reviews/order/${orderId}`),
   getHandymanReviews: (handymanId) => api.get(`/reviews/handyman/${handymanId}`),
 };
 
@@ -142,4 +151,9 @@ export const adminService = {
   broadcastAnnouncement: (data) => api.post('/admin/broadcast', data),
   getWallets: () => api.get('/admin/wallets'),
   settleWallet: (handymanId) => api.patch(`/admin/wallets/${handymanId}/settle`),
+  payoutHandyman: (handymanId, data) => api.post(`/admin/wallets/${handymanId}/payout`, data),
+  getPayoutHistory: (handymanId) => api.get(`/admin/wallets/${handymanId}/history`),
+};
+export const chatbotService = {
+  ask: (data) => api.post('/chatbot/ask', data),
 };
