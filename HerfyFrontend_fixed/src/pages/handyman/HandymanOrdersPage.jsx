@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { FaArrowRight } from 'react-icons/fa';
+import { FaArrowRight, FaCalendarAlt, FaMoneyBillWave, FaUser } from 'react-icons/fa';
 import { getHandymanOrders } from '../../store/slices/orderSlice';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ErrorBoundary from '../../components/common/ErrorBoundary';
@@ -11,7 +11,9 @@ const FILTERS = [
   { key: 'all', label: 'الكل' },
   { key: 'pending', label: 'قيد الانتظار' },
   { key: 'accepted', label: 'مقبول' },
-  { key: 'price_confirmed', label: 'مؤكد السعر' },
+  { key: 'scheduled', label: 'تم تحديد الموعد' },
+  { key: 'on_the_way', label: 'في الطريق' },
+  { key: 'arrived', label: 'وصل الحرفي' },
   { key: 'in-progress', label: 'قيد التنفيذ' },
   { key: 'completed', label: 'مكتمل' },
   { key: 'cancelled', label: 'ملغي' },
@@ -19,20 +21,30 @@ const FILTERS = [
 ];
 
 const statusColors = {
-  pending: 'bg-secondary/10 text-secondary',
-  accepted: 'bg-primary/10 text-primary',
-  price_confirmed: 'bg-orange-500/10 text-orange-600',
-  'in-progress': 'bg-primary/10 text-primary',
-  completed: 'bg-tertiary/10 text-tertiary',
-  cancelled: 'bg-emergency/10 text-emergency',
-  disputed: 'bg-amber-500/10 text-amber-700',
+  pending: 'bg-amber-50 text-amber-700 border border-amber-200',
+  accepted: 'bg-blue-50 text-blue-700 border border-blue-200',
+  scheduled: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+  price_confirmed: 'bg-indigo-50 text-indigo-700 border border-indigo-200',
+  on_the_way: 'bg-purple-50 text-purple-700 border border-purple-200',
+  'on-the-way': 'bg-purple-50 text-purple-700 border border-purple-200',
+  arrived: 'bg-teal-50 text-teal-700 border border-teal-200',
+  'in-progress': 'bg-primary/10 text-primary border border-primary/20',
+  in_progress: 'bg-primary/10 text-primary border border-primary/20',
+  completed: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+  cancelled: 'bg-red-50 text-red-700 border border-red-200',
+  disputed: 'bg-amber-50 text-amber-700 border border-amber-200',
 };
 
 const statusAccentColors = {
   pending: 'bg-secondary',
   accepted: 'bg-primary',
-  price_confirmed: 'bg-orange-500',
+  scheduled: 'bg-indigo-500',
+  price_confirmed: 'bg-indigo-500',
+  on_the_way: 'bg-purple-500',
+  'on-the-way': 'bg-purple-500',
+  arrived: 'bg-teal-500',
   'in-progress': 'bg-primary',
+  in_progress: 'bg-primary',
   completed: 'bg-tertiary',
   cancelled: 'bg-emergency',
   disputed: 'bg-amber-500',
@@ -54,28 +66,34 @@ function HandymanOrdersContent() {
     filter === 'all' ? orderList : orderList.filter((o) => o && o.status === filter);
 
   return (
-    <div>
-      <h1 className="mb-2 flex items-center gap-3 text-2xl font-bold text-textDark">
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="rounded-full p-2 text-primary hover:bg-primary/5"
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-borderGray text-primary hover:bg-neutral transition-colors shadow-sm"
           aria-label="رجوع"
         >
-          <FaArrowRight size={18} />
+          <FaArrowRight size={13} />
         </button>
-        جميع الطلبات
-      </h1>
-      <p className="mb-6 text-sm text-textGray">إدارة ومتابعة جميع طلباتك</p>
+        <div>
+          <h1 className="text-2xl font-extrabold text-textDark">جميع الطلبات</h1>
+          <p className="text-xs text-textGray mt-0.5">إدارة ومتابعة كافة الطلبات الواردة والسابقة</p>
+        </div>
+      </div>
 
-      <div className="mb-6 flex flex-wrap gap-2 rounded-2xl bg-white p-2 shadow-sm w-fit border border-neutral">
+      {/* Filter Tabs */}
+      <div className="flex flex-wrap gap-2 overflow-x-auto pb-1">
         {FILTERS.map(({ key, label }) => (
           <button
             key={key}
             type="button"
             onClick={() => setFilter(key)}
-            className={`rounded-xl px-5 py-2.5 text-sm font-semibold transition-all duration-300 ${
-              filter === key ? 'bg-primary text-white shadow-md' : 'bg-transparent text-textGray hover:bg-neutral'
+            className={`rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+              filter === key
+                ? 'bg-primary text-white shadow-sm'
+                : 'border border-borderGray bg-white text-textGray hover:border-primary/40 hover:text-textDark'
             }`}
           >
             {label}
@@ -83,56 +101,63 @@ function HandymanOrdersContent() {
         ))}
       </div>
 
+      {/* Orders Grid */}
       {isLoading ? (
-        <LoadingSpinner />
+        <LoadingSpinner text="جاري تحميل الطلبات..." />
       ) : error ? (
-        <div className="rounded-2xl border border-emergency/30 bg-emergency/5 p-6 text-center text-emergency">
+        <div className="card text-center text-emergency py-8">
           <p className="font-bold mb-1">تعذر تحميل الطلبات</p>
-          <p className="text-sm">{error}</p>
+          <p className="text-xs text-textGray">{error}</p>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="rounded-2xl border-2 border-dashed border-borderGray bg-white/50 py-16 text-center text-textGray flex flex-col items-center justify-center">
-          <div className="text-5xl mb-4 opacity-50">📭</div>
-          <p className="font-semibold text-lg">لا توجد طلبات</p>
-          <p className="text-sm">لم يتم العثور على أي طلبات تطابق الفلتر المحدد.</p>
+        <div className="empty-state card py-16">
+          <div className="empty-state-icon">📭</div>
+          <p className="empty-state-title">لا توجد طلبات تطابق الفلتر</p>
+          <p className="empty-state-desc">اختر تصنيفاً آخر لعرض الطلبات السابقة أو الحالية</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((order) => {
             if (!order || !order._id) return null;
-            const statusStyle = statusColors[order.status] || 'bg-gray-100 text-gray-700';
-            const accentStyle = statusAccentColors[order.status] || 'bg-gray-400';
+            const statusStyle = statusColors[order.status] || 'bg-neutral text-textDark';
+            const accentStyle = statusAccentColors[order.status] || 'bg-borderGray';
             const statusLabel = ORDER_STATUS_LABELS[order.status] || order.status || 'غير محدد';
 
             return (
               <Link
                 key={order._id}
                 to={`/handyman/orders/${order._id}`}
-                className="rounded-2xl bg-white p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-neutral flex flex-col justify-between gap-4 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg relative overflow-hidden"
+                className="group relative flex flex-col justify-between rounded-2xl bg-white p-5 border border-neutral shadow-[var(--shadow-card)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--shadow-elevated)] overflow-hidden"
               >
                 {/* Top Accent Line */}
-                <div className={`absolute top-0 left-0 w-full h-1 ${accentStyle}`} />
+                <div className={`absolute top-0 left-0 right-0 h-1 ${accentStyle}`} />
                 
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="font-bold text-textDark text-lg">{order.profession || 'خدمة عامة'}</p>
-                    <p className="text-sm font-medium text-textGray mt-0.5">{order.customerId?.name || 'عميل'}</p>
+                <div>
+                  <div className="flex justify-between items-start gap-2 mb-2">
+                    <h2 className="font-bold text-textDark text-base truncate group-hover:text-primary transition-colors">
+                      {order.profession || 'خدمة صيانة'}
+                    </h2>
+                    <span className={`badge-status text-[11px] shrink-0 font-bold ${statusStyle}`}>
+                      {statusLabel}
+                    </span>
                   </div>
-                  <span className={`text-xs font-bold px-3 py-1 rounded-full ${statusStyle}`}>
-                    {statusLabel}
-                  </span>
+
+                  <p className="text-xs font-semibold text-textGray flex items-center gap-1.5">
+                    <FaUser size={10} className="text-primary/70" />
+                    {order.customerId?.name || 'عميل'}
+                  </p>
                 </div>
                 
-                <div className="flex justify-between items-end mt-2 pt-4 border-t border-gray-100">
+                <div className="flex justify-between items-end mt-4 pt-3.5 border-t border-neutral text-xs">
                   <div>
-                    <p className="text-xs text-textGray mb-1">تاريخ الطلب</p>
-                    <p className="text-sm font-semibold">{formatDate(order.createdAt)}</p>
+                    <span className="text-textGray text-[11px] block">تاريخ الطلب</span>
+                    <span className="font-semibold text-textDark mt-0.5 block">{formatDate(order.createdAt)}</span>
                   </div>
                   <div className="text-left">
-                    <p className="text-xs text-textGray mb-1">التكلفة</p>
-                    <p className="font-bold text-secondary text-lg">
+                    <span className="text-textGray text-[11px] block">السعر</span>
+                    <span className="font-extrabold text-sm text-primary mt-0.5 block">
                       {formatPrice(order.price ?? order.totalPrice ?? order.estimatedPrice)}
-                    </p>
+                    </span>
                   </div>
                 </div>
               </Link>
@@ -151,4 +176,3 @@ export default function HandymanOrdersPage() {
     </ErrorBoundary>
   );
 }
-

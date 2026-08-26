@@ -1,8 +1,7 @@
 import { useState } from 'react';
+import { FaTimes, FaExclamationTriangle } from 'react-icons/fa';
 
-// Small confirmation modal that collects a required text reason before
-// calling onConfirm — used everywhere an admin action needs to leave an
-// audit trail (reject / suspend / ban / delete).
+// Modal that collects a required text reason before calling onConfirm
 export default function ReasonModal({ title, confirmLabel = 'تأكيد', danger = false, onConfirm, onClose }) {
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -19,30 +18,54 @@ export default function ReasonModal({ title, confirmLabel = 'تأكيد', danger
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
-        <h3 className="mb-3 text-lg font-bold text-textDark">{title}</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 backdrop-blur-[2px]">
+      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-neutral animate-slide-up">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2.5">
+            {danger && (
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emergency/10 text-emergency">
+                <FaExclamationTriangle size={15} />
+              </div>
+            )}
+            <h3 className="text-base font-bold text-textDark">{title}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-1.5 text-textGray hover:bg-neutral hover:text-textDark transition-all"
+          >
+            <FaTimes size={16} />
+          </button>
+        </div>
+
         <textarea
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           rows={3}
-          placeholder="اكتب السبب..."
-          className="input-field w-full resize-none"
+          placeholder="اكتب السبب بوضوح هنا..."
+          className="input-field w-full resize-none text-sm mb-4"
           autoFocus
         />
-        <div className="mt-4 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="btn-outline text-sm">
+
+        <div className="flex items-center justify-end gap-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-outline text-sm py-2 px-4"
+          >
             إلغاء
           </button>
           <button
             type="button"
             disabled={!reason.trim() || submitting}
             onClick={handleConfirm}
-            className={`rounded-lg px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-              danger ? 'bg-emergency' : 'bg-primary'
+            className={`rounded-xl px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
+              danger
+                ? 'bg-emergency hover:bg-emergency/90 shadow-emergency/20'
+                : 'bg-primary hover:bg-primary/90 shadow-primary/20'
             }`}
           >
-            {submitting ? '...' : confirmLabel}
+            {submitting ? 'جارِ التنفيذ...' : confirmLabel}
           </button>
         </div>
       </div>

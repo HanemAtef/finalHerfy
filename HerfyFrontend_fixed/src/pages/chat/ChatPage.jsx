@@ -6,7 +6,6 @@ import {
   FaPhone,
   FaEllipsisV,
   FaPaperPlane,
-  FaPlus,
   FaImage,
   FaMicrophone,
   FaStop,
@@ -28,8 +27,6 @@ const QUICK_REPLIES = [
   'شكراً لك',
 ];
 
-// Mirrors the backend's chat business rule (messageController.js /
-// chatSocket.js) — chat only stays open while the order is still active.
 const CHAT_OPEN_STATUSES = ['pending', 'accepted', 'price_confirmed', 'in-progress', 'arrived'];
 
 export default function ChatPage() {
@@ -64,18 +61,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!orderId || !token) return;
 
-    // connectSocket() is idempotent (returns the existing socket if already
-    // connected). We call it here too — instead of relying solely on
-    // AuthInit's useSocket() — because React fires child effects before
-    // parent effects. On a hard reload of /chat/:orderId this effect used to
-    // run before AuthInit's useSocket() had called connectSocket(), so
-    // getSocket() returned null, the room was never joined, and
-    // 'receiveMessage' was never listened for — real-time chat silently
-    // never worked.
     const socket = connectSocket(token);
 
-    // Join immediately and again after every reconnect. A Socket.IO room is
-    // tied to one connection, so it is lost if the browser briefly reconnects.
     const joinRoom = () => {
       socket.emit('joinRoom', orderId, (result) => {
         if (!result?.ok) console.error('Unable to join chat room:', result?.error);
@@ -151,7 +138,7 @@ export default function ChatPage() {
       const res = await uploadService.uploadImage(file);
       sendMedia('image', res.data.url);
     } catch {
-      // upload failed — surfaced to the user via the disabled state resetting
+      // upload failed
     } finally {
       setUploading(false);
     }
@@ -177,7 +164,7 @@ export default function ChatPage() {
           const res = await uploadService.uploadAudio(file);
           sendMedia('audio', res.data.url);
         } catch {
-          // ignore — user can just try recording again
+          // ignore
         } finally {
           setUploading(false);
         }
@@ -186,7 +173,7 @@ export default function ChatPage() {
       mediaRecorderRef.current = recorder;
       setRecording(true);
     } catch {
-      // microphone permission denied or unavailable — silently no-op
+      // mic error
     }
   };
 
@@ -214,8 +201,6 @@ export default function ChatPage() {
   const isOwn = (msg) =>
     msg.sender?._id === user?._id || msg.sender === user?._id;
 
-  // Show the real other party (customer <-> handyman) instead of a
-  // hardcoded name, based on which side of the order the current user is on.
   const otherParty =
     user?._id === currentOrder?.customerId?._id
       ? currentOrder?.handymanId
@@ -223,89 +208,109 @@ export default function ChatPage() {
   const otherName = otherParty?.name || 'المحادثة';
 
   return (
-    <div className="flex h-screen flex-col bg-neutral">
-      <header className="flex items-center justify-between border-b border-borderGray bg-white px-4 py-3">
+    <div className="flex h-screen flex-col bg-[#F3F5F7]">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-neutral bg-white px-5 py-3.5 shadow-xs">
         <div className="flex items-center gap-3">
-          <button type="button" onClick={() => navigate(-1)} className="text-primary">
-            <FaArrowRight size={18} />
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-neutral text-textGray hover:text-primary transition-colors"
+          >
+            <FaArrowRight size={13} />
           </button>
           <div className="relative">
             <img
               src={otherParty?.profileImage || getDefaultAvatar(otherName)}
               alt=""
-              className="h-10 w-10 rounded-full object-cover"
+              className="h-10 w-10 rounded-2xl object-cover border border-neutral shadow-2xs"
             />
             {isChatOpen && (
-              <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-tertiary" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-tertiary" />
             )}
           </div>
           <div>
-            <p className="font-bold text-primary">{otherName}</p>
-            <p className="text-xs text-tertiary">
-              {!isChatOpen ? 'المحادثة مغلقة' : typing ? 'يكتب...' : 'متصل الآن'}
+            <p className="font-bold text-textDark text-sm">{otherName}</p>
+            <p className="text-[11px] text-textGray">
+              {!isChatOpen ? 'المحادثة مغلقة' : typing ? 'يكتب الآن...' : 'متصل'}
             </p>
           </div>
         </div>
-        <div className="relative flex gap-3 text-primary">
+
+        <div className="relative flex items-center gap-2">
           {otherParty?.phone && (
-            <a href={`tel:${otherParty.phone}`}><FaPhone /></a>
+            <a
+              href={`tel:${otherParty.phone}`}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary hover:bg-primary hover:text-white transition-all shadow-2xs"
+              title="اتصال هاتفي"
+            >
+              <FaPhone size={13} />
+            </a>
           )}
-          <button type="button" onClick={() => setMenuOpen((v) => !v)}>
-            <FaEllipsisV />
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-neutral text-textGray hover:text-textDark transition-colors"
+          >
+            <FaEllipsisV size={13} />
           </button>
+
           {menuOpen && (
-            <div className="absolute left-0 top-8 z-10 w-48 rounded-xl border border-borderGray bg-white py-2 text-sm shadow-lg">
+            <div className="absolute left-0 top-11 z-20 w-48 rounded-2xl border border-neutral bg-white p-1 text-xs shadow-xl animate-slide-up">
               <button
                 type="button"
                 onClick={() => { setReportOpen(true); setMenuOpen(false); }}
-                className="flex w-full items-center gap-2 px-4 py-2 text-right text-emergency hover:bg-neutral"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-right text-emergency hover:bg-red-50 font-bold"
               >
-                <FaFlag size={12} /> الإبلاغ عن مشكلة
+                <FaFlag size={11} /> الإبلاغ عن مشكلة
               </button>
               <button
                 type="button"
                 onClick={handleDeleteConversation}
-                className="flex w-full items-center gap-2 px-4 py-2 text-right text-textGray hover:bg-neutral"
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-right text-textGray hover:bg-neutral font-medium"
               >
-                <FaTrash size={12} /> حذف المحادثة
+                <FaTrash size={11} /> حذف المحادثة
               </button>
             </div>
           )}
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        <div className="text-center">
-          <span className="rounded-full bg-white px-4 py-1 text-xs text-textGray shadow-sm">اليوم</span>
+      {/* Messages Scroll Area */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="text-center my-2">
+          <span className="rounded-full bg-white px-3.5 py-1 text-[11px] font-semibold text-textGray shadow-2xs border border-neutral">
+            محادثة مؤمنة بواسطة حرفي
+          </span>
         </div>
 
         {messages.map((msg) => {
           const own = isOwn(msg);
           return (
             <div key={msg._id} className={`group flex ${own ? 'justify-start' : 'justify-end'}`}>
-              <div className={`max-w-[75%] ${own ? 'items-start' : 'items-end'} flex flex-col`}>
-                <div className="flex items-center gap-1">
+              <div className={`max-w-[78%] ${own ? 'items-start' : 'items-end'} flex flex-col`}>
+                <div className="flex items-center gap-1.5">
                   {own && !msg.deleted && (
                     <button
                       type="button"
                       onClick={() => handleDeleteMessage(msg)}
-                      className="opacity-0 transition-opacity group-hover:opacity-100 text-textGray hover:text-emergency"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 text-textGray hover:text-emergency p-1"
                       title="حذف الرسالة"
                     >
-                      <FaTrash size={11} />
+                      <FaTrash size={10} />
                     </button>
                   )}
                   <div
-                    className={`rounded-2xl px-4 py-3 text-sm ${
+                    className={`rounded-2xl px-4 py-2.5 text-xs shadow-2xs leading-relaxed ${
                       own
-                        ? 'rounded-tr-sm bg-primary text-white'
-                        : 'rounded-tl-sm border border-borderGray bg-white text-textDark'
+                        ? 'rounded-br-none bg-primary text-white font-medium'
+                        : 'rounded-bl-none border border-neutral bg-white text-textDark font-medium'
                     }`}
                   >
                     {msg.deleted ? (
                       <span className="italic opacity-70">تم حذف هذه الرسالة</span>
                     ) : msg.type === 'image' ? (
-                      <img src={msg.mediaUrl} alt="" className="max-h-60 rounded-lg object-cover" />
+                      <img src={msg.mediaUrl} alt="" className="max-h-60 rounded-xl object-cover" />
                     ) : msg.type === 'audio' ? (
                       <audio controls src={msg.mediaUrl} className="max-w-[220px]" />
                     ) : (
@@ -313,25 +318,26 @@ export default function ChatPage() {
                     )}
                   </div>
                 </div>
-                <span className="mt-1 text-xs text-textGray">{formatTime(msg.createdAt || new Date())}</span>
+                <span className="mt-1 text-[10px] text-textGray px-1 font-mono">{formatTime(msg.createdAt || new Date())}</span>
               </div>
             </div>
           );
         })}
 
-        <div className="flex justify-center">
-          <div className="flex items-center gap-2 rounded-xl border border-tertiary/30 bg-tertiary/5 px-4 py-2 text-xs text-tertiary">
-            <FaShieldAlt />
-            هذا الحرفي موثق من Harfey. معلوماتك ومعاملاتك محمية وآمنة.
+        <div className="flex justify-center pt-2">
+          <div className="flex items-center gap-2 rounded-2xl border border-tertiary/20 bg-emerald-50 px-4 py-2 text-[11px] font-bold text-emerald-800 shadow-2xs">
+            <FaShieldAlt className="text-tertiary" />
+            <span>معلوماتك ومعاملاتك المالية محمية بالكامل عبر منصة حرفي</span>
           </div>
         </div>
 
         <div ref={bottomRef} />
       </div>
 
-      <div className="border-t border-borderGray bg-white px-4 py-2">
+      {/* Chat Input Bar */}
+      <div className="border-t border-neutral bg-white p-3">
         {!isChatOpen ? (
-          <div className="flex items-center justify-center gap-2 py-4 text-sm text-textGray">
+          <div className="flex items-center justify-center gap-2 py-2 text-xs font-bold text-textGray">
             <FaLock /> المحادثة مغلقة لأن هذا الطلب {
               currentOrder?.status === 'completed' ? 'مكتمل'
                 : currentOrder?.status === 'disputed' ? 'قيد مراجعة بلاغ'
@@ -339,19 +345,21 @@ export default function ChatPage() {
             }
           </div>
         ) : (
-          <>
-            <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
+          <div className="space-y-2">
+            {/* Quick replies */}
+            <div className="flex gap-1.5 overflow-x-auto pb-1">
               {QUICK_REPLIES.map((reply) => (
                 <button
                   key={reply}
                   type="button"
                   onClick={() => sendMessage(reply)}
-                  className="shrink-0 rounded-full border border-borderGray px-3 py-1 text-xs text-primary hover:bg-neutral"
+                  className="shrink-0 rounded-xl border border-borderGray bg-neutral/40 px-3 py-1 text-[11px] font-semibold text-textDark hover:bg-primary/10 hover:text-primary transition-colors"
                 >
                   {reply}
                 </button>
               ))}
             </div>
+
             <form onSubmit={handleSubmit} className="flex items-center gap-2">
               <input
                 ref={fileInputRef}
@@ -364,19 +372,21 @@ export default function ChatPage() {
                 type="button"
                 disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
-                className="rounded-full p-2 text-textGray disabled:opacity-50"
+                className="flex h-10 w-10 items-center justify-center rounded-xl border border-borderGray text-textGray hover:border-primary hover:text-primary transition-colors disabled:opacity-50"
                 title="إرسال صورة"
               >
-                <FaImage />
+                <FaImage size={15} />
               </button>
               <button
                 type="button"
                 onClick={toggleRecording}
                 disabled={uploading}
-                className={`rounded-full p-2 disabled:opacity-50 ${recording ? 'text-emergency' : 'text-textGray'}`}
-                title={recording ? 'إيقاف التسجيل' : 'رسالة صوتية'}
+                className={`flex h-10 w-10 items-center justify-center rounded-xl border border-borderGray transition-colors disabled:opacity-50 ${
+                  recording ? 'border-emergency bg-emergency/10 text-emergency animate-pulse' : 'text-textGray hover:border-primary hover:text-primary'
+                }`}
+                title={recording ? 'إيقاف التسجيل' : 'تسجيل صوتي'}
               >
-                {recording ? <FaStop /> : <FaMicrophone />}
+                {recording ? <FaStop size={13} /> : <FaMicrophone size={15} />}
               </button>
               <input
                 value={text}
@@ -384,17 +394,18 @@ export default function ChatPage() {
                   setText(e.target.value);
                   getSocket()?.emit('typing', { orderId });
                 }}
-                placeholder="اكتب رسالتك..."
-                className="input-field flex-1 rounded-full py-2"
+                placeholder="اكتب رسالتك هنا..."
+                className="input-field flex-1 text-xs py-2.5"
               />
               <button
                 type="submit"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-secondary text-white"
+                disabled={!text.trim() || uploading}
+                className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary text-white shadow-sm hover:bg-secondary/90 transition-all disabled:opacity-50 active:scale-95"
               >
-                <FaPaperPlane size={14} />
+                <FaPaperPlane size={13} />
               </button>
             </form>
-          </>
+          </div>
         )}
       </div>
 

@@ -13,22 +13,26 @@ import {
   FaBan,
   FaMoneyBillWave,
   FaCheckCircle,
+  FaExclamationTriangle,
+  FaClock,
 } from "react-icons/fa";
 
 import { fetchOrderById, updateOrderStatus, markOrderOnTheWay, confirmCashPayment } from '../../store/slices/orderSlice';
-import { uploadService, reportService } from '../../services/api';
+import { uploadService, reportService, orderService } from '../../services/api';
 import { connectSocket, getSocketInstanceId } from '../../socket/socket';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import LocationLabel from '../../components/common/LocationLabel';
 import ReasonModal from '../../components/common/ReasonModal';
 import AlertMessage from '../../components/common/AlertMessage';
+import PenaltySettlementModal from '../../components/customer/PenaltySettlementModal';
+import RescheduleSection from '../../components/common/RescheduleSection';
 import TrackingMap from '../../components/Map/TrackingMap';
 // NOTE: useCurrentLocation is intentionally NOT imported here.
 // Live tracking must use ONLY navigator.geolocation.watchPosition
 // inside the live tracking useEffect. Using the hook would risk
 // seeding the map with a cached/Wi-Fi/login location before the
 // first real GPS fix.
-import { formatDate, formatPrice, ORDER_STATUS_LABELS } from '../../utils/helpers';
+import { formatDate, formatDateTime, formatPrice, ORDER_STATUS_LABELS, haversineDistance } from '../../utils/helpers';
 import {
   isRouteConsistentWithPositions,
   isRouteGeometryValid,
@@ -94,15 +98,22 @@ export default function HandymanOrderDetailsPage() {
   const [displayedEta, setDisplayedEta] = useState(null);
   const [handymanArrived, setHandymanArrived] = useState(false);
   const [price, setPrice] = useState("");
+  const [expectedDuration, setExpectedDuration] = useState("");
+  const [acceptError, setAcceptError] = useState(null);
   const [completionImage, setCompletionImage] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
+  const [cancelReasonOpen, setCancelReasonOpen] = useState(false);
+  const [showPenaltyModal, setShowPenaltyModal] = useState(false);
   const [confirmingCash, setConfirmingCash] = useState(false);
   const [cashConfirmed, setCashConfirmed] = useState(false);
   const [gpsPermissionDenied, setGpsPermissionDenied] = useState(false);
   // initializing → waiting for getCurrentPosition | ready | denied | error
   const [gpsStatus, setGpsStatus] = useState('initializing');
+
+  const [departureWindow, setDepartureWindow] = useState(null);
+  const [loadingDeparture, setLoadingDeparture] = useState(false);
 
   const lastTrustedEtaRef = useRef(null);
   const etaTimestampRef = useRef(null);
@@ -143,6 +154,38 @@ export default function HandymanOrderDetailsPage() {
   useEffect(() => {
     dispatch(fetchOrderById(id));
   }, [dispatch, id]);
+
+  // Query Departure Window for scheduled/price_confirmed order
+  useEffect(() => {
+    if (!currentOrder || !['price_confirmed', 'scheduled'].includes(currentOrder.status) || currentOrder.isHandymanOnTheWay) {
+      return;
+    }
+
+    let isSubscribed = true;
+    const fetchWindow = () => {
+      const coords = handymanLocRef.current;
+      const params = (coords && coords.latitude && coords.longitude)
+        ? { latitude: coords.latitude, longitude: coords.longitude }
+        : {};
+
+      orderService.getDepartureWindow(id, params)
+        .then((res) => {
+          if (isSubscribed && res.data?.data) {
+            setDepartureWindow(res.data.data);
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not fetch departure window:', err.message);
+        });
+    };
+
+    fetchWindow();
+    const interval = setInterval(fetchWindow, 30000); // refresh every 30s
+    return () => {
+      isSubscribed = false;
+      clearInterval(interval);
+    };
+  }, [id, currentOrder?.status, currentOrder?.scheduledDate, currentOrder?.scheduledTime, currentOrder?.isHandymanOnTheWay]);
 
   // Set price
   useEffect(() => {
@@ -994,15 +1037,60 @@ export default function HandymanOrderDetailsPage() {
     return () => clearInterval(timer);
   }, [lastTrustedEta, etaTimestamp, handymanArrived]);
 
+  // Geofencing: calculate distance to service location
+  const distanceToCustomerMeters = useMemo(() => {
+    if (!handymanLoc || !currentOrder) return null;
+    const hLat = Number(handymanLoc.latitude ?? handymanLoc.lat);
+    const hLng = Number(handymanLoc.longitude ?? handymanLoc.lng);
+    if (!Number.isFinite(hLat) || !Number.isFinite(hLng) || hLat === 0 || hLng === 0) return null;
+
+    const serviceCoords = currentOrder.orderLocation?.coordinates || currentOrder.customerLocation?.coordinates;
+    if (!Array.isArray(serviceCoords) || serviceCoords.length !== 2) return null;
+    const cLng = Number(serviceCoords[0]);
+    const cLat = Number(serviceCoords[1]);
+    if (!Number.isFinite(cLat) || !Number.isFinite(cLng) || (cLng === 0 && cLat === 0)) return null;
+
+    const distKm = haversineDistance(hLat, hLng, cLat, cLng);
+    if (!Number.isFinite(distKm)) return null;
+    return Math.round(distKm * 1000);
+  }, [handymanLoc, currentOrder]);
+
+  const ALLOWED_GEOFENCE_RADIUS = 50;
+  const isWithinGeofence = typeof distanceToCustomerMeters === 'number' && Number.isFinite(distanceToCustomerMeters) && distanceToCustomerMeters <= ALLOWED_GEOFENCE_RADIUS;
+
+  // Handle start execution with GPS coords
+  const handleStartWork = async () => {
+    const hLat = Number(handymanLoc?.latitude ?? handymanLoc?.lat);
+    const hLng = Number(handymanLoc?.longitude ?? handymanLoc?.lng);
+
+    if (!Number.isFinite(hLat) || !Number.isFinite(hLng) || hLat === 0 || hLng === 0) {
+      setAcceptError("تعذر تحديد موقع الحرفي حالياً. يرجى التأكد من تفعيل الموقع والمحاولة مرة أخرى.");
+      return;
+    }
+    setAcceptError(null);
+    try {
+      await orderService.startOrder(id, {
+        latitude: hLat,
+        longitude: hLng,
+        coordinates: [hLng, hLat],
+      });
+      dispatch(fetchOrderById(id));
+    } catch (err) {
+      setAcceptError(err.response?.data?.msg || "تعذر بدء التنفيذ. تأكد من وصولك لموقع العميل أولاً.");
+    }
+  };
 
   // Update order status
   const handleStatus = (status, extra = {}) => {
+    setAcceptError(null);
     dispatch(updateOrderStatus({ id, status, ...extra })).then((result) => {
       if (
         status === "accepted" &&
         updateOrderStatus.fulfilled.match(result)
       ) {
         navigate("/handyman/dashboard");
+      } else if (updateOrderStatus.rejected.match(result)) {
+        setAcceptError(result.payload?.msg || "تعذر تحديث حالة الطلب");
       }
     });
   };
@@ -1010,12 +1098,19 @@ export default function HandymanOrderDetailsPage() {
   // Accept order
   const handleAccept = () => {
     const numericPrice = Number(price);
+    const numericDuration = Number(expectedDuration);
 
     if (!numericPrice || numericPrice <= 0) return;
+    if (!numericDuration || numericDuration <= 0) return;
 
     handleStatus("accepted", {
       price: numericPrice,
+      expectedDuration: numericDuration,
     });
+  };
+
+  const handleCancel = (reason) => {
+    handleStatus("cancelled", { cancellationReason: reason, reason });
   };
 
   // Upload completion image
@@ -1206,15 +1301,19 @@ export default function HandymanOrderDetailsPage() {
 
       {/* Cancelled */}
       {currentOrder.status === "cancelled" && (
-        <div className="card mb-4 flex items-center gap-3 border-r-4 border-emergency bg-emergency/5">
-          <FaBan
-            className="shrink-0 text-emergency"
-            size={20}
-          />
-
-          <p className="text-sm text-textDark">
-            تم إلغاء هذا الطلب. المحادثة مغلقة الآن.
-          </p>
+        <div className="card mb-4 border-r-4 border-emergency bg-emergency/5">
+          <div className="flex items-center gap-3">
+            <FaBan className="shrink-0 text-emergency" size={20} />
+            <p className="text-sm font-bold text-emergency">
+              تم إلغاء هذا الطلب. المحادثة مغلقة الآن.
+            </p>
+          </div>
+          {(currentOrder.cancellationReason || currentOrder.reason) && (
+            <div className="mt-3 border-t border-emergency/20 pt-2 text-sm text-textDark">
+              <span className="font-semibold text-emergency">سبب الإلغاء: </span>
+              <span>{currentOrder.cancellationReason || currentOrder.reason}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -1291,13 +1390,13 @@ export default function HandymanOrderDetailsPage() {
 
           <div className="flex justify-between">
             <span className="text-textGray">
-              نوع الطلب
+              المدة المتوقعة
             </span>
 
-            <span>
-              {currentOrder.requestType === "scheduled"
-                ? "مجدول"
-                : "فوري"}
+            <span className="font-semibold text-textDark">
+              {currentOrder.expectedDuration
+                ? `${currentOrder.expectedDuration} ${currentOrder.expectedDuration === 1 ? 'ساعة' : currentOrder.expectedDuration === 2 ? 'ساعتان' : 'ساعات'}`
+                : '—'}
             </span>
           </div>
 
@@ -1533,45 +1632,95 @@ export default function HandymanOrderDetailsPage() {
       {/* Pending */}
       {currentOrder.status === "pending" && (
         <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
+          {acceptError && (
+            <AlertMessage
+              type="error"
+              message={acceptError}
+              className="mb-4"
+            />
+          )}
 
-          <label className="mb-2 block text-sm font-bold text-textDark">
-            حدد السعر الذي تعرضه على العميل (ج.م)
-          </label>
+          {user?.penaltyAmount > 0 && (
+            <div className="mb-5 rounded-2xl bg-emergency/10 p-5 border border-emergency/20">
+              <div className="flex items-center gap-3">
+                <FaExclamationTriangle className="text-emergency shrink-0" size={24} />
+                <div>
+                  <p className="font-bold text-emergency">لديك غرامة مستحقة بقيمة {user.penaltyAmount} ج.م</p>
+                  <p className="text-xs text-textDark mt-1">
+                    لا يمكنك قبول طلبات جديدة حتى يتم تسوية الغرامة المستحقة على حسابك بسبب إلغاء الطلبات.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPenaltyModal(true)}
+                className="mt-3 w-full rounded-xl bg-emergency px-4 py-2.5 text-sm font-bold text-white shadow hover:bg-emergency/90 transition-all"
+              >
+                تسوية الغرامة الآن
+              </button>
+            </div>
+          )}
 
-          <input
-            type="number"
-            min="1"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className="input-field mb-4"
-            placeholder="مثال: 250"
-          />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 mb-4">
+            <div>
+              <label className="mb-2 block text-sm font-bold text-textDark">
+                حدد السعر الذي تعرضه على العميل (ج.م)
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                disabled={user?.penaltyAmount > 0}
+                className="input-field disabled:opacity-50 disabled:bg-neutral"
+                placeholder="مثال: 250"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-bold text-textDark">
+                المدة المتوقعة للعمل (بالساعات)
+              </label>
+              <input
+                type="number"
+                min="0.5"
+                max="24"
+                step="0.5"
+                value={expectedDuration}
+                onChange={(e) => setExpectedDuration(e.target.value)}
+                disabled={user?.penaltyAmount > 0}
+                className="input-field disabled:opacity-50 disabled:bg-neutral"
+                placeholder="مثال: 2"
+              />
+            </div>
+          </div>
 
           <div className="flex flex-wrap gap-3">
-
             <button
               type="button"
               onClick={handleAccept}
               disabled={
                 !price ||
                 Number(price) <= 0 ||
-                isLoading
+                !expectedDuration ||
+                Number(expectedDuration) <= 0 ||
+                isLoading ||
+                (user?.penaltyAmount > 0)
               }
               className="btn-primary flex flex-1 items-center justify-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <FaCheck />
-              قبول وإرسال السعر
+              قبول وإرسال السعر والمدة
             </button>
 
             <button
               type="button"
-              onClick={() => handleStatus("cancelled")}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency"
+              onClick={() => setCancelReasonOpen(true)}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency hover:bg-emergency/5 transition-all"
             >
               <FaTimes />
-              رفض
+              رفض الطلب
             </button>
-
           </div>
         </div>
       )}
@@ -1582,19 +1731,56 @@ export default function HandymanOrderDetailsPage() {
           بانتظار موافقة العميل على السعر (
           {formatPrice(currentOrder.price)}
           )
+          <button
+            type="button"
+            onClick={() => setCancelReasonOpen(true)}
+            className="mx-auto mt-4 flex items-center gap-2 rounded-xl border-2 border-emergency px-5 py-2 font-bold text-emergency"
+          >
+            <FaTimes /> إلغاء الطلب
+          </button>
         </div>
       )}
 
-      {/* Price Confirmed */}
-      {currentOrder.status === "price_confirmed" && (
+      {/* Price Confirmed / Scheduled */}
+      {["price_confirmed", "scheduled"].includes(currentOrder.status) && (
         <div className="mb-6 rounded-3xl border border-neutral bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
 
-          {currentOrder.requestType === "scheduled" && (
-            <p className="mb-3 text-sm text-textGray">
-              موعد الطلب:{" "}
-              {formatDate(currentOrder.scheduledDate)}
-            </p>
-          )}
+          {/* Schedule status banner */}
+          <div className="mb-4 rounded-2xl bg-neutral/40 p-4 border border-neutral">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-textGray">موعد تنفيذ الخدمة:</p>
+                <p className="text-sm font-extrabold text-textDark mt-0.5">
+                  {formatDateTime(currentOrder.scheduledDate, currentOrder.scheduledTime)}
+                </p>
+              </div>
+              <span className="badge-status bg-primary/10 text-primary font-bold text-xs">
+                {currentOrder.status === 'scheduled' ? 'طلب مجدول' : 'تم تأكيد الموعد'}
+              </span>
+            </div>
+
+            {departureWindow && !currentOrder.isHandymanOnTheWay && (
+              <div className="mt-3 pt-3 border-t border-neutral/70 text-xs">
+                {departureWindow.canDepart ? (
+                  <div className="flex items-center gap-2 text-emerald-700 font-bold">
+                    <FaCheckCircle className="shrink-0 text-emerald-600" size={14} />
+                    <span>حان وقت التوجه للعميل (مدة الطريق التقديرية: {departureWindow.travelTimeMinutes} دقيقة)</span>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 text-amber-800">
+                    <FaClock className="shrink-0 text-amber-600 mt-0.5" size={14} />
+                    <div>
+                      <p className="font-bold">موعد الخدمة لم يحن بعد.</p>
+                      <p className="text-[11px] text-amber-700/90 mt-0.5">
+                        تبدأ نافذة التوجه قبل الموعد بـ {departureWindow.totalLeadMinutes} دقيقة (مدة الطريق: {departureWindow.travelTimeMinutes} دقيقة + هامش أمان {departureWindow.safetyMarginMinutes} دقيقة).
+                        المتبقي لبدء التحرك: {departureWindow.timeUntilDepartureMinutes >= 60 ? `${Math.floor(departureWindow.timeUntilDepartureMinutes / 60)} ساعة و ${departureWindow.timeUntilDepartureMinutes % 60} دقيقة` : `${departureWindow.timeUntilDepartureMinutes} دقيقة`}.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {!currentOrder.isHandymanOnTheWay ? (
             <>
@@ -1626,31 +1812,79 @@ export default function HandymanOrderDetailsPage() {
                   إعادة محاولة تحديد الموقع
                 </button>
               )}
-              <button
-                type="button"
-                onClick={handleOnTheWay}
-                disabled={gpsStatus !== 'ready' || !handymanLoc}
-                className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {gpsStatus === 'initializing' ? 'جاري تحديد موقعك لتفعيل زر أنا قادم...' : 'أنا قادم للعميل'}
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="mb-3 text-center text-sm text-textGray">
-                تم تفعيل تتبع موقعك للعميل
-              </p>
+
+              {/* Start Trip button only enabled when departure window is reached */}
+              {departureWindow && !departureWindow.canDepart ? (
+                <div className="rounded-xl bg-neutral/60 py-3 px-4 text-center text-xs text-textGray mb-3 border border-neutral font-medium">
+                  🔒 زر بدء التوجه سيتاح تلقائياً عند حلول وقت التحرك للموعد
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleOnTheWay}
+                  disabled={gpsStatus !== 'ready' || !handymanLoc}
+                  className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {gpsStatus === 'initializing' ? 'جاري تحديد موقعك لتفعيل زر بدء التوجه...' : 'بدء التوجه للعميل (أنا في الطريق)'}
+                </button>
+              )}
 
               <button
                 type="button"
-                onClick={() =>
-                  handleStatus("in-progress")
-                }
-                className="btn-primary w-full"
+                onClick={() => setCancelReasonOpen(true)}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency hover:bg-emergency/5"
+              >
+                <FaTimes /> إلغاء الطلب
+              </button>
+            </>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-center text-xs font-semibold text-textGray">
+                تتبع موقعك نشط للعميل
+              </p>
+
+              {distanceToCustomerMeters != null ? (
+                isWithinGeofence ? (
+                  <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800 flex items-center gap-2">
+                    <FaCheckCircle className="text-emerald-600 shrink-0" size={16} />
+                    <div>
+                      <p className="font-extrabold text-xs">أنت بالقرب من موقع العميل ({distanceToCustomerMeters} متر).</p>
+                      <p className="text-[11px] text-emerald-700 mt-0.5">يمكنك الآن بدء تنفيذ الخدمة.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 space-y-1">
+                    <div className="flex items-center gap-2 font-bold text-amber-900">
+                      <FaExclamationTriangle className="text-amber-600 shrink-0" size={14} />
+                      <span>لا يمكنك بدء التنفيذ الآن. يجب أن تصل إلى موقع العميل أولاً.</span>
+                    </div>
+                    <p className="text-[11px] text-amber-700 font-mono">
+                      المسافة الحالية: <strong>{distanceToCustomerMeters} متر</strong> (النطاق المسموح: {ALLOWED_GEOFENCE_RADIUS} متر).
+                    </p>
+                  </div>
+                )
+              ) : (
+                <div className="rounded-xl bg-neutral/50 p-2.5 text-center text-xs text-textGray">
+                  جاري حساب المسافة إلى موقع العميل عبر GPS...
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleStartWork}
+                disabled={!isWithinGeofence || isLoading}
+                className="btn-primary w-full disabled:cursor-not-allowed disabled:opacity-50"
               >
                 بدء التنفيذ
               </button>
-            </>
+              <button
+                type="button"
+                onClick={() => setCancelReasonOpen(true)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-emergency py-2.5 text-xs font-bold text-emergency hover:bg-emergency/5"
+              >
+                <FaTimes /> إلغاء الطلب
+              </button>
+            </div>
           )}
 
         </div>
@@ -1700,6 +1934,13 @@ export default function HandymanOrderDetailsPage() {
           >
             إتمام الطلب
           </button>
+          <button
+            type="button"
+            onClick={() => setCancelReasonOpen(true)}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency"
+          >
+            <FaTimes /> إلغاء الطلب
+          </button>
 
         </div>
       )}
@@ -1747,9 +1988,25 @@ export default function HandymanOrderDetailsPage() {
           >
             إتمام الطلب
           </button>
+          <button
+            type="button"
+            onClick={() => setCancelReasonOpen(true)}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-2 border-emergency py-3 font-bold text-emergency"
+          >
+            <FaTimes /> إلغاء الطلب
+          </button>
 
         </div>
       )}
+
+      {/* Reschedule Section */}
+      <div className="mb-6">
+        <RescheduleSection
+          order={currentOrder}
+          currentUserRole="handyman"
+          onOrderUpdated={() => dispatch(fetchOrderById(id))}
+        />
+      </div>
 
       {/* Contact */}
       <div className="flex flex-wrap gap-3">
@@ -1808,6 +2065,25 @@ export default function HandymanOrderDetailsPage() {
           danger
           onConfirm={handleReport}
           onClose={() => setReportOpen(false)}
+        />
+      )}
+
+      {cancelReasonOpen && (
+        <ReasonModal
+          title="سبب إلغاء الطلب"
+          confirmLabel="تأكيد الإلغاء"
+          danger
+          onConfirm={handleCancel}
+          onClose={() => setCancelReasonOpen(false)}
+        />
+      )}
+
+      {/* Penalty Settlement Modal */}
+      {showPenaltyModal && (user?.penaltyAmount > 0) && (
+        <PenaltySettlementModal
+          penaltyAmount={user.penaltyAmount}
+          penaltyCount={user.penaltyCount || 1}
+          onClose={() => setShowPenaltyModal(false)}
         />
       )}
 

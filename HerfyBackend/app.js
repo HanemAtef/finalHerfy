@@ -104,6 +104,7 @@ app.get("/", (req, res) => {
 
 app.use("/api/users", require("./routes/authRoutes"));
 app.use("/api/handymen", require("./routes/handymanRoutes"));
+app.use("/api/handyman", require("./routes/handymanRoutes"));
 app.use("/api/orders", require("./routes/orderRoutes"));
 app.use("/api/reviews", require("./routes/reviewRoutes"));
 app.use("/api/customer", require("./routes/customerRoutes"));
@@ -115,6 +116,7 @@ app.use("/api/reference", require("./routes/referenceRoutes"));
 app.use("/api/reports", require("./routes/reportRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/subscriptions", require("./routes/subscriptionRoutes"));
+app.use("/api/support", require("./routes/supportRoutes"));
 
 // Seed the ServiceType collection from the old hardcoded profession list
 // on first boot, so existing handyman records keep working before an
@@ -144,9 +146,9 @@ app.use((err, req, res, next) => {
   }
 });
 
-const port = process.env.PORT || 5000;
+const port = process.env.PORT || 8000;
 
-if (process.env.NODE_ENV !== "test") {
+if (require.main === module) {
   server.listen(port, () => {
     console.log(`Server is running on port ${port}`);
   });
@@ -154,13 +156,7 @@ if (process.env.NODE_ENV !== "test") {
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (err) => {
-  console.error("UNHANDLED REJECTION!  Shutting down...");
-  console.error(err.name, err.message);
-  if (process.env.NODE_ENV !== "test") {
-    server.close(() => {
-      process.exit(1);
-    });
-  }
+  console.error("UNHANDLED REJECTION:", err?.name, err?.message || err);
 });
 
 module.exports = server;

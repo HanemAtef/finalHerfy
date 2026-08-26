@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "jest --runInBand --detectOpenHandles --forceExit",
-    "start": "nodemon app.js"
+    "start": "node --use-system-ca app.js",
+    "dev": "nodemon --exec \"node --use-system-ca app.js\""
   },
   "keywords": [],
   "author": "",

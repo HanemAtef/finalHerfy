@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { authMiddleware } = require("../middlewares/authMiddleware");
 const upload = require("../middlewares/uploadMiddleware");
-const { uploadImage, uploadImages, uploadAudioFile } = require("../controllers/uploadController");
+const { uploadImage, uploadImages, uploadAudioFile, uploadDocument } = require("../controllers/uploadController");
 
 // A small wrapper so multer errors (wrong type / too big) return a clean JSON
 // response instead of crashing the request.
@@ -20,5 +20,6 @@ router.use(authMiddleware);
 router.post("/image", handleUpload(upload.single("image")), uploadImage);
 router.post("/images", handleUpload(upload.array("images", 10)), uploadImages);
 router.post("/audio", handleUpload(upload.uploadAudio.single("audio")), uploadAudioFile);
+router.post("/document", handleUpload(upload.uploadDoc.single("document")), uploadDocument);
 
 module.exports = router;

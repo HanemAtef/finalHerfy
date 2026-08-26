@@ -21,7 +21,6 @@ export default function VerifyEmailPage() {
 
   useEffect(() => {
     dispatch(clearError());
-    // No email means the user landed here directly — send them back to register.
     if (!emailFromState) {
       navigate('/register');
     }
@@ -61,67 +60,81 @@ export default function VerifyEmailPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-cover bg-center" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.6), rgba(255,255,255,0.6)), url(https://images.unsplash.com/photo-1504148455328-c376907d081c?w=1600)' }}>
-      <div className="w-full max-w-md rounded-3xl bg-white/90 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-md border border-white/20 transition-all duration-300">
+    <div
+      className="flex min-h-screen items-center justify-center bg-cover bg-center px-4 py-8"
+      style={{
+        backgroundImage:
+          'linear-gradient(rgba(243,245,247,0.85), rgba(243,245,247,0.92)), url(https://images.unsplash.com/photo-1504148455328-c376907d081c?w=1600)',
+      }}
+    >
+      <div className="auth-card max-w-md w-full">
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="mb-4 flex items-center gap-2 text-sm text-textGray hover:text-primary"
+          className="mb-4 inline-flex items-center gap-1.5 text-xs font-semibold text-textGray hover:text-primary transition-colors"
         >
-          <FaArrowRight /> رجوع
+          <FaArrowRight size={11} /> رجوع
         </button>
-        <div className="mb-6 flex justify-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-primary text-white">
+
+        <div className="mb-4 flex justify-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary shadow-sm">
             <FaEnvelopeOpenText size={24} />
           </div>
         </div>
 
-        <h1 className="mb-2 text-center text-2xl font-bold text-textDark">تحقق من بريدك الإلكتروني</h1>
-        <p className="mb-6 text-center text-sm text-textGray">
-          أرسلنا رمز تحقق مكوّن من 6 أرقام إلى <span className="font-semibold">{email}</span>
+        <h1 className="mb-1 text-center text-2xl font-extrabold text-textDark">تحقق من بريدك</h1>
+        <p className="mb-6 text-center text-xs text-textGray leading-relaxed max-w-xs mx-auto">
+          أرسلنا رمز تحقق مكوّن من 6 أرقام إلى <span className="font-bold text-textDark block mt-0.5">{email}</span>
         </p>
 
         <AlertMessage type="error" message={error} className="mb-4" />
         <AlertMessage type="success" message={resendMsg} className="mb-4" />
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
-            type="text"
-            inputMode="numeric"
-            maxLength={6}
-            value={otp}
-            onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
-            placeholder="------"
-            className="w-full rounded-lg border border-gray-300 p-3 text-center text-2xl tracking-[0.5em] focus:border-primary focus:outline-none"
-          />
+          <div>
+            <label className="mb-1.5 block text-center text-xs font-bold text-textGray">أدخل رمز التحقق (OTP)</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+              placeholder="------"
+              className="w-full rounded-2xl border border-borderGray bg-white p-3.5 text-center text-2xl font-bold tracking-[0.5em] focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/10 transition-all text-primary"
+              autoFocus
+            />
+          </div>
 
           <button
             type="submit"
             disabled={isLoading || otp.length !== 6}
-            className="btn-primary flex w-full items-center justify-center rounded-lg py-3 font-semibold transition hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-50"
+            className="btn-primary flex w-full items-center justify-center py-3 text-sm font-bold shadow-md shadow-primary/20 transition hover:-translate-y-0.5 disabled:opacity-50"
           >
             {isLoading ? (
-              <span className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              <>
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                جاري التحقق...
+              </>
             ) : (
-              'تأكيد الحساب'
+              'تأكيد وتفعيل الحساب'
             )}
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm text-textGray">
+        <div className="mt-6 text-center text-xs text-textGray">
           لم يصلك الرمز؟{' '}
           <button
             type="button"
             onClick={handleResend}
             disabled={resendCooldown > 0}
-            className="font-semibold text-primary disabled:cursor-not-allowed disabled:text-gray-400"
+            className="font-bold text-secondary disabled:cursor-not-allowed disabled:text-textGray/50 transition-colors"
           >
             {resendCooldown > 0 ? `إعادة الإرسال بعد ${resendCooldown} ثانية` : 'إعادة إرسال الرمز'}
           </button>
         </div>
 
-        <div className="mt-4 text-center text-sm text-textGray">
-          <Link to="/login" className="text-primary hover:underline">
+        <div className="mt-4 text-center text-xs">
+          <Link to="/login" className="font-semibold text-primary hover:underline">
             العودة لتسجيل الدخول
           </Link>
         </div>

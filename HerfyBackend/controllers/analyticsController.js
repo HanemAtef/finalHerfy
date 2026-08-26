@@ -141,7 +141,7 @@ const exportCSV = async (req, res) => {
       rows = users.map((u) => ({
         id: u._id, name: u.name, email: u.email, phone: u.phone,
         role: u.role, isBanned: u.isBanned, isVerified: u.isVerified,
-        city: u.city, createdAt: u.createdAt,
+        createdAt: u.createdAt,
       }));
     } else if (type === "orders") {
       const orders = await Order.find()

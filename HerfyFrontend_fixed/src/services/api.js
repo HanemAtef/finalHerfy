@@ -28,6 +28,7 @@ export const authService = {
   refreshToken: (data) => api.post(AUTH.REFRESH, data),
 };
 
+
 export const uploadService = {
   uploadImage: (file) => {
     const formData = new FormData();
@@ -44,6 +45,12 @@ export const uploadService = {
     formData.append('audio', file);
     return api.post('/uploads/audio', formData);
   },
+  uploadDocument: (file, type = 'national_id') => {
+    const formData = new FormData();
+    formData.append('document', file);
+    formData.append('type', type);
+    return api.post('/uploads/document', formData);
+  },
 };
 
 export const handymanService = {
@@ -55,7 +62,9 @@ export const handymanService = {
   getStatus: () => api.get('/handymen/status'),
   getHandymanStatus: () => api.get('/handymen/status'),
   getHandymanProfile: () => api.get('/handymen/profile'),
-    getMonthlyStats: () => api.get('/handymen/monthly-stats'),
+  getMonthlyStats: () => api.get('/handymen/monthly-stats'),
+  getMyFines: () => api.get('/handymen/fines/my-fines'),
+  requestFineSettlement: (data = {}) => api.post('/handymen/fines/request-settlement', data),
 };
 
 export const orderService = {
@@ -65,17 +74,21 @@ export const orderService = {
   getHandymanOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}`),
   getPendingOrders: (handymanId) => api.get(`/orders/handyman/${handymanId}/pending`),
   updateStatus: (id, data) => api.patch(`/orders/${id}/status`, data),
+  startOrder: (id, data) => api.post(`/orders/${id}/start`, data),
   confirmPrice: (id, data) => api.patch(`/orders/${id}/confirm-price`, data),
   confirmCashPayment: (id) => api.patch(`/orders/${id}/confirm-payment`),
   selectPaymentMethod: (id, data) => api.patch(`/orders/${id}/select-payment-method`, data),
-  createPaymentIntent: (id) => api.post(`/orders/${id}/create-payment-intent`),
-  markOnTheWay: (id) => api.patch(`/orders/${id}/on-the-way`),
+  markOnTheWay: (id, data = {}) => api.patch(`/orders/${id}/on-the-way`, data),
+  updateLiveLocation: (id, data = {}) => api.put(`/orders/${id}/live-location`, data),
+  getDepartureWindow: (id, params = {}) => api.get(`/orders/${id}/departure-window`, { params }),
+  requestReschedule: (id, data) => api.post(`/orders/${id}/reschedule-request`, data),
+  respondReschedule: (id, data) => api.post(`/orders/${id}/reschedule-response`, data),
   dispute: (id, data) => api.patch(`/orders/${id}/dispute`, data),
 };
 
 export const penaltyService = {
   createPaymentIntent: () => api.post('/payments/penalty/create-intent'),
-  confirmCashSettlement: (customerId) => api.patch('/payments/penalty/confirm-cash', { customerId }),
+  verifyPaymentIntent: (paymentIntentId) => api.post('/payments/penalty/verify-intent', { paymentIntentId }),
 };
 
 export const reviewService = {
@@ -104,8 +117,16 @@ export const reportService = {
 };
 
 export const referenceService = {
-  getCities: () => api.get('/reference/cities'),
   getServiceTypes: () => api.get('/reference/service-types'),
+};
+
+export const supportService = {
+  getMyConversation: () => api.get('/support/my-conversation'),
+  sendUserMessage: (data) => api.post('/support/my-conversation/messages', data),
+  getAdminConversations: (params) => api.get('/support/admin/conversations', { params }),
+  getAdminConversationMessages: (id) => api.get(`/support/admin/conversations/${id}/messages`),
+  sendAdminMessage: (id, data) => api.post(`/support/admin/conversations/${id}/messages`, data),
+  getAdminUnreadCount: () => api.get('/support/admin/unread-count'),
 };
 
 export const adminService = {
@@ -113,20 +134,17 @@ export const adminService = {
   getDashboardChart: () => api.get('/admin/dashboard/chart'),
   getUsers: () => api.get('/admin/users'),
   getUserDetail: (userId) => api.get(`/admin/users/${userId}`),
+  getUserDocuments: (userId) => api.get(`/admin/users/${userId}/documents`),
   banUser: (userId, data) => api.patch(`/admin/users/${userId}/ban`, data),
   banUserWithReason: (userId, data) => api.patch(`/admin/users/${userId}/ban-with-reason`, data),
   liftSuspension: (handymanId) => api.patch(`/admin/handymen/${handymanId}/suspend`, { suspended: false }),
   deleteUser: (userId, reason) => api.delete(`/admin/users/${userId}`, { data: { reason } }),
-  getPendingVerification: () => api.get('/admin/pending-registrations'),
+  getPendingVerification: (params) => api.get('/admin/pending-registrations', { params }),
   autoVerify: (handymanId) => api.patch(`/admin/handymen/${handymanId}/auto-verify`),
-  approveHandyman: (handymanId, data) => api.patch(`/admin/approve-registration/${handymanId}`, data),
-  rejectHandyman: (handymanId, data) => api.patch(`/admin/reject-registration/${handymanId}`, data),
+  approveHandyman: (handymanId, data = {}) => api.patch(`/admin/approve-registration/${handymanId}`, data),
+  rejectHandyman: (handymanId, data = {}) => api.patch(`/admin/reject-registration/${handymanId}`, data),
   suspendHandyman: (handymanId, data) => api.patch(`/admin/handymen/${handymanId}/suspend`, data),
   getAuditLogs: (params) => api.get('/admin/audit-logs', { params }),
-  getCities: () => api.get('/admin/cities?all=true'),
-  createCity: (data) => api.post('/admin/cities', data),
-  updateCity: (id, data) => api.patch(`/admin/cities/${id}`, data),
-  deleteCity: (id) => api.delete(`/admin/cities/${id}`),
   getServiceTypes: () => api.get('/admin/service-types?all=true'),
   createServiceType: (data) => api.post('/admin/service-types', data),
   updateServiceType: (id, data) => api.patch(`/admin/service-types/${id}`, data),
@@ -153,4 +171,8 @@ export const adminService = {
   settleWallet: (handymanId) => api.patch(`/admin/wallets/${handymanId}/settle`),
   payoutHandyman: (handymanId, data) => api.post(`/admin/wallets/${handymanId}/payout`, data),
   getPayoutHistory: (handymanId) => api.get(`/admin/wallets/${handymanId}/history`),
+  getSettlementRequests: () => api.get('/admin/settlement-requests'),
+  confirmSettlementRequest: (id) => api.patch(`/admin/settlement-requests/${id}/confirm`),
+  rejectSettlementRequest: (id, data = {}) => api.patch(`/admin/settlement-requests/${id}/reject`, data),
+  getFinePayments: () => api.get('/admin/fine-payments'),
 };

@@ -25,7 +25,8 @@ import { reportService } from '../../services/api';
 import TrackingMap from '../../components/Map/TrackingMap';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import ReasonModal from '../../components/common/ReasonModal';
-import { formatPrice, formatDate, getDefaultAvatar } from '../../utils/helpers';
+import RescheduleSection from '../../components/common/RescheduleSection';
+import { formatPrice, formatDate, formatDateTime, getDefaultAvatar } from '../../utils/helpers';
 import useCurrentLocation from '../../hooks/useCurrentLocation';
 import {
   isRouteConsistentWithPositions,
@@ -93,6 +94,7 @@ export default function TrackingPage() {
   const [routeDestination, setRouteDestination] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportSent, setReportSent] = useState(false);
+  const [cancelReasonOpen, setCancelReasonOpen] = useState(false);
   const [distance, setDistance] = useState(null);       // km from TomTom
   const [trafficDelay, setTrafficDelay] = useState(null);
   const [handymanArrived, setHandymanArrived] = useState(false);
@@ -168,9 +170,8 @@ export default function TrackingPage() {
     orderId &&
     token &&
     currentOrder &&
-    currentOrder.status === 'price_confirmed' &&
-    currentOrder.isHandymanOnTheWay === true &&
-    currentOrder.trackingStatus === 'active' &&
+    ['price_confirmed', 'on_the_way', 'scheduled', 'in-progress'].includes(currentOrder.status) &&
+    (currentOrder.isHandymanOnTheWay === true || currentOrder.trackingStatus === 'active') &&
     !handymanArrivedRef.current
       ? `${orderId}:tracking`
       : null;
@@ -678,12 +679,16 @@ export default function TrackingPage() {
 
   // ─── Handlers ─────────────────────────────────────────────────────────────
   const handleCancel = () => {
-    if (!window.confirm('هل أنت متأكد من إلغاء الطلب؟')) return;
-    dispatch(updateOrderStatus({ id: orderId, status: 'cancelled' }));
+    setCancelReasonOpen(true);
   };
 
   const handleConfirmPrice = (confirmed) => {
-    dispatch(confirmOrderPrice({ id: orderId, confirmed }));
+    if (!confirmed) {
+      const reason = window.prompt('يرجى كتابة سبب رفض السعر (اختياري):', '') || 'رفض العميل السعر المقترح';
+      dispatch(confirmOrderPrice({ id: orderId, confirmed: false, cancellationReason: reason, reason }));
+    } else {
+      dispatch(confirmOrderPrice({ id: orderId, confirmed: true }));
+    }
   };
 
   const handleReport = async (reason) => {
@@ -775,6 +780,12 @@ export default function TrackingPage() {
                 {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
               </span>
             </div>
+            {(currentOrder.cancellationReason || currentOrder.reason) && (
+              <div className="mt-2 border-t border-emergency/20 pt-2 text-sm text-right">
+                <span className="font-semibold text-emergency">سبب الإلغاء: </span>
+                <span className="text-textDark">{currentOrder.cancellationReason || currentOrder.reason}</span>
+              </div>
+            )}
           </div>
           <button type="button" onClick={() => navigate('/customer/home')} className="btn-primary">
             العودة للرئيسية
@@ -948,20 +959,30 @@ export default function TrackingPage() {
   if (status === 'accepted') {
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
-        <Header title="تأكيد السعر" />
-        <div className="flex flex-1 flex-col items-center justify-center gap-5 p-6 text-center">
+        <Header title="تأكيد السعر والمدة" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-5 p-6 text-center overflow-y-auto">
           <div className="flex items-center gap-3">
             <img src={getDefaultAvatar(handyman.name)} alt="" className="h-14 w-14 rounded-full object-cover" />
             <div className="text-right">
               <p className="font-bold text-textDark">{handyman.name || 'الحرفي'}</p>
-              <p className="text-xs text-textGray">قبل طلبك وحدد السعر</p>
+              <p className="text-xs text-textGray">راجع طلبك وحدد السعر والمدة المقدرة</p>
             </div>
           </div>
-          <div className="card w-full max-w-sm">
-            <div className="flex items-center justify-center gap-2 text-2xl font-bold text-primary">
-              <FaMoneyBillWave /> {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+          <div className="card w-full max-w-sm space-y-3">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+              <span className="text-xs text-textGray">السعر المقترح</span>
+              <span className="text-xl font-bold text-primary flex items-center gap-1">
+                <FaMoneyBillWave /> {formatPrice(currentOrder.price ?? currentOrder.estimatedPrice)}
+              </span>
             </div>
-            <p className="mt-1 text-xs text-textGray">السعر المقترح لإتمام الخدمة</p>
+            {currentOrder.expectedDuration && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-textGray">المدة المتوقعة للعمل</span>
+                <span className="font-semibold text-textDark text-sm">
+                  {currentOrder.expectedDuration} {currentOrder.expectedDuration === 1 ? 'ساعة' : currentOrder.expectedDuration === 2 ? 'ساعتان' : 'ساعات'}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex w-full max-w-sm gap-3">
             <button
@@ -976,7 +997,7 @@ export default function TrackingPage() {
               type="button"
               onClick={() => handleConfirmPrice(false)}
               disabled={isLoading}
-              className="flex-1 rounded-xl border-2 border-emergency py-3 font-bold text-emergency"
+              className="flex-1 rounded-xl border-2 border-emergency py-3 font-bold text-emergency hover:bg-emergency/5"
             >
               رفض وإلغاء
             </button>
@@ -986,35 +1007,43 @@ export default function TrackingPage() {
     );
   }
 
-  // ===== price_confirmed & handyman hasn't started heading over yet =====
-  if (status === 'price_confirmed' && !currentOrder.isHandymanOnTheWay) {
-    // Payment is now only available AFTER completion — no pre-payment here
+  // ===== price_confirmed / scheduled & handyman hasn't started heading over yet =====
+  if (['price_confirmed', 'scheduled'].includes(status) && !currentOrder.isHandymanOnTheWay) {
+    const isScheduledOrder = currentOrder.requestType === 'scheduled' || !!currentOrder.scheduledDate;
     return (
       <div className="fixed inset-0 flex flex-col bg-white">
-        <Header title={currentOrder.requestType === 'scheduled' ? 'موعد الطلب' : 'جاري التجهيز'} />
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
+        <Header title={isScheduledOrder ? 'موعد الطلب' : 'جاري التجهيز'} />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center overflow-y-auto">
           <FaClock className="text-primary" size={48} />
-          {currentOrder.requestType === 'scheduled' ? (
+          {isScheduledOrder ? (
             <>
               <h2 className="text-xl font-bold text-textDark">لديك موعد محجوز</h2>
               <p className="max-w-xs text-sm text-textGray">
-                سيتحرك {handyman.name || 'الحرفي'} إليك عند اقتراب الموعد وستظهر لك خريطة التتبع تلقائياً.
+                طلبك مجدول بنجاح. سيبدأ {handyman.name || 'الحرفي'} التوجه إليك عند حلول وقت التحرك للموعد وستظهر خريطة التتبع المباشر فور انطلاقه.
               </p>
               <div className="card w-full max-w-sm">
-                <p className="text-sm text-textGray">موعد الطلب</p>
-                <p className="font-bold text-textDark">{formatDate(currentOrder.scheduledDate)}</p>
+                <p className="text-xs text-textGray">موعد تنفيذ الخدمة</p>
+                <p className="text-base font-extrabold text-textDark mt-1">
+                  {formatDateTime(currentOrder.scheduledDate, currentOrder.scheduledTime)}
+                </p>
               </div>
             </>
           ) : (
             <>
-              <h2 className="text-xl font-bold text-textDark">تم تأكيد السعر</h2>
+              <h2 className="text-xl font-bold text-textDark">تم تأكيد الطلب</h2>
               <p className="max-w-xs text-sm text-textGray">
                 {handyman.name || 'الحرفي'} بيستعد للتحرك ناحيتك، هتظهر خريطة التتبع فور تحركه.
               </p>
             </>
           )}
 
-          {/* No payment UI at price_confirmed — payment happens after completion */}
+          <div className="w-full max-w-sm text-right">
+            <RescheduleSection
+              order={currentOrder}
+              currentUserRole="customer"
+              onOrderUpdated={() => dispatch(fetchOrderById(orderId))}
+            />
+          </div>
 
           <div className="flex w-full max-w-sm gap-4">
             <a
@@ -1341,6 +1370,26 @@ export default function TrackingPage() {
           danger
           onConfirm={handleReport}
           onClose={() => setReportOpen(false)}
+        />
+      )}
+
+      {cancelReasonOpen && (
+        <ReasonModal
+          title="سبب إلغاء الطلب"
+          placeholder="يرجى توضيح سبب الإلغاء..."
+          confirmLabel="تأكيد الإلغاء"
+          danger
+          onConfirm={(reason) => {
+            const finalReason = reason?.trim() || 'تم الإلغاء بواسطة العميل';
+            dispatch(updateOrderStatus({
+              id: orderId,
+              status: 'cancelled',
+              cancellationReason: finalReason,
+              reason: finalReason,
+            }));
+            setCancelReasonOpen(false);
+          }}
+          onClose={() => setCancelReasonOpen(false)}
         />
       )}
     </div>

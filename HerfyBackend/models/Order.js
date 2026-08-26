@@ -29,13 +29,25 @@ const orderSchema = new mongoose.Schema(
       },
     ],
 
-    requestType: {
-      type: String,
-      enum: ["instant", "scheduled"],
-      default: "instant",
+    scheduledDate: {
+      type: Date,
+      required: true,
+      default: Date.now,
     },
 
-    scheduledDate: {
+    scheduledTime: {
+      type: String,
+      default: "",
+    },
+
+    expectedDuration: {
+      type: Number,
+      default: null,
+      min: 0.5,
+      max: 24,
+    },
+
+    expectedEndTime: {
       type: Date,
     },
 
@@ -63,8 +75,12 @@ const orderSchema = new mongoose.Schema(
       enum: [
         "pending",
         "accepted",
+        "scheduled",
         "price_confirmed",
+        "on_the_way",
+        "on-the-way",
         "in-progress",
+        "in_progress",
         "arrived",
         "completed",
         "cancelled",
@@ -94,6 +110,37 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Immutable service location snapshot at order creation time
+    orderLocation: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+        default: [0, 0],
+      },
+      latitude: {
+        type: Number,
+      },
+      longitude: {
+        type: Number,
+      },
+      address: {
+        type: String,
+        default: "",
+      },
+      city: {
+        type: String,
+        default: "",
+      },
+      area: {
+        type: String,
+        default: "",
+      },
+    },
+
     customerLocation: {
       type: {
         type: String,
@@ -103,6 +150,10 @@ const orderSchema = new mongoose.Schema(
       coordinates: {
         type: [Number],
         required: true,
+      },
+      address: {
+        type: String,
+        default: "",
       },
     },
 
@@ -121,6 +172,82 @@ const orderSchema = new mongoose.Schema(
         type: Date,
         default: Date.now,
       },
+    },
+
+    liveTracking: {
+      isActive: {
+        type: Boolean,
+        default: false,
+      },
+      latitude: {
+        type: Number,
+        default: null,
+      },
+      longitude: {
+        type: Number,
+        default: null,
+      },
+      heading: {
+        type: Number,
+        default: null,
+      },
+      speed: {
+        type: Number,
+        default: null,
+      },
+      accuracy: {
+        type: Number,
+        default: null,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+      timestamp: {
+        type: Date,
+        default: null,
+      },
+    },
+
+    tripStartedAt: {
+      type: Date,
+      default: null,
+    },
+
+    tripStartLatitude: {
+      type: Number,
+      default: null,
+    },
+
+    tripStartLongitude: {
+      type: Number,
+      default: null,
+    },
+
+    arrivedAt: {
+      type: Date,
+      default: null,
+    },
+
+    arrivalLatitude: {
+      type: Number,
+      default: null,
+    },
+
+    arrivalLongitude: {
+      type: Number,
+      default: null,
+    },
+
+    arrivalDistance: {
+      type: Number, // In meters from orderLocation
+      default: null,
+    },
+
+    arrivedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
     },
 
     eta: {
@@ -163,14 +290,64 @@ const orderSchema = new mongoose.Schema(
         type: String,
         enum: ["customer", "handyman"],
       },
+      oldDate: Date,
+      oldTime: String,
       newDate: Date,
+      newTime: String,
+      reason: String,
+      newDuration: Number,
       status: {
         type: String,
-        enum: ["pending", "accepted", "rejected"],
-        default: "pending",
+        enum: ["pending", "accepted", "approved", "rejected", "cancelled", "expired"],
       },
-      createdAt: Date,
+      createdAt: {
+        type: Date,
+      },
+      approvedAt: Date,
+      approvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      rejectedAt: Date,
+      rejectedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      rejectionReason: String,
     },
+
+    rescheduleHistory: [
+      {
+        requestedBy: {
+          type: String,
+          enum: ["customer", "handyman"],
+        },
+        oldDate: Date,
+        oldTime: String,
+        newDate: Date,
+        newTime: String,
+        reason: String,
+        status: {
+          type: String,
+          enum: ["pending", "approved", "accepted", "rejected", "cancelled", "expired"],
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+        approvedAt: Date,
+        approvedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        rejectedAt: Date,
+        rejectedBy: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        rejectionReason: String,
+      },
+    ],
 
     isEmergency: {
       type: Boolean,
@@ -187,8 +364,40 @@ const orderSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Execution start geo-fencing metadata
+    executionStartedAt: {
+      type: Date,
+      default: null,
+    },
+
+    executionStartLatitude: {
+      type: Number,
+      default: null,
+    },
+
+    executionStartLongitude: {
+      type: Number,
+      default: null,
+    },
+
+    executionStartDistance: {
+      type: Number, // Distance in meters from orderLocation
+      default: null,
+    },
+
+    startedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     completionImage: {
       type: String,
+      default: null,
+    },
+
+    completedAt: {
+      type: Date,
       default: null,
     },
 
@@ -213,18 +422,62 @@ const orderSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    cancellationReason: {
+      type: String,
+      default: null,
+    },
+
+    cancelledBy: {
+      type: String,
+      enum: ["customer", "handyman", "admin", null],
+      default: null,
+    },
+
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
 
+orderSchema.pre("validate", function (next) {
+  if (!this.scheduledDate) {
+    this.scheduledDate = new Date();
+  }
+  if (this.scheduledDate && this.expectedDuration) {
+    const durationHours = Number(this.expectedDuration);
+    this.expectedEndTime = new Date(new Date(this.scheduledDate).getTime() + durationHours * 60 * 60 * 1000);
+  }
+  if (this.orderLocation?.coordinates && (!this.customerLocation || !this.customerLocation.coordinates)) {
+    this.customerLocation = {
+      type: "Point",
+      coordinates: this.orderLocation.coordinates,
+      address: this.orderLocation.address || "",
+    };
+  } else if (this.customerLocation?.coordinates && (!this.orderLocation || !this.orderLocation.coordinates)) {
+    this.orderLocation = {
+      type: "Point",
+      coordinates: this.customerLocation.coordinates,
+      latitude: this.customerLocation.coordinates[1],
+      longitude: this.customerLocation.coordinates[0],
+      address: this.customerLocation.address || "",
+    };
+  }
+  if (typeof next === "function") next();
+});
+
+orderSchema.index({ orderLocation: "2dsphere" });
 orderSchema.index({ customerLocation: "2dsphere" });
 orderSchema.index({ handymanLiveLocation: "2dsphere" });
 orderSchema.index({ customerId: 1 });
 orderSchema.index({ handymanId: 1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ trackingStatus: 1 });
+orderSchema.index({ handymanId: 1, status: 1, scheduledDate: 1 });
 
 const Order = mongoose.model("Order", orderSchema);
 

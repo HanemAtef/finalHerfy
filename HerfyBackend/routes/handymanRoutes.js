@@ -54,6 +54,26 @@ router.get(
   getHandymanMonthlyStats
 );
 
+// Fines & Settlement Requests
+const {
+  requestFineSettlement,
+  getMyFines,
+} = require("../controllers/settlementController");
+
+router.get(
+  "/fines/my-fines",
+  authMiddleware,
+  allowedToMiddleware("handyman"),
+  getMyFines
+);
+
+router.post(
+  "/fines/request-settlement",
+  authMiddleware,
+  allowedToMiddleware("handyman"),
+  requestFineSettlement
+);
+
 // Keep parameterized routes after fixed paths; otherwise `/status` is
 // interpreted as an id and never reaches the status controller.
 router.get("/:id", getHandymanDetails);

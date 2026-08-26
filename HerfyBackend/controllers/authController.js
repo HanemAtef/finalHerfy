@@ -34,10 +34,11 @@ const publicUser = (user) => ({
   role: user.role,
   isAdmin: user.isAdmin,
   phone: user.phone,
+  address: user.address || "",
   location: user.location,
-  city: user.city,
   profileImage: user.profileImage,
   isVerified: user.isVerified,
+  status: user.status || (user.isAdmin ? "approved" : "pending"),
   penaltyCount: user.penaltyCount,
   penaltyAmount: user.penaltyAmount,
 });
@@ -54,7 +55,6 @@ const registerUser = async (req, res) => {
       role,
       phone,
       location,
-      city,
       profession,
       price,
       experienceYears,
@@ -91,46 +91,68 @@ const registerUser = async (req, res) => {
       coordinates = location;
     }
 
-    // Create User
+    // Build documents array from uploaded files or body
+    const initialDocuments = [];
+    if (req.body.nationalId) {
+      initialDocuments.push({
+        type: "national_id",
+        url: req.body.nationalId,
+        filename: "national_id",
+        originalName: "National ID",
+        mimeType: "image/jpeg",
+        uploadedAt: new Date(),
+        status: "pending",
+      });
+    }
+    if (Array.isArray(req.uploadedDocs)) {
+      initialDocuments.push(...req.uploadedDocs);
+    } else if (Array.isArray(req.body.documents)) {
+      initialDocuments.push(...req.body.documents);
+    }
+
+    // Create User with status: pending
     const user = await User.create({
       email,
       name,
       password,
       role,
       phone,
-      city: city || null,
+      address: address || "",
+      status: "pending",
+      profileImage: req.body.profileImage || "",
+      nationalId: req.body.nationalId || "",
+      documents: initialDocuments,
       ...(coordinates ? { location: { type: "Point", coordinates } } : {}),
     });
 
     // If handyman, create Handyman profile with pending status
     if (role === "handyman") {
       try {
-        // Get uploaded files from multer (if any)
-        const nationalId = req.files?.nationalId
-          ? req.files.nationalId[0].path
-          : null;
-        const certificate = req.files?.certificate
-          ? req.files.certificate[0].path
-          : null;
-        const profileImage = req.files?.profileImage
-          ? req.files.profileImage[0].path
-          : null;
+        // Get uploaded files from multer or body
+        const nationalId =
+          req.body.nationalId ||
+          (req.files?.nationalId ? req.files.nationalId[0].path || req.files.nationalId[0].secure_url : "") ||
+          "";
+        const certificate =
+          req.body.certificate ||
+          (req.files?.certificate ? req.files.certificate[0].path || req.files.certificate[0].secure_url : "") ||
+          "";
+        const profileImage =
+          req.body.profileImage ||
+          (req.files?.profileImage ? req.files.profileImage[0].path || req.files.profileImage[0].secure_url : "") ||
+          "";
 
         // Check if handyman already exists (shouldn't happen, but just in case)
         const existingHandyman = await HandyMan.findOne({ userId: user._id });
         if (existingHandyman) {
-          // If exists, update it instead of creating new
           existingHandyman.profession = profession;
           existingHandyman.price = parseFloat(price);
           existingHandyman.experienceYears = parseInt(experienceYears) || 0;
           existingHandyman.bio = bio || "";
           existingHandyman.gallery = gallery || [];
-          existingHandyman.nationalId =
-            nationalId || existingHandyman.nationalId;
-          existingHandyman.certificate =
-            certificate || existingHandyman.certificate;
-          existingHandyman.profileImage =
-            profileImage || existingHandyman.profileImage;
+          existingHandyman.nationalId = nationalId || existingHandyman.nationalId || "";
+          existingHandyman.certificate = certificate || existingHandyman.certificate || "";
+          existingHandyman.profileImage = profileImage || existingHandyman.profileImage || "";
           existingHandyman.address = address || existingHandyman.address;
           existingHandyman.location = coordinates
             ? { type: "Point", coordinates }
@@ -140,7 +162,6 @@ const registerUser = async (req, res) => {
           existingHandyman.verified = false;
           await existingHandyman.save();
         } else {
-          // Create new handyman
           await HandyMan.create({
             userId: user._id,
             profession,
@@ -148,13 +169,12 @@ const registerUser = async (req, res) => {
             experienceYears: parseInt(experienceYears) || 0,
             bio: bio || "",
             gallery: gallery || [],
-            nationalId,
-            certificate,
-            profileImage,
+            nationalId: nationalId || "",
+            certificate: certificate || "",
+            profileImage: profileImage || "",
             address: address || "",
             location: coordinates ? { type: "Point", coordinates } : undefined,
             registrationStatus: "pending",
-
             registeredAt: new Date(),
             verified: false,
             isAvailable: true,
@@ -177,7 +197,7 @@ const registerUser = async (req, res) => {
         }
 
         console.log(
-          `✅ New handyman registration: ${user.name} (${user.email}) - pending approval`,
+          `✅ New handyman registration: ${user.name} (${user.email}) - pending approval`
         );
       } catch (handymanErr) {
         // Rollback: delete user if handyman creation fails
@@ -194,11 +214,15 @@ const registerUser = async (req, res) => {
     await user.save();
 
     // Send verification email (fire and forget to not block response)
-    sendVerificationEmail(user.email, otp);
+    sendVerificationEmail(user.email, otp).catch((e) =>
+      console.warn("Email send error:", e.message)
+    );
 
     // Response
     const response = {
-      msg: "تم إنشاء الحساب، من فضلك تحقق من بريدك الإلكتروني",
+      msg: "Your registration is pending admin approval.",
+      status: "pending",
+      registrationStatus: "pending",
       needsVerification: true,
       email: user.email,
       role: user.role,
@@ -206,16 +230,15 @@ const registerUser = async (req, res) => {
 
     // Add handyman specific info
     if (role === "handyman") {
-      response.registrationStatus = "pending";
       response.handymanId = user._id;
-      response.message = "تم تسجيل حسابك كحرفي. في انتظار موافقة الأدمن.";
+      response.message = "Your registration is pending admin approval.";
     }
 
     res.status(201).json(response);
   } catch (err) {
-    console.log(err);
+    console.error("Registration error:", err);
     if (err.code === 11000) {
-      const field = Object.keys(err.keyPattern)[0];
+      const field = Object.keys(err.keyPattern || {})[0];
       const messages = {
         email: "البريد الإلكتروني مسجل بالفعل",
         phone: "رقم الهاتف مسجل بالفعل",
@@ -224,7 +247,11 @@ const registerUser = async (req, res) => {
         .status(400)
         .json({ msg: messages[field] || "البيانات مسجلة بالفعل" });
     }
-    res.status(500).json({ msg: "حدث خطأ في الخادم", error: err.message });
+    if (err.name === "ValidationError") {
+      const firstError = Object.values(err.errors || {})[0]?.message;
+      return res.status(400).json({ msg: firstError || "بيانات التسجيل غير صالحة" });
+    }
+    res.status(500).json({ msg: "حدث خطأ في الخادم أثناء التسجيل", error: err.message });
   }
 };
 
@@ -358,42 +385,47 @@ const loginUser = async (req, res) => {
         .json({ msg: "البريد الإلكتروني أو كلمة المرور غير صحيحة" });
     }
 
-    if (!user.isVerified) {
-      return res.status(403).json({
-        msg: "من فضلك وثّق بريدك الإلكتروني أولاً",
-        needsVerification: true,
-        email: user.email,
-      });
-    }
-
-    // Check handyman status if role is handyman
+    // Check handyman record if role is handyman
     let handymanStatus = null;
+    let handyman = null;
     if (user.role === "handyman") {
-      const handyman = await HandyMan.findOne({ userId: user._id });
+      handyman = await HandyMan.findOne({ userId: user._id });
       if (handyman) {
         handymanStatus = handyman.registrationStatus;
+      }
+    }
 
-        // If handyman registration is rejected
-        if (handymanStatus === "rejected") {
-          return res.status(403).json({
-            msg: `تم رفض طلب التسجيل الخاص بك. السبب: ${handyman.adminNote || handyman.rejectedReason || "غير محدد"}`,
-            status: "rejected",
-            note: handyman.adminNote || handyman.rejectedReason,
-          });
-        }
-
-        // If handyman registration is pending
-        if (handymanStatus === "pending") {
-          return res.status(403).json({
-            msg: "حسابك في انتظار موافقة الأدمن. يرجى التحقق من بريدك الإلكتروني للإشعارات.",
-            status: "pending",
-            email: user.email,
-          });
-        }
-      } else {
-        // User is handyman but no profile exists (shouldn't happen)
+    // Admin bypasses registration approval
+    if (!user.isAdmin) {
+      // Check if registration is rejected
+      if (
+        user.status === "rejected" ||
+        (user.role === "handyman" && handymanStatus === "rejected")
+      ) {
         return res.status(403).json({
-          msg: "بيانات الحرفي غير مكتملة. يرجى التواصل مع الدعم.",
+          msg: "Your registration request has been rejected.",
+          status: "rejected",
+          note: (handyman && (handyman.adminNote || handyman.rejectedReason)) || null,
+        });
+      }
+
+      // Check if registration is pending
+      if (
+        user.status === "pending" ||
+        (user.role === "handyman" && (handymanStatus === "pending" || !handymanStatus))
+      ) {
+        return res.status(403).json({
+          msg: "Your registration is pending admin approval.",
+          status: "pending",
+          email: user.email,
+        });
+      }
+
+      if (!user.isVerified) {
+        return res.status(403).json({
+          msg: "من فضلك وثّق بريدك الإلكتروني أولاً",
+          needsVerification: true,
+          email: user.email,
         });
       }
     }
@@ -487,7 +519,7 @@ const getMe = async (req, res) => {
     let handymanData = null;
     if (user.role === "handyman") {
       handymanData = await HandyMan.findOne({ userId: user._id }).select(
-        "profession price rating verified isAvailable registrationStatus adminNote experienceYears bio gallery",
+        "profession price rating verified isAvailable registrationStatus adminNote experienceYears bio gallery address location",
       );
     }
 
@@ -568,7 +600,7 @@ const resetPassword = async (req, res) => {
 /********* update current user's profile *********/
 const updateProfile = async (req, res) => {
   try {
-    const allowedFields = ["name", "phone", "profileImage", "location", "city"];
+    const allowedFields = ["name", "phone", "profileImage", "location", "address"];
     const updates = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
@@ -581,6 +613,16 @@ const updateProfile = async (req, res) => {
 
     if (!user) {
       return res.status(404).json({ msg: "User not found" });
+    }
+
+    // Keep Handyman Base Location and Address in sync if role is handyman
+    if (user.role === "handyman") {
+      const handymanUpdates = {};
+      if (updates.address !== undefined) handymanUpdates.address = updates.address;
+      if (updates.location !== undefined) handymanUpdates.location = updates.location;
+      if (Object.keys(handymanUpdates).length > 0) {
+        await HandyMan.findOneAndUpdate({ userId: user._id }, handymanUpdates);
+      }
     }
 
     res.status(200).json({

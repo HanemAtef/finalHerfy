@@ -12,18 +12,40 @@ const createOrderSchema = Joi.object({
   }),
   description: Joi.string().optional().allow(''),
   images: Joi.array().items(Joi.string()).optional(),
-  requestType: Joi.string().valid('instant', 'scheduled').default('instant'),
-  scheduledDate: Joi.date().when('requestType', {
-    is: 'scheduled',
-    then: Joi.required(),
-    otherwise: Joi.optional(),
-  }),
+  scheduledDate: Joi.date().iso().optional().allow(null),
+  expectedDuration: Joi.number().min(0.5).max(24).optional().allow(null),
   estimatedPrice: Joi.number().min(0).optional(),
   customerLocation: Joi.object({
     type: Joi.string().valid('Point').default('Point'),
-    coordinates: Joi.array().items(Joi.number()).length(2).required(),
-  }).required(),
-  isEmergency:Joi.bool().default('false')
-});
+    coordinates: Joi.array()
+      .ordered(
+        Joi.number().min(-180).max(180).required(), // longitude
+        Joi.number().min(-90).max(90).required()    // latitude
+      )
+      .length(2)
+      .optional(),
+    latitude: Joi.number().min(-90).max(90).optional(),
+    longitude: Joi.number().min(-180).max(180).optional(),
+    address: Joi.string().optional().allow('', null),
+    city: Joi.string().optional().allow('', null),
+    area: Joi.string().optional().allow('', null),
+  }).optional(),
+  orderLocation: Joi.object({
+    type: Joi.string().valid('Point').default('Point'),
+    coordinates: Joi.array()
+      .ordered(
+        Joi.number().min(-180).max(180).required(), // longitude
+        Joi.number().min(-90).max(90).required()    // latitude
+      )
+      .length(2)
+      .optional(),
+    latitude: Joi.number().min(-90).max(90).optional(),
+    longitude: Joi.number().min(-180).max(180).optional(),
+    address: Joi.string().optional().allow('', null),
+    city: Joi.string().optional().allow('', null),
+    area: Joi.string().optional().allow('', null),
+  }).optional(),
+  isEmergency: Joi.bool().default(false),
+}).or('customerLocation', 'orderLocation');
 
 module.exports = createOrderSchema;

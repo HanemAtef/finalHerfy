@@ -62,6 +62,18 @@ const userSchema = new mongoose.Schema(
         type: [Number],
       },
     },
+    address: {
+      type: String,
+      default: "",
+    },
+    city: {
+      type: String,
+      default: "",
+    },
+    area: {
+      type: String,
+      default: "",
+    },
     // Password-reset OTP (existing flow)
     otp: String,
     otpExpire: Date,
@@ -107,16 +119,52 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+    },
     stripeCustomerId: {
       type: String,
       default: null,
     },
-    // References ServiceType/City by their stable `key`/name so the admin
-    // can manage the list without touching user records.
-    city: {
+    nationalId: {
       type: String,
-      default: null,
+      default: "",
     },
+    documents: [
+      {
+        type: {
+          type: String,
+          default: "national_id",
+        },
+        url: {
+          type: String,
+          required: true,
+        },
+        filename: {
+          type: String,
+          default: "",
+        },
+        originalName: {
+          type: String,
+          default: "",
+        },
+        mimeType: {
+          type: String,
+          default: "",
+        },
+        uploadedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        status: {
+          type: String,
+          enum: ["pending", "verified", "rejected"],
+          default: "pending",
+        },
+      },
+    ],
   },
   { timestamps: true },
 );

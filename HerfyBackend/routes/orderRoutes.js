@@ -21,6 +21,9 @@ const {
   confirmCashPayment,
   createStripePaymentIntent,
   selectPaymentMethod,
+  startOrder,
+  updateLiveLocation,
+  getDepartureWindow,
 } = require("../controllers/orderController");
 const { createReport } = require("../controllers/reportController");
 
@@ -34,11 +37,14 @@ router.get("/customer/:customerId", allowedToMiddleware("customer", "admin"), ge
 router.get("/handyman/:handymanId", allowedToMiddleware("handyman", "admin"), getHandymanOrders);
 router.get("/handyman/:handymanId/pending", getPendingOrders);
 router.get("/:id", getOrder);
+router.get("/:id/departure-window", getDepartureWindow);
 
 // ========== Status transitions ==========
 router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrderStatus);
+router.post("/:id/start", startOrder);
 router.patch("/:id/confirm-price", idempotency, confirmPrice);
 router.patch("/:id/on-the-way", markOnTheWay);
+router.put("/:id/live-location", updateLiveLocation);
 
 // ========== Payment: method selection (customer chooses cash or card after completion) ==========
 router.patch("/:id/select-payment-method", idempotency, selectPaymentMethod);

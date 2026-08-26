@@ -18,14 +18,11 @@ import {
 import { handymanService, reviewService, orderService } from '../../services/api';
 import VerifiedBadge from '../../components/common/VerifiedBadge';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
-import { formatPrice, formatDate, getHandymanImage, getDefaultAvatar } from '../../utils/helpers';
+import { formatPrice, formatDate, getDefaultAvatar } from '../../utils/helpers';
 
-// Matches the reference video's structure for this screen: header card, then
-// three pill tabs (نبذة / التقييمات / معرض الأعمال) instead of one long
-// scroll — with finalHerfy's own colors/branding, not the video's.
 const TABS = [
-  { key: 'about', label: 'نبذة' },
-  { key: 'reviews', label: 'التقييمات' },
+  { key: 'about', label: 'نبذة عن الحرفي' },
+  { key: 'reviews', label: 'التقييمات والآراء' },
   { key: 'gallery', label: 'معرض الأعمال' },
 ];
 
@@ -48,9 +45,6 @@ export default function HandymanProfilePage() {
           reviewService.getHandymanReviews(id),
         ]);
         setHandyman(profileRes.data);
-        // The API returns { msg, data: [...] } — reading `.reviews` (which
-        // doesn't exist) used to silently fall back to the whole response
-        // object, so the review list was never actually rendered anywhere.
         setReviews(reviewsRes.data.data || []);
       } catch {
         setHandyman(null);
@@ -61,10 +55,6 @@ export default function HandymanProfilePage() {
     load();
   }, [id]);
 
-  // Chat is scoped per order (there is no "generic" conversation with a handyman
-  // until a request exists). So "راسل" looks for an existing open order between
-  // this customer and this handyman and opens that chat — otherwise it explains
-  // that messaging opens once an order is placed, instead of doing nothing.
   const handleMessageClick = async () => {
     if (!user?._id) {
       navigate('/login');
@@ -83,116 +73,141 @@ export default function HandymanProfilePage() {
       if (activeOrder) {
         navigate(`/chat/${activeOrder._id}`);
       } else {
-        setChatNotice('يمكنك مراسلة الحرفي بعد إنشاء طلب معه — المحادثة تفتح تلقائيًا داخل صفحة تتبع الطلب.');
+        setChatNotice('يمكنك مراسلة الحرفي بعد إرسال طلب خدمة له — تفتح نافذة المحادثة فوراً عند إنشاء الطلب.');
       }
     } catch {
-      setChatNotice('تعذر التحقق من طلباتك حاليًا، حاول مرة أخرى.');
+      setChatNotice('تعذر التحقق من طلباتك حالياً، حاول مرة أخرى.');
     } finally {
       setCheckingChat(false);
     }
   };
 
-  if (loading) return <LoadingSpinner />;
-  if (!handyman) return <p className="text-center text-emergency">لم يتم العثور على الحرفي</p>;
+  if (loading) return <LoadingSpinner text="جاري تحميل بيانات الحرفي..." />;
+  if (!handyman) return <div className="card text-center py-12 text-emergency">لم يتم العثور على الحرفي المطلوب</div>;
 
-  const gallery = handyman.gallery?.length
-    ? handyman.gallery
-    : [getHandymanImage(0), getHandymanImage(1), getHandymanImage(2)];
+  const gallery = Array.isArray(handyman.gallery) ? handyman.gallery : [];
 
   const avgRating = handyman.rating ? handyman.rating.toFixed(1) : reviews.length
     ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1)
     : '—';
 
   return (
-    <div className="pb-24">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="max-w-3xl mx-auto space-y-6 pb-28 md:pb-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button type="button" onClick={() => navigate(-1)} className="text-primary">
-            <FaArrowRight size={20} />
+          <button
+            type="button"
+            onClick={() => navigate(-1)}
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-borderGray text-primary hover:bg-neutral transition-colors shadow-sm"
+          >
+            <FaArrowRight size={13} />
           </button>
-          <h1 className="text-xl font-bold text-primary">تفاصيل الحرفي</h1>
+          <div>
+            <h1 className="text-2xl font-extrabold text-textDark">ملف الحرفي</h1>
+            <p className="text-xs text-textGray mt-0.5">{handyman.profession}</p>
+          </div>
         </div>
-        <div className="flex gap-3 text-primary">
-          <FaHeart className="cursor-pointer" />
-          <FaShareAlt className="cursor-pointer" />
+        <div className="flex gap-2">
+          <button type="button" className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-borderGray text-textGray hover:text-emergency transition-colors shadow-sm">
+            <FaHeart size={14} />
+          </button>
+          <button type="button" className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-borderGray text-textGray hover:text-primary transition-colors shadow-sm">
+            <FaShareAlt size={14} />
+          </button>
         </div>
       </div>
 
-      <div className="card mb-4">
-        <div className="flex flex-col gap-6 md:flex-row md:items-start">
-          <div className="relative shrink-0">
+      {/* Main Profile Info Card */}
+      <div className="card relative overflow-hidden">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+          <div className="relative shrink-0 mx-auto sm:mx-0">
             <img
               src={handyman.profileImage || getDefaultAvatar(handyman.name)}
               alt={handyman.name}
-              className="h-28 w-28 rounded-full border-4 border-primary/20 object-cover"
+              className="h-24 w-24 rounded-3xl border-3 border-primary/20 object-cover shadow-sm"
             />
             {handyman.verified && (
-              <FaCheckCircle className="absolute bottom-1 right-1 text-tertiary" size={20} />
+              <FaCheckCircle className="absolute -bottom-1 -right-1 text-tertiary bg-white rounded-full" size={22} />
             )}
           </div>
-          <div className="flex-1">
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <h2 className="text-2xl font-bold text-textDark">{handyman.name}</h2>
+
+          <div className="flex-1 min-w-0 text-center sm:text-right">
+            <div className="mb-1 flex flex-wrap items-center justify-center sm:justify-start gap-2">
+              <h2 className="text-xl font-extrabold text-textDark truncate">{handyman.name}</h2>
               {handyman.verified && <VerifiedBadge />}
             </div>
-            <p className="mb-2 font-medium text-secondary">{handyman.profession}</p>
-            <div className="mb-2 flex items-center gap-1 text-sm text-textGray">
-              <FaStar className="text-secondary" />
-              {avgRating} ({reviews.length} تقييم)
-            </div>
-            {handyman.city && (
-              <div className="mb-2 flex items-center gap-2 text-sm text-textGray">
-                <FaMapMarkerAlt className="text-primary" /> {handyman.city}
-              </div>
-            )}
-            <div className="flex items-center gap-2 text-sm text-textGray">
-              <FaMoneyBillWave className="text-secondary" />
-              {formatPrice(handyman.price)} / ساعة
+            <p className="text-xs font-bold text-secondary mb-2">{handyman.profession}</p>
+
+            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 text-xs text-textGray">
+              <span className="flex items-center gap-1 font-bold text-textDark">
+                <FaStar className="text-secondary" size={13} />
+                {avgRating} <span className="font-normal text-textGray">({reviews.length} تقييم)</span>
+              </span>
+              {handyman.address && (
+                <span className="flex items-center gap-1 truncate">
+                  <FaMapMarkerAlt className="text-primary/70" size={12} /> {handyman.address}
+                </span>
+              )}
+              <span className="flex items-center gap-1 font-semibold text-textDark">
+                <FaMoneyBillWave className="text-tertiary" size={12} />
+                {formatPrice(handyman.price)} / ساعة
+              </span>
             </div>
           </div>
-          <div className="flex gap-2">
-            <a href={`tel:${handyman.phone}`} className="btn-primary flex items-center gap-2 text-sm">
-              <FaPhone /> اتصل
+
+          {/* Action Buttons */}
+          <div className="flex sm:flex-col gap-2 shrink-0 justify-center">
+            <a
+              href={`tel:${handyman.phone}`}
+              className="btn-primary text-xs py-2.5 px-4 flex-1 sm:flex-none"
+            >
+              <FaPhone size={11} /> اتصال
             </a>
             <button
               type="button"
               onClick={handleMessageClick}
               disabled={checkingChat}
-              className="btn-outline flex items-center gap-2 text-sm"
+              className="btn-outline text-xs py-2.5 px-4 flex-1 sm:flex-none"
             >
-              <FaComments /> {checkingChat ? 'جاري التحقق...' : 'راسل'}
+              <FaComments size={13} /> {checkingChat ? '...' : 'راسل'}
             </button>
           </div>
         </div>
+
         {chatNotice && (
-          <p className="mt-4 rounded-lg bg-primary/5 px-4 py-3 text-sm text-primary">{chatNotice}</p>
+          <div className="mt-4 rounded-xl bg-primary/5 border border-primary/15 p-3 text-xs text-primary leading-relaxed">
+            {chatNotice}
+          </div>
         )}
       </div>
 
-      <div className="mb-6 grid grid-cols-3 gap-3">
+      {/* Mini Stats Grid */}
+      <div className="grid grid-cols-3 gap-3">
         {[
-          { icon: FaCheckCircle, color: 'text-secondary', value: handyman.completedOrders ?? 0, label: 'مهمة مكتملة' },
-          { icon: FaAward, color: 'text-secondary', value: `${handyman.experienceYears || 0} سنوات`, label: 'خبرة' },
-          { icon: FaBriefcase, color: 'text-tertiary', value: handyman.isAvailable ? 'متاح' : 'غير متاح', label: 'الحالة' },
+          { icon: FaCheckCircle, color: 'text-tertiary', value: handyman.completedOrders ?? 0, label: 'مهمة منجزة' },
+          { icon: FaAward, color: 'text-secondary', value: `${handyman.experienceYears || 0} سنوات`, label: 'خبرة عملية' },
+          { icon: FaBriefcase, color: handyman.isAvailable ? 'text-tertiary' : 'text-textGray', value: handyman.isAvailable ? 'متاح الآن' : 'مشغول', label: 'حالة العمل' },
         ].map(({ icon: Icon, color, value, label }) => (
-          <div key={label} className="card text-center">
-            <Icon className={`mx-auto mb-2 ${color}`} size={22} />
-            <p className="font-bold text-textDark">{value}</p>
-            <p className="text-xs text-textGray">{label}</p>
+          <div key={label} className="card text-center p-4">
+            <Icon className={`mx-auto mb-1.5 ${color}`} size={20} />
+            <p className="font-extrabold text-sm text-textDark">{value}</p>
+            <p className="text-[11px] text-textGray mt-0.5">{label}</p>
           </div>
         ))}
       </div>
 
-      <div className="mb-5 flex gap-2 overflow-x-auto">
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-neutral pb-2 overflow-x-auto">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             type="button"
             onClick={() => setActiveTab(tab.key)}
-            className={`shrink-0 rounded-full px-5 py-2 text-sm font-medium transition ${
+            className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
               activeTab === tab.key
-                ? 'bg-primary text-white'
-                : 'border border-borderGray text-textGray hover:border-primary hover:text-primary'
+                ? 'bg-primary text-white shadow-sm'
+                : 'text-textGray hover:bg-neutral hover:text-textDark'
             }`}
           >
             {tab.label}
@@ -200,64 +215,68 @@ export default function HandymanProfilePage() {
         ))}
       </div>
 
+      {/* Tab 1: About */}
       {activeTab === 'about' && (
-        <section className="card mb-6">
-          <h3 className="mb-3 font-bold text-textDark">نبذة عن الحرفي</h3>
-          <p className="text-sm leading-relaxed text-textGray">
-            {handyman.bio || 'لم يضف الحرفي نبذة تعريفية بعد.'}
+        <section className="card space-y-2 animate-fade-in">
+          <h3 className="font-bold text-sm text-textDark">نبذة عن الحرفي والخبرات</h3>
+          <p className="text-xs leading-relaxed text-textGray whitespace-pre-wrap">
+            {handyman.bio || 'لم يقم الحرفي بإضافة نبذة تعريفية بعد.'}
           </p>
         </section>
       )}
 
+      {/* Tab 2: Reviews */}
       {activeTab === 'reviews' && (
-        <section className="mb-6 space-y-3">
+        <section className="space-y-3 animate-fade-in">
           {reviews.length === 0 ? (
-            <p className="card py-8 text-center text-sm text-textGray">لا توجد تقييمات بعد</p>
+            <div className="card py-10 text-center text-xs text-textGray">لا توجد تقييمات مسجلة بعد</div>
           ) : (
             reviews.map((r) => (
-              <div key={r._id} className="card">
-                <div className="mb-2 flex items-center justify-between">
+              <div key={r._id} className="card space-y-2">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <img src={getDefaultAvatar(r.customerId?.name)} alt="" className="h-8 w-8 rounded-full" />
-                    <span className="text-sm font-bold text-textDark">{r.customerId?.name || 'عميل'}</span>
+                    <img src={getDefaultAvatar(r.customerId?.name)} alt="" className="h-7 w-7 rounded-full" />
+                    <span className="text-xs font-bold text-textDark">{r.customerId?.name || 'عميل'}</span>
                   </div>
-                  <span className="flex items-center gap-1 text-sm font-bold text-secondary">
-                    <FaStar size={12} /> {r.rating}
+                  <span className="flex items-center gap-1 text-xs font-bold text-secondary">
+                    <FaStar size={11} /> {r.rating}
                   </span>
                 </div>
-                {r.comment && <p className="text-sm text-textGray">{r.comment}</p>}
-                <p className="mt-2 text-xs text-textGray">{formatDate(r.createdAt)}</p>
+                {r.comment && <p className="text-xs text-textDark leading-relaxed">{r.comment}</p>}
+                <p className="text-[10px] text-textGray">{formatDate(r.createdAt)}</p>
               </div>
             ))
           )}
         </section>
       )}
 
+      {/* Tab 3: Gallery */}
       {activeTab === 'gallery' && (
-        <section className="mb-6">
+        <section className="animate-fade-in">
           {gallery.length === 0 ? (
-            <p className="card py-8 text-center text-sm text-textGray">لا يوجد معرض أعمال بعد</p>
+            <div className="card py-10 text-center text-xs text-textGray">لا توجد صور أعمال سابقة مضافة</div>
           ) : (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               {gallery.map((img, i) => (
-                <img key={i} src={img} alt="" className="h-28 w-full rounded-xl object-cover" />
+                <img key={i} src={img} alt="" className="h-32 w-full rounded-2xl object-cover border border-neutral shadow-sm hover:scale-105 transition-transform" />
               ))}
             </div>
           )}
         </section>
       )}
 
-      <div className="fixed bottom-0 left-0 right-0 border-t border-borderGray bg-white p-4 shadow-lg md:static md:mt-6 md:rounded-xl md:border">
-        <div className="mx-auto flex max-w-container-max items-center justify-between">
+      {/* Bottom Sticky Request Bar */}
+      <div className="fixed bottom-0 left-0 right-0 border-t border-borderGray/60 bg-white/95 backdrop-blur-md p-4 shadow-lg md:static md:rounded-2xl md:border md:shadow-none">
+        <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
           <div>
-            <p className="text-xs text-textGray">التكلفة التقريبية</p>
-            <p className="text-xl font-bold text-textDark">{formatPrice(handyman.price)}/ساعة</p>
+            <p className="text-[11px] text-textGray font-medium">سعر الخدمة التقديري</p>
+            <p className="text-lg font-extrabold text-primary">{formatPrice(handyman.price)} <span className="text-xs font-normal text-textGray">/ ساعة</span></p>
           </div>
           <Link
             to={`/customer/create-order/${id}`}
-            className="flex items-center gap-2 rounded-xl bg-tertiary px-6 py-3 font-bold text-white hover:bg-tertiary/90"
+            className="btn-secondary flex items-center gap-2 py-3 px-6 text-sm font-bold shadow-md shadow-secondary/25 active:scale-95"
           >
-            <FaRocket /> اطلب الخدمة
+            <FaRocket size={14} /> اطلب الخدمة الآن
           </Link>
         </div>
       </div>

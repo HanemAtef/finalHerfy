@@ -15,8 +15,10 @@ const {
   payoutHandyman,
   getPayoutHistory,
   getDashboardChart,
+  getFinePayments,
   broadcastAnnouncement,
   getUserDetail,
+  getUserDocuments,
 } = require("../controllers/adminControllers");
 const {
   suspendHandyman,
@@ -25,7 +27,6 @@ const {
   getAuditLogs,
 } = require("../controllers/adminModerationController");
 const {
-  listCities, createCity, updateCity, deleteCity,
   listServiceTypes, createServiceType, updateServiceType, deleteServiceType,
 } = require("../controllers/referenceDataController");
 const { getReports, resolveReport, getDisputeDetail } = require("../controllers/reportController");
@@ -56,6 +57,9 @@ router.get("/dashboard/chart", getDashboardChart);
 // =====================================================
 router.get("/users", getAllUsers);
 router.get("/users/:userId", getUserDetail);
+router.get("/users/:userId/documents", getUserDocuments);
+router.get("/customers/:userId", getUserDetail);
+router.get("/customers/:userId/documents", getUserDocuments);
 router.patch("/users/:userId/ban", toggleUserBan); // legacy, kept for compatibility
 router.patch("/users/:userId/ban-with-reason", banUserWithReason);
 router.delete("/users/:userId", deleteUserAccount);
@@ -103,13 +107,21 @@ router.post("/wallets/:handymanId/payout", payoutHandyman);
 router.get("/wallets/:handymanId/history", getPayoutHistory);
 
 // =====================================================
+// ========== SETTLEMENT REQUESTS (FINES) ==========
+// =====================================================
+const {
+  getAdminSettlementRequests,
+  confirmSettlementRequest,
+  rejectSettlementRequest,
+} = require("../controllers/settlementController");
+
+router.get("/settlement-requests", getAdminSettlementRequests);
+router.patch("/settlement-requests/:id/confirm", confirmSettlementRequest);
+router.patch("/settlement-requests/:id/reject", rejectSettlementRequest);
+
+// =====================================================
 // ========== REFERENCE DATA ==========
 // =====================================================
-router.get("/cities", listCities);
-router.post("/cities", createCity);
-router.patch("/cities/:id", updateCity);
-router.delete("/cities/:id", deleteCity);
-
 router.get("/service-types", listServiceTypes);
 router.post("/service-types", createServiceType);
 router.patch("/service-types/:id", updateServiceType);
@@ -132,8 +144,9 @@ router.get("/analytics/reviews", getReviewsAnalytics);
 router.get("/export/:type", exportCSV);
 
 // =====================================================
-// ========== ANNOUNCEMENTS ==========
+// ========== ANNOUNCEMENTS & PAYMENTS ==========
 // =====================================================
 router.post("/broadcast", broadcastAnnouncement);
+router.get("/fine-payments", getFinePayments);
 
 module.exports = router;

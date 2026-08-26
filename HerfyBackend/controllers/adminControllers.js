@@ -5,6 +5,8 @@ const Order = require("../models/Order");
 const Review = require("../models/Review");
 const AuditLog = require("../models/AuditLog");
 const RefreshToken = require("../models/RefreshToken");
+const FinancialRecord = require("../models/FinancialRecord");
+const SettlementRequest = require("../models/SettlementRequest");
 const { createNotification } = require("./notificationController");
 
 // ========== Helper: Log admin actions ==========
@@ -94,7 +96,16 @@ const getAdminStats = async (req, res) => {
       { $match: { status: "completed" } },
       { $group: { _id: null, total: { $sum: "$commissionAmount" } } },
     ]);
-    const totalRevenue = revenueResult[0]?.total || 0;
+    const orderRevenue = revenueResult[0]?.total || 0;
+
+    const fineRevenueResult = await FinancialRecord.aggregate([
+      { $match: { type: "fine_payment", status: "completed" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]);
+    const fineRevenue = fineRevenueResult[0]?.total || 0;
+
+    const totalRevenue = orderRevenue + fineRevenue;
+    const pendingSettlements = await SettlementRequest.countDocuments({ status: "pending" });
 
     res.status(200).json({
       totalUsers,
@@ -105,6 +116,8 @@ const getAdminStats = async (req, res) => {
       pendingOrders,
       cancelledOrders,
       totalRevenue,
+      fineRevenue,
+      pendingSettlements,
     });
   } catch (error) {
     console.log(error);
@@ -736,10 +749,53 @@ const getUserDetail = async (req, res) => {
       gallery: handymanProfile?.gallery || [],
     };
 
+    // Consolidate documents from User and Handyman
+    const userDocs = Array.isArray(user.documents) ? [...user.documents] : [];
+    if (user.nationalId && !userDocs.some((d) => d.type === 'national_id' || d.url === user.nationalId)) {
+      userDocs.unshift({
+        type: 'national_id',
+        url: user.nationalId,
+        filename: 'national_id',
+        originalName: 'بطاقة الرقم القومي',
+        mimeType: /\.pdf($|\?)/i.test(user.nationalId) ? 'application/pdf' : 'image/jpeg',
+        uploadedAt: user.createdAt,
+        status: user.status === 'approved' ? 'verified' : 'pending',
+      });
+    }
+
+    if (handymanProfile) {
+      if (handymanProfile.nationalId && !userDocs.some((d) => d.url === handymanProfile.nationalId)) {
+        userDocs.unshift({
+          type: 'national_id',
+          url: handymanProfile.nationalId,
+          filename: 'national_id',
+          originalName: 'بطاقة الرقم القومي',
+          mimeType: /\.pdf($|\?)/i.test(handymanProfile.nationalId) ? 'application/pdf' : 'image/jpeg',
+          uploadedAt: handymanProfile.registeredAt || handymanProfile.createdAt,
+          status: handymanProfile.registrationStatus === 'approved' ? 'verified' : 'pending',
+        });
+      }
+      if (handymanProfile.certificate && !userDocs.some((d) => d.url === handymanProfile.certificate)) {
+        userDocs.push({
+          type: 'certificate',
+          url: handymanProfile.certificate,
+          filename: 'certificate',
+          originalName: 'شهادة الخبرة',
+          mimeType: /\.pdf($|\?)/i.test(handymanProfile.certificate) ? 'application/pdf' : 'image/jpeg',
+          uploadedAt: handymanProfile.registeredAt || handymanProfile.createdAt,
+          status: handymanProfile.registrationStatus === 'approved' ? 'verified' : 'pending',
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: {
-        user,
+        user: {
+          ...user.toObject ? user.toObject() : user,
+          documents: userDocs,
+        },
+        documents: userDocs,
         handymanProfile,
         stats,
         orders: ordersOut,
@@ -752,25 +808,120 @@ const getUserDetail = async (req, res) => {
   }
 };
 
+// ========== 11c. Get User Documents specifically ==========
+const getUserDocuments = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId).select("-password");
+    if (!user) {
+      return res.status(404).json({ msg: "المستخدم غير موجود" });
+    }
+
+    const handymanProfile = user.role === "handyman"
+      ? await Handyman.findOne({ userId: user._id }).lean()
+      : null;
+
+    const userDocs = Array.isArray(user.documents) ? [...user.documents] : [];
+    if (user.nationalId && !userDocs.some((d) => d.type === 'national_id' || d.url === user.nationalId)) {
+      userDocs.unshift({
+        type: 'national_id',
+        url: user.nationalId,
+        filename: 'national_id',
+        originalName: 'بطاقة الرقم القومي',
+        mimeType: /\.pdf($|\?)/i.test(user.nationalId) ? 'application/pdf' : 'image/jpeg',
+        uploadedAt: user.createdAt,
+        status: user.status === 'approved' ? 'verified' : 'pending',
+      });
+    }
+
+    if (handymanProfile) {
+      if (handymanProfile.nationalId && !userDocs.some((d) => d.url === handymanProfile.nationalId)) {
+        userDocs.unshift({
+          type: 'national_id',
+          url: handymanProfile.nationalId,
+          filename: 'national_id',
+          originalName: 'بطاقة الرقم القومي',
+          mimeType: /\.pdf($|\?)/i.test(handymanProfile.nationalId) ? 'application/pdf' : 'image/jpeg',
+          uploadedAt: handymanProfile.registeredAt || handymanProfile.createdAt,
+          status: handymanProfile.registrationStatus === 'approved' ? 'verified' : 'pending',
+        });
+      }
+      if (handymanProfile.certificate && !userDocs.some((d) => d.url === handymanProfile.certificate)) {
+        userDocs.push({
+          type: 'certificate',
+          url: handymanProfile.certificate,
+          filename: 'certificate',
+          originalName: 'شهادة الخبرة',
+          mimeType: /\.pdf($|\?)/i.test(handymanProfile.certificate) ? 'application/pdf' : 'image/jpeg',
+          uploadedAt: handymanProfile.registeredAt || handymanProfile.createdAt,
+          status: handymanProfile.registrationStatus === 'approved' ? 'verified' : 'pending',
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      userId: user._id,
+      name: user.name,
+      role: user.role,
+      documents: userDocs,
+    });
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
 // =====================================================
 // ========== NEW: Registration Request Management ==========
 // =====================================================
 
-// ========== 12. Get All Pending Registration Requests ==========
+// ========== 12. Get All Pending/Historical Registration Requests ==========
 const getPendingRegistrationRequests = async (req, res) => {
   try {
-    const pendingHandymen = await Handyman.find({ 
-      registrationStatus: 'pending' 
-    })
-    .populate('userId', 'name email phone profileImage createdAt')
-    .sort({ registeredAt: -1 });
+    const { status } = req.query;
+    const filter = {};
+    if (status && status !== 'all') {
+      filter.registrationStatus = status;
+    } else if (!status) {
+      filter.registrationStatus = 'pending';
+    }
+
+    const pendingHandymen = await Handyman.find(filter)
+      .populate('userId', 'name email phone profileImage status isVerified createdAt')
+      .sort({ registeredAt: -1, createdAt: -1 });
+
+    const formatted = pendingHandymen.map((h) => {
+      const u = h.userId || {};
+      return {
+        _id: h._id,
+        handymanId: h._id,
+        userId: u._id || h.userId,
+        name: u.name || '—',
+        email: u.email || '—',
+        phone: u.phone || '—',
+        profession: h.profession || '—',
+        price: h.price,
+        experienceYears: h.experienceYears,
+        bio: h.bio || '',
+        address: h.address || '',
+        nationalId: h.nationalId || '',
+        certificate: h.certificate || '',
+        profileImage: h.profileImage || u.profileImage || '',
+        gallery: h.gallery || [],
+        status: h.registrationStatus || u.status || 'pending',
+        registrationStatus: h.registrationStatus || 'pending',
+        adminNote: h.adminNote || h.rejectedReason || '',
+        createdAt: h.registeredAt || h.createdAt || u.createdAt,
+        registeredAt: h.registeredAt || h.createdAt,
+      };
+    });
 
     res.status(200).json({
       success: true,
-      count: pendingHandymen.length,
-      data: pendingHandymen
+      count: formatted.length,
+      data: formatted,
     });
-
   } catch (error) {
     console.error('Error fetching pending registration requests:', error);
     res.status(500).json({ msg: 'Server error', error: error.message });
@@ -783,35 +934,36 @@ const approveRegistrationRequest = async (req, res) => {
     const { handymanId } = req.params;
     const { note = '' } = req.body;
 
-    // Find handyman
-    const handyman = await Handyman.findById(handymanId).populate('userId');
+    // Find handyman by Handyman _id or userId
+    let handyman = await Handyman.findById(handymanId).populate('userId');
     if (!handyman) {
-      return res.status(404).json({ 
-        success: false, 
-        msg: 'الحرفي غير موجود' 
-      });
+      handyman = await Handyman.findOne({ userId: handymanId }).populate('userId');
     }
 
-    // Check if status is pending
-    if (handyman.registrationStatus !== 'pending') {
-      return res.status(400).json({
+    let user = null;
+    if (handyman) {
+      user = handyman.userId;
+      handyman.registrationStatus = 'approved';
+      handyman.approvedAt = new Date();
+      handyman.adminNote = note || 'تم الموافقة على حسابك';
+      handyman.verified = Boolean((handyman.completedOrders || 0) >= 10 && (handyman.rating || 0) >= 4.5);
+      handyman.rejected = false;
+      handyman.rejectedReason = null;
+      await handyman.save();
+    } else {
+      user = await User.findById(handymanId);
+    }
+
+    if (!user && !handyman) {
+      return res.status(404).json({
         success: false,
-        msg: `هذا الطلب تم ${handyman.registrationStatus === 'approved' ? 'الموافقة عليه' : 'رفضه'} بالفعل`
+        msg: 'طلب التسجيل غير موجود',
       });
     }
 
-    // Update handyman status
-    handyman.registrationStatus = 'approved';
-    handyman.approvedAt = new Date();
-    handyman.adminNote = note || 'تم الموافقة على حسابك';
-    handyman.verified = true;
-    handyman.rejected = false;
-    handyman.rejectedReason = null;
-    await handyman.save();
-
-    // Update user
-    const user = handyman.userId;
+    // Update user status
     if (user) {
+      user.status = 'approved';
       user.isVerified = true;
       await user.save();
     }
@@ -820,13 +972,13 @@ const approveRegistrationRequest = async (req, res) => {
     await logAction(
       req.user._id,
       'registration.approve',
-      'Handyman',
-      handyman._id,
+      'User',
+      user?._id || handyman?._id,
       note || 'تم الموافقة على طلب التسجيل',
-      { 
+      {
         handymanName: user?.name,
-        profession: handyman.profession,
-        email: user?.email 
+        profession: handyman?.profession,
+        email: user?.email,
       }
     );
 
@@ -834,41 +986,44 @@ const approveRegistrationRequest = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('registrationApproved', {
-        handymanId: handyman._id,
+        handymanId: handyman?._id,
         userId: user?._id,
         name: user?.name,
-        status: 'approved'
+        status: 'approved',
       });
     }
 
     // Send in-app notification
-    await createNotification(
-      io,
-      user?._id,
-      'registration_approved',
-      '✅ تم الموافقة على طلب التسجيل',
-      `تم قبول طلب تسجيلك كحرفي في منصة هرفي. يمكنك الآن البدء في تقديم خدماتك.`,
-      { handymanId: handyman._id }
-    );
+    if (user) {
+      await createNotification(
+        io,
+        user._id,
+        'registration_approved',
+        '✅ تم الموافقة على طلب التسجيل',
+        'تم قبول طلب تسجيلك في منصة هرفي. يمكنك الآن تسجيل الدخول واستخدام المنصة.',
+        { handymanId: handyman?._id }
+      ).catch(() => {});
+    }
 
     // Send email
     try {
-      await sendApprovalEmail(
-        user?.email,
-        user?.name,
-        'approved',
-        handyman.adminNote
-      );
+      if (user?.email) {
+        await sendApprovalEmail(
+          user.email,
+          user.name,
+          'approved',
+          handyman?.adminNote || 'تم الموافقة على حسابك'
+        );
+      }
     } catch (emailErr) {
-      console.error('Error sending approval email:', emailErr);
+      console.error('Error sending approval email:', emailErr.message);
     }
 
     res.status(200).json({
       success: true,
       msg: 'تم الموافقة على طلب التسجيل بنجاح',
-      data: handyman
+      data: handyman || user,
     });
-
   } catch (error) {
     console.error('Error approving registration:', error);
     res.status(500).json({ msg: 'Server error', error: error.message });
@@ -879,51 +1034,52 @@ const approveRegistrationRequest = async (req, res) => {
 const rejectRegistrationRequest = async (req, res) => {
   try {
     const { handymanId } = req.params;
-    const { reason } = req.body;
+    const { reason = 'تم رفض طلب التسجيل' } = req.body;
 
-    if (!reason || reason.trim() === '') {
-      return res.status(400).json({
-        success: false,
-        msg: 'يجب كتابة سبب الرفض'
-      });
+    // Find handyman by Handyman _id or userId
+    let handyman = await Handyman.findById(handymanId).populate('userId');
+    if (!handyman) {
+      handyman = await Handyman.findOne({ userId: handymanId }).populate('userId');
     }
 
-    const handyman = await Handyman.findById(handymanId).populate('userId');
-    if (!handyman) {
+    let user = null;
+    if (handyman) {
+      user = handyman.userId;
+      handyman.registrationStatus = 'rejected';
+      handyman.rejectedAt = new Date();
+      handyman.adminNote = reason;
+      handyman.verified = false;
+      handyman.rejected = true;
+      handyman.rejectedReason = reason;
+      await handyman.save();
+    } else {
+      user = await User.findById(handymanId);
+    }
+
+    if (!user && !handyman) {
       return res.status(404).json({
         success: false,
-        msg: 'الحرفي غير موجود'
+        msg: 'طلب التسجيل غير موجود',
       });
     }
 
-    // Check if status is pending
-    if (handyman.registrationStatus !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        msg: `هذا الطلب تم ${handyman.registrationStatus === 'approved' ? 'الموافقة عليه' : 'رفضه'} بالفعل`
-      });
+    // Update user status
+    if (user) {
+      user.status = 'rejected';
+      await user.save();
     }
-
-    // Update handyman status
-    handyman.registrationStatus = 'rejected';
-    handyman.rejectedAt = new Date();
-    handyman.adminNote = reason;
-    handyman.verified = false;
-    handyman.rejected = true;
-    handyman.rejectedReason = reason;
-    await handyman.save();
 
     // Log action
     await logAction(
       req.user._id,
       'registration.reject',
-      'Handyman',
-      handyman._id,
+      'User',
+      user?._id || handyman?._id,
       reason,
-      { 
-        handymanName: handyman.userId?.name,
-        profession: handyman.profession,
-        email: handyman.userId?.email 
+      {
+        handymanName: user?.name,
+        profession: handyman?.profession,
+        email: user?.email,
       }
     );
 
@@ -931,44 +1087,62 @@ const rejectRegistrationRequest = async (req, res) => {
     const io = req.app.get('io');
     if (io) {
       io.emit('registrationRejected', {
-        handymanId: handyman._id,
-        userId: handyman.userId?._id,
-        name: handyman.userId?.name,
+        handymanId: handyman?._id,
+        userId: user?._id,
+        name: user?.name,
         status: 'rejected',
-        reason: reason
+        reason: reason,
       });
     }
 
     // Send in-app notification
-    await createNotification(
-      io,
-      handyman.userId?._id,
-      'registration_rejected',
-      '❌ تم رفض طلب التسجيل',
-      `نأسف لإبلاغك بأن طلب تسجيلك كحرفي قد تم رفضه. السبب: ${reason}`,
-      { handymanId: handyman._id, reason }
-    );
+    if (user) {
+      await createNotification(
+        io,
+        user._id,
+        'registration_rejected',
+        '❌ تم رفض طلب التسجيل',
+        `نأسف لإبلاغك بأن طلب تسجيلك قد تم رفضه. السبب: ${reason}`,
+        { handymanId: handyman?._id, reason }
+      ).catch(() => {});
+    }
 
     // Send email
     try {
-      await sendApprovalEmail(
-        handyman.userId?.email,
-        handyman.userId?.name,
-        'rejected',
-        reason
-      );
+      if (user?.email) {
+        await sendApprovalEmail(
+          user.email,
+          user.name,
+          'rejected',
+          reason
+        );
+      }
     } catch (emailErr) {
-      console.error('Error sending rejection email:', emailErr);
+      console.error('Error sending rejection email:', emailErr.message);
     }
 
     res.status(200).json({
       success: true,
       msg: 'تم رفض طلب التسجيل بنجاح',
-      data: handyman
+      data: handyman || user,
     });
-
   } catch (error) {
     console.error('Error rejecting registration:', error);
+    res.status(500).json({ msg: 'Server error', error: error.message });
+  }
+};
+
+// ========== Get Fine Payments (Card Payments) ==========
+const getFinePayments = async (req, res) => {
+  try {
+    const records = await FinancialRecord.find({ type: 'fine_payment' })
+      .populate('handymanId', 'name email phone profileImage')
+      .populate('fineId')
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ data: records });
+  } catch (error) {
+    console.error('Error fetching fine payments:', error);
     res.status(500).json({ msg: 'Server error', error: error.message });
   }
 };
@@ -981,6 +1155,7 @@ module.exports = {
   // Dashboard & Stats
   getAdminStats,
   getDashboardChart,
+  getFinePayments,
   
   // User Management
   getAllUsers,
@@ -1003,6 +1178,7 @@ module.exports = {
   // Announcements
   broadcastAnnouncement,
   getUserDetail,
+  getUserDocuments,
   
   // Registration Request Management (NEW)
   getPendingRegistrationRequests,

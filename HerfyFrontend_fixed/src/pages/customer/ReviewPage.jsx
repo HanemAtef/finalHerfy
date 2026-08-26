@@ -1,21 +1,22 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { FaArrowRight, FaBell, FaComments, FaPaperPlane, FaShieldAlt } from 'react-icons/fa';
+import { FaArrowRight, FaPaperPlane, FaShieldAlt } from 'react-icons/fa';
 import { reviewService } from '../../services/api';
 import { fetchOrderById } from '../../store/slices/orderSlice';
 import StarRating from '../../components/common/StarRating';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import { getDefaultAvatar } from '../../utils/helpers';
+import AlertMessage from '../../components/common/AlertMessage';
 
-const RATING_LABELS = ['', 'سيء', 'مقبول', 'جيد', 'جيد جداً', 'ممتاز'];
+const RATING_LABELS = ['', 'سيء 😞', 'مقبول 😐', 'جيد 🙂', 'جيد جداً 😊', 'ممتاز ومتميز 🌟'];
 
 export default function ReviewPage() {
   const { orderId } = useParams();
   const navigate = useNavigate();
   const dispatch = useDispatch();
   const { currentOrder, isLoading: orderLoading } = useSelector((state) => state.orders);
-  const [rating, setRating] = useState(4);
+  const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -41,65 +42,78 @@ export default function ReviewPage() {
   };
 
   if (orderLoading && !currentOrder) {
-    return <LoadingSpinner fullScreen />;
+    return <LoadingSpinner text="جاري تحميل بيانات التقييم..." />;
   }
 
   return (
-    <div className="mx-auto max-w-md px-4 py-6">
-      <header className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button type="button" onClick={() => navigate(-1)} className="text-primary">
-            <FaArrowRight size={18} />
-          </button>
-          <h1 className="font-bold text-primary">تقييم الحرفي</h1>
+    <div className="mx-auto max-w-md space-y-6">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-borderGray text-primary hover:bg-neutral transition-colors shadow-sm"
+        >
+          <FaArrowRight size={13} />
+        </button>
+        <div>
+          <h1 className="text-2xl font-extrabold text-textDark">تقييم الخدمة</h1>
+          <p className="text-xs text-textGray mt-0.5">شاركنا رأيك حول أداء الحرفي</p>
         </div>
-        <div className="flex gap-3 text-primary">
-          <FaBell /><FaComments />
-        </div>
-      </header>
+      </div>
 
-      <div className="overflow-hidden rounded-2xl bg-white shadow-lg">
-        <div className="h-24 bg-primary" />
-        <div className="relative px-6 pb-6 pt-0">
+      {/* Main Review Card */}
+      <div className="card overflow-hidden p-0 shadow-[var(--shadow-card)]">
+        <div className="h-20 bg-gradient-to-l from-primary to-primary/85" />
+        <div className="px-6 pb-6 pt-0">
           <img
             src={handyman.profileImage || getDefaultAvatar(handyman.name)}
             alt=""
-            className="relative -mt-12 mx-auto h-24 w-24 rounded-full border-4 border-white object-cover"
+            className="relative -mt-10 mx-auto h-20 w-20 rounded-3xl border-3 border-white object-cover shadow-md"
           />
-          <div className="mt-4 text-center">
-            <h2 className="font-bold text-textDark">{handyman.name || 'الحرفي'}</h2>
-            <p className="text-sm text-textGray">{currentOrder?.profession || ''}</p>
+          <div className="mt-3 text-center">
+            <h2 className="font-extrabold text-textDark text-lg">{handyman.name || 'الحرفي'}</h2>
+            <p className="text-xs font-semibold text-secondary mt-0.5">{currentOrder?.profession || 'خدمة صيانة'}</p>
           </div>
 
-          <hr className="my-6 border-borderGray" />
+          <hr className="my-5 border-neutral" />
 
-          <form onSubmit={handleSubmit}>
-            <p className="mb-4 text-center font-bold text-primary">
-              كيف كانت تجربتك مع {handyman.name || 'الحرفي'}؟
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <p className="text-center font-bold text-textDark text-sm">
+              كيف كانت جودة تنفيذ العمل؟
             </p>
-            <div className="mb-2 flex justify-center">
-              <StarRating value={rating} onChange={setRating} size={32} />
+
+            <div className="flex justify-center py-1">
+              <StarRating value={rating} onChange={setRating} size={34} />
             </div>
-            <p className="mb-6 text-center text-secondary font-medium">{RATING_LABELS[rating]}</p>
+            <p className="text-center text-secondary font-bold text-xs">
+              {RATING_LABELS[rating]}
+            </p>
 
-            <label className="mb-2 block text-sm text-textGray">شاركنا رأيك - اختياري</label>
-            <textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              rows={4}
-              className="input-field mb-4 resize-none"
-              placeholder="اكتب عن جودة العمل، الالتزام بالمواعيد..."
-            />
+            <div>
+              <label className="mb-1.5 block text-xs font-bold text-textDark">شاركنا رأيك بالتفصيل (اختياري)</label>
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                rows={3}
+                className="input-field resize-none text-xs"
+                placeholder="اكتب تعليقك حول دقة المواعيد، المعاملة، وجودة العمل..."
+              />
+            </div>
 
-            {error && <p className="mb-3 text-sm text-emergency">{error}</p>}
+            {error && <AlertMessage type="error" message={error} />}
 
-            <button type="submit" disabled={loading} className="btn-secondary flex w-full items-center justify-center gap-2">
-              <FaPaperPlane /> {loading ? 'جاري الإرسال...' : 'إرسال التقييم'}
+            <button
+              type="submit"
+              disabled={loading}
+              className="btn-secondary w-full py-3 text-sm font-bold shadow-md shadow-secondary/20 transition-all hover:-translate-y-0.5"
+            >
+              <FaPaperPlane size={12} /> {loading ? 'جاري إرسال التقييم...' : 'إرسال التقييم'}
             </button>
             <button
               type="button"
               onClick={() => navigate(-1)}
-              className="mt-3 w-full text-center text-sm text-primary"
+              className="w-full text-center text-xs font-semibold text-textGray hover:text-textDark py-1"
             >
               إلغاء
             </button>
@@ -107,12 +121,13 @@ export default function ReviewPage() {
         </div>
       </div>
 
-      <div className="mt-6 flex gap-3 rounded-xl bg-primary/5 p-4">
-        <FaShieldAlt className="shrink-0 text-primary mt-1" size={20} />
+      {/* Privacy note */}
+      <div className="flex gap-3 rounded-2xl bg-primary/5 border border-primary/15 p-4">
+        <FaShieldAlt className="shrink-0 text-primary mt-0.5" size={18} />
         <div>
-          <p className="font-bold text-primary text-sm">خصوصيتك تهمنا</p>
-          <p className="text-xs text-textGray mt-1">
-            تقييمك يساعدنا في تحسين الخدمات وسيتم مشاركته مع الحرفي لتحسين أدائه.
+          <p className="font-bold text-primary text-xs">تقييمك موثوق ومحمي</p>
+          <p className="text-[11px] text-textGray mt-0.5 leading-relaxed">
+            تساعد التقييمات الصادقة في رفع جودة الخدمات داخل المنصة ومكافأة الحرفيين الملتزمين.
           </p>
         </div>
       </div>

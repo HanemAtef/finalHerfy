@@ -21,11 +21,13 @@ import CustomerDashboard from './pages/customer/CustomerDashboard';
 import CustomerProfilePage from './pages/customer/CustomerProfilePage';
 import NotificationsPage from './pages/customer/NotificationsPage';
 import CustomerOrderDetailsPage from './pages/customer/CustomerOrderDetailsPage';
+import CustomerSupportPage from './pages/customer/CustomerSupportPage';
 
 import HandymanDashboard from './pages/handyman/HandymanDashboard';
 import HandymanOrdersPage from './pages/handyman/HandymanOrdersPage';
 import HandymanOrderDetailsPage from './pages/handyman/HandymanOrderDetailsPage';
 import HandymanSettingsPage from './pages/handyman/HandymanSettingsPage';
+import HandymanSupportPage from './pages/handyman/HandymanSupportPage';
 
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
@@ -38,14 +40,13 @@ import AdminAnalyticsPage from './pages/admin/AdminAnalyticsPage';
 import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
 import AdminProfilePage from './pages/admin/AdminProfilePage';
 import AdminNotificationsPage from './pages/admin/AdminNotificationsPage';
+import AdminSupportPage from './pages/admin/AdminSupportPage';
 
 import ChatPage from './pages/chat/ChatPage';
 import MyReportsPage from './pages/shared/MyReportsPage';
 import OrderPaymentPage from './pages/payment/OrderPaymentPage';
 import PaymentSuccess from './pages/payment/PaymentSuccess';
 import PaymentCancel from './pages/payment/PaymentCancel';
-
-
 
 function App() {
   return (
@@ -76,10 +77,11 @@ function App() {
             <Route path="tracking/:orderId" element={<TrackingPage />} />
             <Route path="review/:orderId" element={<ReviewPage />} />
             <Route path="dashboard" element={<CustomerDashboard />} />
+            <Route path="support" element={<CustomerSupportPage />} />
             <Route path="profile" element={<CustomerProfilePage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="reports" element={<MyReportsPage />} />
-           </Route>
+          </Route>
 
           {/* Handyman */}
           <Route
@@ -94,6 +96,7 @@ function App() {
             <Route path="dashboard" element={<HandymanDashboard />} />
             <Route path="orders" element={<HandymanOrdersPage />} />
             <Route path="orders/:id" element={<HandymanOrderDetailsPage />} />
+            <Route path="support" element={<HandymanSupportPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="reports" element={<MyReportsPage />} />
             <Route path="profile" element={<HandymanSettingsPage />} />
@@ -112,6 +115,7 @@ function App() {
             <Route path="dashboard" element={<AdminDashboard />} />
             <Route path="users" element={<AdminUsersPage />} />
             <Route path="users/:userId" element={<AdminUserDetailPage />} />
+            <Route path="support" element={<AdminSupportPage />} />
             <Route path="verifications" element={<AdminVerificationsPage />} />
             <Route path="reports" element={<AdminReportsPage />} />
             <Route path="wallets" element={<AdminWalletsPage />} />

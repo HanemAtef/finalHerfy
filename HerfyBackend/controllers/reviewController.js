@@ -1,33 +1,35 @@
-const Review=require("../models/Review");
-const Handyman=require("../models/Handyman");
-const User=require("../models/User");
-const Order=require("../models/Order")
+const Review = require("../models/Review");
+const Handyman = require("../models/Handyman");
+const User = require("../models/User");
+const Order = require("../models/Order");
 
-//add review
-const addReview =async(req,res)=>{
-    try{
+// Add review
+const addReview = async (req, res) => {
+  try {
+    const { rating, comment, orderId } = req.body;
 
-        const {rating,comment,orderId}= req.body;
-        //check for existing order
-        const order= await Order.findById(orderId);
-        if(!order) return res.status(404).json({msg: "Order not found"})
-            //chech for status of odrder
-        if (order.status !== "completed") {
+    // Check for existing order
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ msg: "Order not found" });
+
+    // Check order status
+    if (order.status !== "completed") {
       return res.status(400).json({ msg: "You can only review completed orders" });
     }
 
-    //check for user if he write the comment
-       if (order.customerId.toString() !== req.user.id) {
+    // Check customer authorization
+    if (order.customerId.toString() !== req.user.id) {
       return res.status(403).json({ msg: "You are not authorized to review this order" });
     }
 
-    //check for if the comment is exist
-   const existingReview = await Review.findOne({ customerId: req.user.id, orderId });
+    // Check if review already exists
+    const existingReview = await Review.findOne({ customerId: req.user.id, orderId });
     if (existingReview) {
-        return res.status(400).json({ msg: "You have already reviewed this order" });
+      return res.status(400).json({ msg: "You have already reviewed this order" });
     }
-    //add review
-const review = await Review.create({
+
+    // Create review
+    const review = await Review.create({
       orderId,
       handymanId: order.handymanId,
       customerId: req.user.id,
@@ -35,14 +37,19 @@ const review = await Review.create({
       comment,
     });
 
-    //update rating
+    // Update rating and verification status (10+ orders and >4.5 rating)
     const allReviews = await Review.find({ handymanId: order.handymanId });
-    const avgRating = allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length;
+    const avgRating = allReviews.length > 0
+      ? allReviews.reduce((sum, r) => sum + r.rating, 0) / allReviews.length
+      : 0;
 
-    await Handyman.findOneAndUpdate(
-      { userId: order.handymanId },
-      { rating: avgRating }
-    );
+    const handymanDoc = await Handyman.findOne({ userId: order.handymanId });
+    if (handymanDoc) {
+      handymanDoc.rating = avgRating;
+      const isVerified = (handymanDoc.completedOrders || 0) >= 10 && avgRating >= 4.5;
+      handymanDoc.verified = isVerified;
+      await handymanDoc.save();
+    }
 
     res.status(201).json({
       msg: "Review added successfully",
@@ -75,7 +82,6 @@ const getOrderReview = async (req, res) => {
   }
 };
 
-///////////////////////////////////////////////////////////
 const getHandymanReviews = async (req, res) => {
   try {
     const { handymanId } = req.params;
@@ -84,28 +90,25 @@ const getHandymanReviews = async (req, res) => {
       .populate("customerId", "name")
       .sort({ createdAt: -1 });
 
-    res.status(200).json({msg:"all reviews",data:reviews});
+    res.status(200).json({ msg: "all reviews", data: reviews });
   } catch (error) {
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });
   }
 };
-//////////////////////////////////////////////////
-const getCustomersReviews= async(req,res)=>{
-  try{
-    const {customerId}=req.params;
-       if (req.user.id !== customerId && req.user.role !== "admin") {
+
+const getCustomersReviews = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    if (req.user.id !== customerId && req.user.role !== "admin") {
       return res.status(403).json({ msg: "You can only view your own reviews" });
     }
-    const reviews=await Review.find({customerId}).populate("handymanId","name profession");
-    res.status(200).json({msg:"all reviews",data:reviews})
-  }
- catch (error) {
+    const reviews = await Review.find({ customerId }).populate("handymanId", "name profession");
+    res.status(200).json({ msg: "all reviews", data: reviews });
+  } catch (error) {
     console.log(error);
     res.status(500).json({ msg: "Server error", error: error.message });
   }
 };
-///////////////////////////////////////////////
-
 
 module.exports = { addReview, getOrderReview, getHandymanReviews, getCustomersReviews };

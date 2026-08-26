@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useDispatch } from 'react-redux';
-import { FaLock } from 'react-icons/fa';
+import { FaLock, FaKey } from 'react-icons/fa';
 import { changePassword as changePasswordThunk } from '../../store/slices/authSlice';
+import AlertMessage from './AlertMessage';
 
 export default function ChangePasswordCard() {
   const dispatch = useDispatch();
@@ -55,42 +56,47 @@ export default function ChangePasswordCard() {
   };
 
   return (
-    <div className="card space-y-4">
-      <div className="flex items-center gap-2">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <FaLock size={16} />
+    <div className="card">
+      <div className="flex items-center gap-3 mb-5">
+        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <FaKey size={18} />
         </div>
         <div>
-          <h3 className="font-bold text-textDark">تغيير كلمة المرور</h3>
-          <p className="text-sm text-textGray">أكد هويتك ثم حدّث كلمة المرور الخاصة بك</p>
+          <h3 className="font-bold text-textDark text-base">تغيير كلمة المرور</h3>
+          <p className="text-xs text-textGray mt-0.5">أدخل كلمة المرور الحالية ثم عيّن كلمة مرور جديدة</p>
         </div>
       </div>
 
+      {message && <AlertMessage type="success" message={message} className="mb-4" />}
+      {error && <AlertMessage type="error" message={error} className="mb-4" />}
+
       <div className="grid gap-4 md:grid-cols-2">
         <div className="md:col-span-2">
-          <label className="mb-1 block text-sm font-bold">كلمة المرور الحالية</label>
-          <input
-            type="password"
-            value={form.currentPassword}
-            onChange={(e) => setForm({ ...form, currentPassword: e.target.value })}
-            className="input-field"
-            placeholder="أدخل كلمة المرور الحالية"
-          />
+          <label className="mb-1.5 block text-xs font-bold text-textDark">كلمة المرور الحالية</label>
+          <div className="relative">
+            <input
+              type="password"
+              value={form.currentPassword}
+              onChange={(e) => setForm({ ...form, currentPassword: e.target.value })}
+              className="input-field"
+              placeholder="أدخل كلمة المرور الحالية"
+            />
+          </div>
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-bold">كلمة المرور الجديدة</label>
+          <label className="mb-1.5 block text-xs font-bold text-textDark">كلمة المرور الجديدة</label>
           <input
             type="password"
             value={form.newPassword}
             onChange={(e) => setForm({ ...form, newPassword: e.target.value })}
             className="input-field"
-            placeholder="أدخل كلمة المرور الجديدة"
+            placeholder="أدخل كلمة المرور الجديدة (6 أحرف فأكثر)"
           />
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-bold">تأكيد كلمة المرور</label>
+          <label className="mb-1.5 block text-xs font-bold text-textDark">تأكيد كلمة المرور</label>
           <input
             type="password"
             value={form.confirmPassword}
@@ -100,13 +106,15 @@ export default function ChangePasswordCard() {
           />
         </div>
 
-        <div className="md:col-span-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm">
-            {message && <p className="text-tertiary">{message}</p>}
-            {error && <p className="text-emergency">{error}</p>}
-          </div>
-          <button type="button" onClick={handleSubmit} disabled={isSubmitting} className="btn-primary text-sm">
-            {isSubmitting ? 'جاري التحديث...' : 'تغيير كلمة المرور'}
+        <div className="md:col-span-2 flex justify-end pt-2">
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isSubmitting}
+            className="btn-primary w-full sm:w-auto"
+          >
+            <FaLock size={13} />
+            {isSubmitting ? 'جاري التحديث...' : 'تحديث كلمة المرور'}
           </button>
         </div>
       </div>

@@ -35,15 +35,23 @@ const handleStripeWebhook = async (req, res) => {
           const result = await User.findOneAndUpdate(
             { _id: userId, penaltyAmount: { $gt: 0 } },
             { $set: { penaltyAmount: 0 } },
-            { new: true }
+            { returnDocument: 'after' }
           );
-          if (result) {
-            console.log(`[Webhook] Penalty settled for user ${userId} via Stripe. penaltyCount remains ${result.penaltyCount}.`);
+
+          const handymanResult = await Handyman.findOneAndUpdate(
+            { userId: userId, penaltyAmount: { $gt: 0 } },
+            { $set: { penaltyAmount: 0 } },
+            { returnDocument: 'after' }
+          );
+
+          if (result || handymanResult) {
+            const currentPenaltyCount = result?.penaltyCount || handymanResult?.penaltyCount || 0;
+            console.log(`[Webhook] Penalty settled for user ${userId} via Stripe. penaltyCount remains ${currentPenaltyCount}.`);
             await createNotification(
               null, userId, 'payment_confirmed',
               'تم تسوية الغرامة',
-              'تم استلام دفعة الغرامة بنجاح عبر البطاقة. يمكنك الآن إنشاء طلب جديد.',
-              { penaltyAmount: 0, penaltyCount: result.penaltyCount }
+              'تم استلام دفعة الغرامة بنجاح عبر البطاقة. يمكنك الآن استخدام المنصة بشكل طبيعي.',
+              { penaltyAmount: 0, penaltyCount: currentPenaltyCount }
             );
           } else {
             console.log(`[Webhook] Duplicate penalty settlement for user ${userId} — already settled, skipping.`);

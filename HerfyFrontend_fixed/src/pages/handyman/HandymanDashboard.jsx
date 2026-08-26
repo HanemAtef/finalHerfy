@@ -1,4 +1,3 @@
-// HerfyFrontend_fixed/src/pages/handyman/HandymanDashboard.jsx
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
@@ -10,17 +9,25 @@ import {
   FaTimes,
   FaEdit,
   FaBan,
+  FaHeadset,
+  FaComments,
+  FaExclamationTriangle,
+  FaCheckCircle,
+  FaArrowRight,
+  FaMapMarkerAlt,
+  FaCreditCard,
 } from 'react-icons/fa';
 import { getPendingOrders, updateOrderStatus } from '../../store/slices/orderSlice';
 import { handymanService } from '../../services/api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import PendingReviewCard from '../../components/handyman/PendingReviewCard';
 import MonthlyTargetBar from '../../components/handyman/MonthlyTargetBar';
+import PenaltySettlementModal from '../../components/customer/PenaltySettlementModal';
 import { formatPrice, getDefaultAvatar } from '../../utils/helpers';
 
 const greeting = () => {
   const hour = new Date().getHours();
-  return hour < 17 ? 'صباح الخير' : 'مساء الخير';
+  return hour < 12 ? 'صباح الخير' : 'مساء الخير';
 };
 
 export default function HandymanDashboard() {
@@ -35,12 +42,17 @@ export default function HandymanDashboard() {
   const [statusNote, setStatusNote] = useState(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [monthlyStats, setMonthlyStats] = useState(null);
+  const [showPenaltyModal, setShowPenaltyModal] = useState(false);
+  const [isUpdatingLocation, setIsUpdatingLocation] = useState(false);
+  const [locationErrorMsg, setLocationErrorMsg] = useState(null);
+  const [requestingSettlement, setRequestingSettlement] = useState(false);
+  const [settlementSuccessMsg, setSettlementSuccessMsg] = useState(null);
+  const [settlementErrorMsg, setSettlementErrorMsg] = useState(null);
 
   useEffect(() => {
     const checkStatus = async () => {
       try {
         const res = await handymanService.getStatus();
-        // console.log('[HandymanDashboard] status response:', res.data);
         
         if (res.data) {
           const status = res.data.status || res.data.data?.status || res.data.user?.registrationStatus;
@@ -58,30 +70,25 @@ export default function HandymanDashboard() {
             handymanInfo = res.data;
           }
           
-          // ✅ إذا لم تكن هناك بيانات، استخدم بيانات المستخدم
           if (!handymanInfo) {
             handymanInfo = {
               ...user,
-              profession: user?.profession || user?.specialization ,
-              city: user?.city || user?.address?.city ,
-              experienceYears: user?.experienceYears ,
+              profession: user?.profession || user?.specialization,
+              address: user?.address || 'غير محدد',
+              experienceYears: user?.experienceYears,
               price: user?.price || user?.hourlyRate,
             };
           }
           
           setHandymanData(handymanInfo);
           
-          // ✅ محاولة جلب البيانات من التخزين المحلي
           const savedHandymanData = localStorage.getItem('handymanRegistrationData');
           if (savedHandymanData) {
             try {
               const parsedData = JSON.parse(savedHandymanData);
-              // console.log('[HandymanDashboard] Found saved registration data:', parsedData);
-              // دمج البيانات المحفوظة مع البيانات الحالية
               setHandymanData(prev => ({
                 ...prev,
                 ...parsedData,
-                // التأكد من أن البيانات الأساسية تبقى
                 name: prev?.name || parsedData.name,
                 email: prev?.email || parsedData.email,
               }));
@@ -114,24 +121,21 @@ export default function HandymanDashboard() {
           setRegistrationStatus(user.registrationStatus);
         }
         
-        // ✅ بناء بيانات الحرفي من user
         if (user && !handymanData) {
           const userData = {
             ...user,
             profession: user?.profession || user?.specialization || 'قيد التحديد',
-            city: user?.city || user?.address?.city || 'قيد التحديد',
+            address: user?.address || 'قيد التحديد',
             experienceYears: user?.experienceYears || user?.experience || 0,
             price: user?.price || user?.hourlyRate || 0,
           };
           setHandymanData(userData);
         }
 
-        // ✅ محاولة جلب البيانات من التخزين المحلي
         const savedHandymanData = localStorage.getItem('handymanRegistrationData');
         if (savedHandymanData && !handymanData) {
           try {
             const parsedData = JSON.parse(savedHandymanData);
-            // console.log('[HandymanDashboard] Found saved registration data in error:', parsedData);
             setHandymanData(prev => ({
               ...prev,
               ...parsedData,
@@ -151,21 +155,16 @@ export default function HandymanDashboard() {
 
     const fetchHandymanFullData = async () => {
       try {
-        // console.log('[HandymanDashboard] Fetching full handyman data...');
         const profileRes = await handymanService.getHandymanProfile();
-        console.log('[HandymanDashboard] Full handyman data:', profileRes.data);
         if (profileRes.data) {
           const nextData = profileRes.data.handyman || profileRes.data.data || profileRes.data;
           setHandymanData(nextData);
         }
       } catch (error) {
-        // console.log('[HandymanDashboard] Could not fetch full handyman data (pending status expected)');
-        // ✅ محاولة استخدام البيانات المحفوظة في localStorage
         const savedData = localStorage.getItem('handymanRegistrationData');
         if (savedData) {
           try {
             const parsed = JSON.parse(savedData);
-            // console.log('[HandymanDashboard] Using saved registration data:', parsed);
             setHandymanData(prev => ({
               ...prev,
               ...parsed,
@@ -180,17 +179,31 @@ export default function HandymanDashboard() {
     checkStatus();
   }, [user]);
 
-  // تأثير منفصل لتحميل البيانات بعد تأكيد الحالة
   useEffect(() => {
     if (user?._id && registrationStatus === 'approved') {
       dispatch(getPendingOrders(user._id));
       handymanService.getAnalytics(user._id).then((res) => setAnalytics(res.data)).catch(() => {});
-      handymanService.getMonthlyStats().then((res) => setMonthlyStats(res.data)).catch(() => {});
+      handymanService.getMonthlyStats().then((res) => {
+        setMonthlyStats(res.data);
+        if (res.data?.verified !== undefined) {
+          setHandymanData(prev => prev ? { ...prev, verified: res.data.verified } : prev);
+        }
+      }).catch(() => {});
       handymanService
         .getById(user._id)
         .then((res) => {
           const isAvailable = res.data?.isAvailable ?? res.data?.handyman?.isAvailable;
           if (typeof isAvailable === 'boolean') setAvailable(isAvailable);
+          if (res.data) {
+            setHandymanData(prev => ({
+              ...prev,
+              ...res.data,
+              address: res.data.address || prev?.address,
+              city: res.data.city || prev?.city,
+              area: res.data.area || prev?.area,
+              location: res.data.location || prev?.location,
+            }));
+          }
         })
         .catch(() => {});
     }
@@ -209,17 +222,115 @@ export default function HandymanDashboard() {
     dispatch(updateOrderStatus({ id: orderId, status: 'cancelled' }));
   };
 
-  // =====================================================
-  // ========== RENDER BASED ON REGISTRATION STATUS ==========
-  // =====================================================
+  const handleUpdateLocation = () => {
+    setLocationErrorMsg(null);
+    if (!navigator.geolocation) {
+      setLocationErrorMsg("المتصفح لا يدعم تحديد الموقع.");
+      return;
+    }
+    
+    setIsUpdatingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        try {
+          let area = '';
+          let city = '';
+          let fullAddress = '';
+
+          try {
+            const geoRes = await fetch(
+              `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&addressdetails=1&accept-language=ar`
+            );
+            if (geoRes.ok) {
+              const geoData = await geoRes.json();
+              console.log('[ReverseGeocoding] Full Nominatim Response:', geoData);
+              const addr = geoData.address || {};
+              console.log('[ReverseGeocoding] Address Details:', addr);
+
+              // Smart Area extraction with fallback
+              area = 
+                addr.neighbourhood || 
+                addr.suburb || 
+                addr.quarter || 
+                addr.city_district || 
+                addr.district || 
+                addr.hamlet || 
+                addr.borough || 
+                addr.county || 
+                '';
+
+              // Smart City extraction with fallback
+              city = 
+                addr.city || 
+                addr.town || 
+                addr.village || 
+                addr.municipality || 
+                addr.state || 
+                '';
+
+              const road = addr.road || addr.street || addr.pedestrian || addr.footway || '';
+              fullAddress = [road, area, city].filter(Boolean).join('، ') || geoData.display_name || '';
+            }
+          } catch (geoErr) {
+            console.warn('Reverse geocoding error:', geoErr);
+          }
+
+          const res = await handymanService.updateProfile(user._id, {
+            location: { type: "Point", coordinates: [longitude, latitude] },
+            address: fullAddress || handymanData?.address || '',
+            city: city || handymanData?.city || '',
+            area: area || handymanData?.area || '',
+          });
+
+          if (res.data) {
+            const updated = res.data.handyman || res.data;
+            setHandymanData((prev) => ({
+              ...prev,
+              location: updated.location || { type: "Point", coordinates: [longitude, latitude] },
+              address: updated.address || fullAddress || prev?.address || '',
+              city: updated.city || city || prev?.city || '',
+              area: updated.area || area || prev?.area || '',
+            }));
+          }
+        } catch (error) {
+          setLocationErrorMsg("فشل تحديث الموقع في الخادم. يرجى المحاولة مرة أخرى.");
+        } finally {
+          setIsUpdatingLocation(false);
+        }
+      },
+      (error) => {
+        setIsUpdatingLocation(false);
+        if (error.code === error.PERMISSION_DENIED) {
+          setLocationErrorMsg("تم رفض الوصول للموقع. يرجى تفعيل الصلاحية من إعدادات المتصفح.");
+        } else {
+          setLocationErrorMsg("حدث خطأ أثناء الحصول على إحداثيات موقعك.");
+        }
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+
+  const handleRequestFineSettlement = async () => {
+    setRequestingSettlement(true);
+    setSettlementSuccessMsg(null);
+    setSettlementErrorMsg(null);
+    try {
+      const res = await handymanService.requestFineSettlement();
+      setSettlementSuccessMsg(res.data.msg || 'تم إرسال طلب تسوية الغرامة بنجاح، وهو قيد المراجعة من الإدارة');
+      if (user?._id) {
+        const analyticsRes = await handymanService.getAnalytics(user._id);
+        setAnalytics(analyticsRes.data);
+      }
+    } catch (err) {
+      setSettlementErrorMsg(err.response?.data?.msg || 'فشل إرسال طلب التسوية');
+    } finally {
+      setRequestingSettlement(false);
+    }
+  };
 
   if (loadingStatus) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <LoadingSpinner />
-        <p className="mr-3 text-textGray">جاري التحقق من حالة الحساب...</p>
-      </div>
-    );
+    return <LoadingSpinner text="جاري التحقق من حالة حسابك..." />;
   }
 
   const isPending = registrationStatus === 'pending' || 
@@ -227,38 +338,31 @@ export default function HandymanDashboard() {
                     (user && !registrationStatus);
 
   if (isPending) {
-    // console.log('[HandymanDashboard] Showing PendingReviewCard with data:', handymanData);
     return <PendingReviewCard handymanData={handymanData} />;
   }
 
   if (registrationStatus === 'rejected') {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
-        <div className="text-center">
-          <div className="mb-6 text-6xl">❌</div>
-          <h2 className="mb-3 text-2xl font-bold text-emergency">تم رفض طلب التسجيل</h2>
-          <div className="mx-auto max-w-md">
-            <p className="mb-4 text-textGray">
-              نأسف لإبلاغك بأن طلب التسجيل الخاص بك كحرفي في منصة حرفي لم يتم الموافقة عليه.
-            </p>
-            {statusNote && (
-              <div className="mb-4 rounded-lg bg-emergency/10 p-4 text-sm text-emergency">
-                <FaBan className="inline mr-2" />
-                <strong>سبب الرفض:</strong> {statusNote}
-              </div>
-            )}
-            <div className="rounded-lg bg-gray-50 p-4 text-sm text-gray-600">
-              <p>يمكنك محاولة التقديم مرة أخرى مع التأكد من استيفاء جميع الشروط المطلوبة.</p>
+        <div className="card max-w-md text-center p-8">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-emergency/10 text-emergency">
+            <FaBan size={30} />
+          </div>
+          <h2 className="mb-2 text-2xl font-bold text-emergency">تم رفض طلب التسجيل</h2>
+          <p className="mb-4 text-xs text-textGray leading-relaxed">
+            نأسف لإبلاغك بأن طلب التسجيل الخاص بك كحرفي في منصة حرفي لم تتم الموافقة عليه من قبل الإدارة.
+          </p>
+          {statusNote && (
+            <div className="mb-4 rounded-xl bg-emergency/5 border border-emergency/20 p-3 text-xs text-emergency font-medium text-right">
+              <strong>سبب الرفض:</strong> {statusNote}
             </div>
-          </div>
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-            <button
-              onClick={() => navigate('/')}
-              className="btn-outline flex items-center gap-2"
-            >
-              العودة للرئيسية
-            </button>
-          </div>
+          )}
+          <button
+            onClick={() => navigate('/')}
+            className="btn-outline w-full text-xs py-2.5"
+          >
+            العودة للصفحة الرئيسية
+          </button>
         </div>
       </div>
     );
@@ -267,35 +371,25 @@ export default function HandymanDashboard() {
   if (analytics?.isSuspended) {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
-        <div className="text-center">
-          <div className="mb-6 text-6xl">🚫</div>
-          <h2 className="mb-3 text-2xl font-bold text-danger">الحساب معلق مؤقتاً</h2>
-          <div className="mx-auto max-w-md">
-            <p className="mb-4 text-textGray">
-              عذراً، حسابك معلق حالياً. يرجى التواصل مع فريق الدعم لحل المشكلة.
-            </p>
-            {analytics?.suspendedReason && (
-              <div className="mb-4 rounded-lg bg-danger/10 p-4 text-sm text-danger">
-                <FaBan className="inline mr-2" />
-                <strong>سبب التعليق:</strong> {analytics.suspendedReason}
-              </div>
-            )}
-            {analytics?.walletBalance > 0 && (
-              <div className="rounded-lg bg-warning/10 p-4 text-sm text-warning">
-                <p>
-                  <strong>رصيد مستحق:</strong> {formatPrice(analytics.walletBalance)}
-                </p>
-                <p className="mt-1 text-xs">
-                  يرجى تسوية الرصيد المستحق لإعادة تفعيل الحساب
-                </p>
-              </div>
-            )}
+        <div className="card max-w-md text-center p-8">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-emergency/10 text-emergency">
+            <FaBan size={30} />
           </div>
+          <h2 className="mb-2 text-2xl font-bold text-emergency">الحساب معلق مؤقتاً</h2>
+          <p className="mb-4 text-xs text-textGray leading-relaxed">
+            عذراً، حسابك معلق حالياً بسبب تجاوز نسبة الإلغاء أو وجود مستحقات مالية غير مسددة.
+          </p>
+          {analytics?.suspendedReason && (
+            <div className="mb-4 rounded-xl bg-emergency/5 border border-emergency/20 p-3 text-xs text-emergency text-right">
+              <strong>سبب التعليق:</strong> {analytics.suspendedReason}
+            </div>
+          )}
           <button
-            onClick={() => navigate('/contact-support')}
-            className="mt-6 btn-primary flex items-center gap-2"
+            onClick={() => navigate('/handyman/support')}
+            className="btn-primary w-full text-xs py-2.5 flex items-center justify-center gap-2"
           >
-            التواصل مع الدعم
+            <FaHeadset />
+            <span>التواصل مع الإدارة للدعم</span>
           </button>
         </div>
       </div>
@@ -305,15 +399,17 @@ export default function HandymanDashboard() {
   if (registrationStatus !== 'approved') {
     return (
       <div className="flex min-h-[60vh] flex-col items-center justify-center px-4">
-        <div className="text-center">
-          <div className="mb-6 text-6xl">⚠️</div>
-          <h2 className="mb-3 text-2xl font-bold text-warning">حالة الحساب غير معروفة</h2>
-          <p className="text-textGray">
-            يرجى التواصل مع فريق الدعم لمعرفة حالة حسابك.
+        <div className="card max-w-md text-center p-8">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-secondary/10 text-secondary">
+            <FaExclamationTriangle size={30} />
+          </div>
+          <h2 className="mb-2 text-xl font-bold text-textDark">حالة الحساب غير مؤكدة</h2>
+          <p className="mb-4 text-xs text-textGray">
+            يرجى التواصل مع فريق الدعم للتحقق من حالة تفعيل حسابك المهني.
           </p>
           <button
-            onClick={() => navigate('/contact-support')}
-            className="mt-6 btn-primary"
+            onClick={() => navigate('/handyman/support')}
+            className="btn-primary w-full text-xs py-2.5"
           >
             التواصل مع الدعم
           </button>
@@ -322,205 +418,347 @@ export default function HandymanDashboard() {
     );
   }
 
-  // =====================================================
-  // ========== APPROVED HANDYMAN DASHBOARD ==========
-  // =====================================================
-
   return (
-    <div>
-      <div className="mb-6 overflow-hidden rounded-3xl bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral p-6 transition-all duration-300 hover:shadow-lg relative">
-        <div className="absolute top-0 right-0 w-64 h-full bg-gradient-to-l from-primary/5 to-transparent pointer-events-none" />
-        
-        <div className="relative z-10 flex flex-wrap items-start justify-between gap-4">
+    <div className="space-y-6">
+      {/* Welcome & Status Bar Card */}
+      <div className="card relative overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-textDark">{greeting()}، {user?.name?.split(' ')[0]}</h1>
-            <p className="text-sm text-textGray">
-              لديك {orders.length} طلب{orders.length !== 1 ? 'ات' : ''} جديد{orders.length !== 1 ? 'ة' : ''} اليوم
-            </p>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-tertiary/10 px-3 py-1 text-xs font-bold text-tertiary">
-                <span className="h-2 w-2 rounded-full bg-tertiary"></span>
+            <div className="flex items-center gap-2 mb-1">
+              <h1 className="text-2xl font-extrabold text-textDark">
+                {greeting()}، {user?.name?.split(' ')[0]}
+              </h1>
+              <span className="inline-flex items-center gap-1 rounded-full bg-tertiary/10 px-2.5 py-0.5 text-[11px] font-bold text-tertiary">
+                <span className="h-1.5 w-1.5 rounded-full bg-tertiary" />
                 حساب مفعل
               </span>
-              {user?.verified && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-3 py-1 text-xs font-bold text-blue-500">
-                  <FaCheck size={10} />
-                  موثق
+              {(analytics?.verified || (handymanData?.verified && (analytics?.completedOrders ?? 0) >= 10 && (analytics?.rating ?? 0) >= 4.5)) && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-bold text-primary">
+                  <FaCheckCircle size={10} /> موثق
                 </span>
               )}
             </div>
+            <p className="text-xs text-textGray">
+              لديك <span className="font-bold text-textDark">{orders.length} طلبات جديدة</span> بانتظار ردك وتحديد السعر
+            </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex rounded-xl overflow-hidden border-2 border-neutral shadow-sm bg-neutral/50 p-1">
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Availability Segmented Switch */}
+            <div className="flex rounded-xl border border-borderGray bg-neutral p-1 shadow-2xs">
               <button
                 type="button"
                 onClick={() => handleAvailability(true)}
-                className={`px-4 py-2 text-sm font-bold flex items-center gap-2 ${
-                  available ? 'bg-tertiary text-white' : 'bg-white text-textGray'
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  available ? 'bg-tertiary text-white shadow-sm' : 'text-textGray hover:text-textDark'
                 }`}
               >
-                <span className="h-2 w-2 rounded-full bg-white" /> متاح
+                متاح للعمل
               </button>
               <button
                 type="button"
                 onClick={() => handleAvailability(false)}
-                className={`px-4 py-2 text-sm font-bold ${
-                  !available ? 'bg-textGray text-white' : 'bg-white text-textGray'
+                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${
+                  !available ? 'bg-textGray text-white shadow-sm' : 'text-textGray hover:text-textDark'
                 }`}
               >
                 مشغول
               </button>
             </div>
+
+            <Link
+              to="/handyman/support"
+              className="btn-outline text-xs py-2 px-3.5"
+            >
+              <FaHeadset size={12} /> الدعم
+            </Link>
+
             <button
               type="button"
               onClick={() => navigate('/handyman/profile')}
-              className="btn-outline flex items-center gap-2 text-sm py-2 bg-white hover:-translate-y-0.5 shadow-sm"
+              className="btn-outline text-xs py-2 px-3.5"
             >
-              <FaEdit /> تعديل الملف الشخصي
+              <FaEdit size={12} /> تعديل الملف
             </button>
           </div>
         </div>
       </div>
 
-      {analytics?.walletBalance > 0 && (
-        <div
-          className={`card mb-6 flex flex-wrap items-center justify-between gap-3 border-r-4 ${
-            analytics.isSuspended ? 'border-emergency bg-emergency/5' : 'border-secondary bg-secondary/5'
-          }`}
-        >
-          <div>
-            <p className="font-bold text-textDark">
-              رصيد العمولة المستحقة عليك: <span className="text-secondary">{formatPrice(analytics.walletBalance)}</span>
-            </p>
-            <p className="text-sm text-textGray">
-              {analytics.isSuspended
-                ? `حسابك معلّق حتى تسوية الرصيد${analytics.suspendedReason ? `: ${analytics.suspendedReason}` : ''}`
-                : 'عمولة المنصة على الطلبات المدفوعة كاش — يُرجى التسوية مع فريق الدعم'}
-            </p>
+      {/* Penalties Notice Banner */}
+      {analytics && (analytics.penaltyAmount || 0) > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border-r-4 border-r-emergency bg-emergency/5 border border-emergency/20 p-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emergency/10 text-emergency shrink-0">
+              <FaExclamationTriangle size={20} />
+            </div>
+            <div>
+              <p className="font-extrabold text-emergency text-sm">
+                الغرامات المستحقة: <span className="text-base">{formatPrice(analytics.penaltyAmount)}</span>
+                <span className="text-xs font-normal text-textDark mr-2">({analytics.penaltyCount || 0} مخالفات مسجلة تاريخياً)</span>
+              </p>
+              <p className="text-xs text-textDark mt-0.5">
+                تفاصيل الغرامات: <span className="font-medium">غرامة إلغاء طلبات متكررة.</span>
+                نسبة الإلغاء الحالية: <span className="font-bold text-emergency">{analytics.cancellationRate !== undefined ? `${analytics.cancellationRate}%` : '0%'}</span> ({analytics.cancelledOrders || 0} طلبات ملغاة).
+                <span className="font-bold text-emergency mr-1">لا يمكنك قبول أي طلبات جديدة حتى سداد الغرامة بالكامل.</span>
+              </p>
+            </div>
           </div>
-          {analytics.isSuspended && (
-            <span className="rounded-full bg-emergency px-3 py-1 text-xs font-bold text-white">الحساب معلّق</span>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPenaltyModal(true)}
+              className="flex items-center gap-2 rounded-xl bg-emergency px-5 py-2.5 text-xs font-extrabold text-white shadow-md hover:bg-emergency/90 transition-all active:scale-95 shrink-0"
+            >
+              <FaCreditCard size={14} />
+              دفع الغرامة بالبطاقة (Visa/Card)
+            </button>
+          </div>
         </div>
       )}
 
-      {analytics?.pendingEarnings > 0 && (
-        <div className="card mb-6 flex flex-wrap items-center justify-between gap-3 border-r-4 border-tertiary bg-tertiary/5">
+      {/* Wallet Balance Alerts */}
+      {analytics?.walletBalance > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-r-4 border-r-secondary bg-secondary/5 border border-secondary/20 p-4">
           <div>
-            <p className="font-bold text-textDark">
-              مستحقاتك من الدفع الإلكتروني: <span className="text-tertiary">{formatPrice(analytics.pendingEarnings)}</span>
+            <p className="font-bold text-textDark text-sm">
+              عمولة المنصة المستحقة: <span className="font-extrabold text-secondary">{formatPrice(analytics.walletBalance)}</span>
             </p>
-            <p className="text-sm text-textGray">
-              سيتم تحويل هذا المبلغ إليك من فريق الدعم قريباً
+            <p className="text-xs text-textGray mt-0.5">
+              نسبة عمولة المنصة عن الطلبات النقدية (الكاش) — يرجى تسويتها بانتظام.
             </p>
           </div>
-          <span className="rounded-full bg-tertiary/20 px-3 py-1 text-xs font-bold text-tertiary">قيد التحويل</span>
         </div>
       )}
+
+      {(analytics?.wallet?.pendingEarnings || analytics?.pendingEarnings) > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border-r-4 border-r-tertiary bg-tertiary/5 border border-tertiary/20 p-4">
+          <div>
+            <p className="font-bold text-textDark text-sm">
+              مستحقاتك من الدفع الإلكتروني: <span className="font-extrabold text-tertiary">{formatPrice(analytics?.wallet?.pendingEarnings || analytics?.pendingEarnings)}</span>
+            </p>
+            <p className="text-xs text-textGray mt-0.5">
+              أرباحك المحصلة بالبطاقة جاهزة للتحويل لحسابك البنكي/المحفظة.
+            </p>
+          </div>
+          <span className="badge-status bg-tertiary/20 text-tertiary text-xs font-bold">قيد التحويل</span>
+        </div>
+      )}
+
+      {/* Base Location Section */}
+      <div className="mb-6 rounded-2xl bg-white border border-neutral shadow-card p-5">
+        <div className="flex items-center justify-between mb-3 pb-2 border-b border-neutral/60">
+          <div className="flex items-center gap-2">
+            <FaMapMarkerAlt className="text-primary" size={18} />
+            <h3 className="font-bold text-textDark text-base">الموقع الأساسي للحرفي (Base Location)</h3>
+          </div>
+          <button
+            onClick={handleUpdateLocation}
+            disabled={isUpdatingLocation}
+            className="text-xs bg-primary text-white px-4 py-2 rounded-xl hover:bg-primary/90 transition-all font-bold disabled:opacity-50 shadow-xs"
+          >
+            {isUpdatingLocation ? 'جاري تحديد وتحديث الموقع...' : 'تحديث الموقع'}
+          </button>
+        </div>
+        {locationErrorMsg && (
+          <div className="mb-3 text-xs text-emergency bg-emergency/10 p-2.5 rounded-xl font-bold border border-emergency/20">
+            {locationErrorMsg}
+          </div>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-textGray leading-relaxed">
+          <div className="space-y-1.5">
+            <p>
+              <strong className="text-textDark font-bold"> المنطقة: </strong> 
+              <span className="text-textDark">{handymanData?.area || 'غير محددة'}</span>
+            </p>
+            <p>
+              <strong className="text-textDark font-bold"> المدينة: </strong> 
+              <span className="text-textDark">{handymanData?.city || 'غير محددة'}</span>
+            </p>
+            <p>
+              <strong className="text-textDark font-bold"> العنوان: </strong> 
+              <span className="text-textDark">{handymanData?.address || 'غير محدد'}</span>
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <p>
+              <strong className="text-textDark font-bold"> الإحداثيات: </strong> 
+              {handymanData?.location?.coordinates && handymanData.location.coordinates.length === 2 ? (
+                <span className="font-mono text-primary font-bold">
+                  {handymanData.location.coordinates[1].toFixed(5)}, {handymanData.location.coordinates[0].toFixed(5)}
+                </span>
+              ) : (
+                <span className="text-textGray">غير محددة</span>
+              )}
+            </p>
+          </div>
+        </div>
+      </div>
 
       {monthlyStats && (
         <MonthlyTargetBar
-          completed={monthlyStats.monthlyCompleted}
-          target={monthlyStats.target}
+          completed={monthlyStats.completedOrders || 0}
+          target={10}
+          isTrusted={handymanData?.verified}
         />
       )}
 
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {[
-          {
-            icon: FaStar,
-            color: 'border-tertiary',
-            title: 'متوسط التقييم',
-            value: analytics ? analytics.rating.toFixed(1) : '—',
-            sub: 'بناءً على تقييمات حقيقية',
-          },
-          {
-            icon: FaMoneyBillWave,
-            color: 'border-secondary',
-            title: 'إجمالي الأرباح',
-            value: analytics ? formatPrice(analytics.totalEarnings) : '—',
-            sub: `${analytics?.completedOrders ?? 0} طلب مكتمل`,
-          },
-          {
-            icon: FaClipboardList,
-            color: 'border-primary',
-            title: 'طلبات قيد الانتظار',
-            value: orders.length,
-            sub: `${analytics?.totalOrders ?? 0} إجمالي الطلبات`,
-          },
-        ].map(({ icon: Icon, color, title, value, sub }) => (
-          <div key={title} className={`overflow-hidden rounded-2xl bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-neutral transition-all duration-300 hover:-translate-y-1 hover:shadow-lg relative`}>
-            <div className={`absolute top-0 right-0 left-0 h-1 bg-gradient-to-l ${color.replace('border-', 'from-').replace('text-', 'from-')} to-transparent opacity-50`} />
-            
-            <div className="flex items-center gap-4 mb-4">
-              <div className={`p-3 rounded-xl bg-neutral text-primary`}>
-                <Icon size={24} />
-              </div>
-              <p className="text-sm font-semibold text-textGray">{title}</p>
+      {/* 4 Stats Grid */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Rating */}
+        <div className="stat-card border-r-4 border-r-tertiary">
+          <div className="flex items-center justify-between">
+            <span className="stat-label">متوسط التقييم</span>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-tertiary/10 text-tertiary">
+              <FaStar size={16} />
             </div>
-            
-            <p className="text-3xl font-bold text-textDark mb-1">{value}</p>
-            <p className="text-xs text-textGray bg-neutral inline-block px-2 py-1 rounded-md">{sub}</p>
           </div>
-        ))}
+          <p className="stat-value">{analytics ? (analytics.ratings?.average || 0).toFixed(1) : '—'}</p>
+          <p className="text-xs text-textGray mt-1">بناءً على آراء العملاء</p>
+        </div>
+
+        {/* Total Earnings */}
+        <div className="stat-card border-r-4 border-r-secondary">
+          <div className="flex items-center justify-between">
+            <span className="stat-label">إجمالي الأرباح</span>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-secondary/10 text-secondary">
+              <FaMoneyBillWave size={16} />
+            </div>
+          </div>
+          <p className="stat-value">{analytics ? formatPrice(analytics.earnings?.total || 0) : '—'}</p>
+          <p className="text-xs text-textGray mt-1">{analytics?.orders?.completed ?? 0} طلب مكتمل</p>
+        </div>
+
+        {/* Cancellation Rate */}
+        <div className={`stat-card border-r-4 ${((analytics?.cancellationRate ?? 0) > 20) ? 'border-r-emergency' : 'border-r-amber-500'}`}>
+          <div className="flex items-center justify-between">
+            <span className="stat-label">نسبة الإلغاء</span>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+              <FaBan size={15} />
+            </div>
+          </div>
+         
+          <p className="stat-value">{analytics?.orders?.cancelled ?? 0} طلبات ملغاة </p>
+        </div>
+
+        {/* Penalty Amount */}
+        <div className={`stat-card border-r-4 ${(analytics?.penaltyAmount || 0) > 0 ? 'border-r-emergency' : 'border-r-primary'}`}>
+          <div className="flex items-center justify-between">
+            <span className="stat-label">الغرامات المستحقة</span>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <FaExclamationTriangle size={15} />
+            </div>
+          </div>
+          <p className="stat-value text-emergency">{analytics ? formatPrice(analytics.penaltyAmount || 0) : '0 ج.م'}</p>
+          <p className="text-xs text-textGray mt-1">{analytics?.penaltyCount ?? 0} مخالفات مسجلة</p>
+        </div>
       </div>
 
-      <section className="mb-8">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 font-bold text-textDark">
-            <FaClipboardList className="text-primary" /> الطلبات الواردة
-          </h2>
-          <Link to="/handyman/orders" className="text-sm text-primary">عرض الكل ←</Link>
+      {/* Pending Reschedule Requests Banner */}
+      {orders.some((o) => ['scheduled', 'price_confirmed'].includes(o.status) && o.rescheduleRequest?.status === 'pending' && o.rescheduleRequest?.requestedBy === 'customer') && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 p-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/20 text-amber-700 shrink-0">
+              <FaClipboardList size={18} />
+            </div>
+            <div>
+              <p className="font-bold text-amber-800 text-sm">لديك طلب إعادة جدولة جديد من العميل</p>
+              <p className="text-xs text-textDark mt-0.5">
+                طلب العميل تغيير موعد الطلب. اضغط للاطلاع على الموعد المقترح والموافقة أو الرفض.
+              </p>
+            </div>
+          </div>
+          <Link
+            to={`/handyman/orders/${orders.find((o) => ['scheduled', 'price_confirmed'].includes(o.status) && o.rescheduleRequest?.status === 'pending' && o.rescheduleRequest?.requestedBy === 'customer')?._id}`}
+            className="rounded-xl bg-amber-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-amber-700 shadow-sm"
+          >
+            عرض الطلب والموافقة
+          </Link>
+        </div>
+      )}
+
+      {/* Incoming Orders Section */}
+      <div className="card space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-neutral">
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <FaClipboardList size={14} />
+            </div>
+            <h2 className="font-bold text-textDark text-base">الطلبات الواردة والجديدة</h2>
+          </div>
+          <Link to="/handyman/orders" className="text-xs font-semibold text-primary hover:underline">
+            عرض كل الطلبات ←
+          </Link>
         </div>
 
         {isLoading ? (
-          <LoadingSpinner />
+          <LoadingSpinner text="جاري تحديث الطلبات الواردة..." />
         ) : orders.length === 0 ? (
-          <div className="card text-center py-8 text-textGray">
-            <div className="text-4xl mb-3">📭</div>
-            لا توجد طلبات واردة حالياً
+          <div className="empty-state py-12">
+            <div className="empty-state-icon">📭</div>
+            <p className="empty-state-title">لا توجد طلبات جديدة حالياً</p>
+            <p className="empty-state-desc">تأكد من تفعيل وضع "متاح للعمل" لتلقي طلبات العملاء القريبة منك</p>
           </div>
         ) : (
           <div className="space-y-3">
             {orders.slice(0, 5).map((order) => (
-              <div key={order._id} className="rounded-2xl bg-white p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-neutral flex flex-wrap items-center justify-between gap-4 transition-all hover:shadow-md">
-                <div className="flex items-center gap-4">
-                  <div className="relative">
+              <div
+                key={order._id}
+                className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-4 rounded-2xl border border-neutral bg-white p-4 transition-all hover:border-primary/30 hover:shadow-sm"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="relative shrink-0">
                     <img
                       src={getDefaultAvatar(order.customerId?.name || 'عميل')}
                       alt=""
-                      className="h-14 w-14 rounded-full border-2 border-white shadow-sm"
+                      className="h-12 w-12 rounded-2xl object-cover border border-borderGray"
                     />
-                    <div className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-green-500 border-2 border-white" />
+                    <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-emerald-500 border-2 border-white" />
                   </div>
-                  <div>
-                    <p className="font-bold text-textDark text-lg">{order.customerId?.name || 'عميل'}</p>
+                  <div className="min-w-0">
+                    <p className="font-bold text-textDark text-sm truncate">{order.customerId?.name || 'عميل'}</p>
                     <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs font-semibold text-primary bg-primary/10 px-2 py-0.5 rounded-md">{order.profession}</span>
-                      <span className="text-xs text-textGray">• 2 كم بعيد</span>
+                      <span className="text-[11px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-md">{order.profession}</span>
+                      <span className="text-[11px] text-textGray flex items-center gap-1">
+                        <FaMapMarkerAlt size={10} /> قريب من موقعك
+                      </span>
                     </div>
                   </div>
                 </div>
-                <div className="flex gap-2 w-full sm:w-auto">
+
+                <div className="flex gap-2 w-full sm:w-auto shrink-0">
                   <Link
                     to={`/handyman/orders/${order._id}`}
-                    className="flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-tertiary px-5 py-2.5 text-sm font-bold text-white transition-all hover:bg-tertiary/90 hover:-translate-y-0.5 shadow-sm"
+                    className="btn-primary flex-1 sm:flex-none text-xs py-2 px-4 shadow-sm"
                   >
-                    <FaCheck /> قبول
+                    <FaCheck size={11} /> قبول وتحديد السعر
                   </Link>
                   <button
                     type="button"
                     onClick={() => handleReject(order._id)}
-                    className="flex flex-1 sm:flex-none items-center justify-center gap-2 rounded-xl bg-red-50 text-emergency px-5 py-2.5 text-sm font-bold transition-all hover:bg-red-100"
+                    className="flex-1 sm:flex-none items-center justify-center gap-1 rounded-xl bg-red-50 text-emergency px-3.5 py-2 text-xs font-bold transition-all hover:bg-red-100"
                   >
-                    <FaTimes /> رفض
+                    <FaTimes size={11} /> رفض
                   </button>
                 </div>
               </div>
             ))}
           </div>
         )}
-      </section>
+      </div>
+
+      {/* Penalty Settlement Modal */}
+      {showPenaltyModal && (
+        <PenaltySettlementModal
+          penaltyAmount={analytics?.penaltyAmount || user?.penaltyAmount || 0}
+          penaltyCount={analytics?.penaltyCount || user?.penaltyCount || 1}
+          onClose={() => {
+            setShowPenaltyModal(false);
+            if (user?._id) {
+              handymanService.getAnalytics(user._id).then((res) => setAnalytics(res.data)).catch(() => {});
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,151 +1,109 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
-import { FaTimes, FaCreditCard, FaMoneyBillWave, FaExclamationTriangle } from 'react-icons/fa';
+import { FaTimes, FaCreditCard, FaExclamationTriangle, FaShieldAlt } from 'react-icons/fa';
 import { penaltyService } from '../../services/api';
 import CheckoutForm from '../stripe/CheckoutForm';
 
 const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY?.trim();
 const stripePromise = stripePublishableKey ? loadStripe(stripePublishableKey) : null;
 
-/**
- * PenaltySettlementModal
- * Lets the customer settle an outstanding penalty via Stripe (card) or Cash.
- *
- * Stripe flow:
- *   1. POST /api/payments/penalty/create-intent → { clientSecret, penaltyAmount }
- *   2. Render <CheckoutForm> inside <Elements> with the clientSecret.
- *   3. On Stripe success → redirect to /payment/success?penalty=1
- *   4. The backend webhook sets penaltyAmount = 0. Frontend refreshes user data.
- *
- * Cash flow:
- *   Display info that admin must confirm. The frontend does NOT zero penaltyAmount.
- */
 export default function PenaltySettlementModal({ penaltyAmount, penaltyCount, onClose }) {
-  const [method, setMethod] = useState(null); // 'card' | 'cash' | null
   const [clientSecret, setClientSecret] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const handleSelectCard = async () => {
-    setMethod('card');
-    setError(null);
-    setLoading(true);
-    try {
-      const { data } = await penaltyService.createPaymentIntent();
-      setClientSecret(data.clientSecret);
-    } catch (err) {
-      setError(err.response?.data?.msg || 'فشل تهيئة الدفع. حاول مرة أخرى.');
-      setMethod(null);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    const initPayment = async () => {
+      setError(null);
+      setLoading(true);
+      try {
+        const { data } = await penaltyService.createPaymentIntent();
+        setClientSecret(data.clientSecret);
+      } catch (err) {
+        setError(err.response?.data?.msg || 'فشل تهيئة بوابة الدفع. يرجى المحاولة مرة أخرى.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initPayment();
+  }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-[2px]" onClick={onClose}>
       <div
-        className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+        className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-neutral animate-slide-up"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-primary">تسوية الغرامة</h2>
-          <button type="button" onClick={onClose} className="text-textGray hover:text-emergency">
-            <FaTimes size={20} />
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emergency/10 text-emergency">
+              <FaExclamationTriangle size={16} />
+            </div>
+            <h2 className="text-lg font-bold text-textDark">تسوية الغرامة بالبطاقة البنكية</h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-1.5 text-textGray hover:bg-neutral hover:text-textDark transition-all"
+          >
+            <FaTimes size={18} />
           </button>
         </div>
 
         {/* Penalty summary */}
-        <div className="mb-5 rounded-xl bg-emergency/10 p-4">
-          <div className="mb-2 flex items-center gap-2 text-emergency">
-            <FaExclamationTriangle />
-            <span className="font-bold">لديك غرامة مستحقة</span>
+        <div className="mb-5 rounded-2xl bg-emergency/5 border border-emergency/20 p-4">
+          <div className="flex items-center justify-between text-sm mb-2">
+            <span className="text-textGray">إجمالي قيمة الغرامة المستحقة</span>
+            <span className="text-lg font-extrabold text-emergency">{penaltyAmount} ج.م</span>
           </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-textGray">قيمة الغرامة</span>
-            <span className="font-bold text-emergency">{penaltyAmount} ج.م</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-textGray">عدد الإلغاءات المخالفة</span>
-            <span className="font-bold">{penaltyCount}</span>
+          <div className="flex items-center justify-between text-xs text-textGray">
+            <span>عدد المخالفات المسجلة</span>
+            <span className="font-bold text-textDark bg-white px-2 py-0.5 rounded-md border border-neutral">{penaltyCount} مخالفة</span>
           </div>
         </div>
 
         {/* Error */}
         {error && (
-          <div className="mb-4 rounded-lg bg-emergency/10 px-4 py-3 text-sm text-emergency">{error}</div>
+          <div className="mb-4 rounded-xl bg-emergency/10 border border-emergency/20 px-4 py-3 text-sm text-emergency font-medium">
+            {error}
+          </div>
         )}
 
         {/* Loading */}
         {loading && (
-          <div className="mb-4 flex items-center justify-center py-4 text-textGray">
-            <span className="animate-pulse">جاري تهيئة الدفع...</span>
+          <div className="mb-4 flex flex-col items-center justify-center py-6 gap-2">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            <span className="text-xs text-textGray font-medium">جاري تهيئة الدفع الإلكتروني الآمن (Stripe)...</span>
           </div>
         )}
 
         {/* Stripe payment form */}
-        {method === 'card' && clientSecret && stripePromise && (
-          <Elements stripe={stripePromise} options={{ clientSecret }}>
-            <CheckoutForm orderId="penalty" amount={penaltyAmount} penaltyMode />
-          </Elements>
-        )}
-
-        {/* Cash info */}
-        {method === 'cash' && (
-          <div className="space-y-3">
-            <div className="rounded-xl bg-secondary/10 p-4 text-sm text-textDark">
-              <p className="mb-2 font-bold">التسوية عبر الكاش</p>
-              <p className="text-textGray">
-                ل تسوية الغرامة عبر الكاش، يرجى التواصل مع الدعم أو زيارة أحد مكاتبنا.
-                سيقوم الأدمن بتأكيد استلام المبلغ وتسوية الغرامة في النظام.
-              </p>
-              <p className="mt-2 text-xs text-textGray">
-                ملاحظة: لا يمكن للنظام تصفير الغرامة تلقائيًا للدفع الكاش — يتطلب تأكيد الأدمن.
-              </p>
+        {!loading && clientSecret && stripePromise && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-xs text-textGray bg-neutral/30 p-2.5 rounded-xl">
+              <FaCreditCard className="text-primary" size={14} />
+              <span>الدفع بالبطاقة الإلكترونية (Visa / MasterCard / Meeza)</span>
             </div>
-            <button type="button" onClick={() => setMethod(null)} className="btn-outline w-full text-sm">
-              رجوع
-            </button>
+            <Elements stripe={stripePromise} options={{ clientSecret }}>
+              <CheckoutForm orderId="penalty" amount={penaltyAmount} penaltyMode />
+            </Elements>
           </div>
         )}
 
-        {/* Payment method selection */}
-        {method === null && !loading && (
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={handleSelectCard}
-              disabled={!stripePromise}
-              className="flex w-full items-center gap-3 rounded-xl border-2 border-borderGray p-4 text-right transition-all hover:border-primary hover:bg-primary/5 disabled:opacity-50"
-            >
-              <FaCreditCard size={24} className="text-primary" />
-              <div className="flex-1">
-                <p className="font-bold text-primary">الدفع بالبطاقة (Stripe)</p>
-                <p className="text-xs text-textGray">دفع فوري وآمن عبر البطاقة</p>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setMethod('cash')}
-              className="flex w-full items-center gap-3 rounded-xl border-2 border-borderGray p-4 text-right transition-all hover:border-secondary hover:bg-secondary/5"
-            >
-              <FaMoneyBillWave size={24} className="text-secondary" />
-              <div className="flex-1">
-                <p className="font-bold text-secondary">الدفع الكاش</p>
-                <p className="text-xs text-textGray">يتطلب تأكيد الأدمن</p>
-              </div>
-            </button>
+        {!loading && !stripePromise && !error && (
+          <div className="text-xs text-emergency p-3 rounded-xl bg-emergency/10 border border-emergency/20">
+            مفتاح بوابة الدفع (Stripe) غير مهيأ في إعدادات البيئة.
           </div>
         )}
 
         {/* Footer note */}
-        {method === null && (
-          <p className="mt-4 text-center text-xs text-textGray">
-            بعد تسوية الغرامة، يمكنك إنشاء طلب جديد فورًا.
-          </p>
-        )}
+        <div className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-textGray">
+          <FaShieldAlt className="text-tertiary" size={13} />
+          <span>الدفع آمن ومحمي بالكامل بتشفير SSL عبر بوابة Stripe.</span>
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import { useDispatch, useSelector } from 'react-redux';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaArrowRight, FaCamera, FaSignOutAlt } from 'react-icons/fa';
+import { FaArrowRight, FaCamera, FaSignOutAlt, FaShieldAlt } from 'react-icons/fa';
 import { logoutUser, updateProfile } from '../../store/slices/authSlice';
 import { uploadService } from '../../services/api';
 import { getDefaultAvatar } from '../../utils/helpers';
@@ -50,31 +50,36 @@ export default function AdminProfilePage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl">
-      <div className="mb-6 flex items-center gap-3">
+    <div className="mx-auto max-w-2xl space-y-6">
+      {/* Header */}
+      <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="rounded-full p-2 text-primary hover:bg-primary/5"
+          className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-borderGray text-primary hover:bg-neutral transition-colors shadow-sm"
           aria-label="رجوع"
         >
-          <FaArrowRight />
+          <FaArrowRight size={13} />
         </button>
-        <h1 className="text-2xl font-bold text-primary">الإعدادات الشخصية</h1>
+        <div>
+          <h1 className="text-2xl font-extrabold text-textDark">الملف الشخصي للمسؤول</h1>
+          <p className="text-xs text-textGray mt-0.5">إدارة بيانات حساب المدير وتعديل كلمة المرور</p>
+        </div>
       </div>
 
-      <div className="card mb-6 flex flex-col items-center gap-3 text-center">
+      {/* Avatar Profile Card */}
+      <div className="card flex flex-col items-center gap-3 text-center relative overflow-hidden">
         <div className="relative">
           <img
             src={user?.profileImage || getDefaultAvatar(user?.name)}
             alt={user?.name}
-            className="h-24 w-24 rounded-full object-cover"
+            className="h-24 w-24 rounded-3xl object-cover border-3 border-primary/20 shadow-sm"
           />
           <button
             type="button"
             onClick={() => avatarInputRef.current?.click()}
             disabled={avatarUploading}
-            className="absolute -bottom-1 -left-1 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white shadow"
+            className="absolute -bottom-1 -left-1 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white shadow-md hover:bg-primary/90 transition-transform active:scale-95"
           >
             <FaCamera size={12} />
           </button>
@@ -87,18 +92,21 @@ export default function AdminProfilePage() {
           />
         </div>
         <div>
-          <p className="text-lg font-bold text-textDark">{user?.name}</p>
-          <p className="text-sm text-textGray">مدير النظام</p>
+          <h2 className="text-lg font-extrabold text-textDark">{user?.name}</h2>
+          <span className="badge-status bg-primary/10 text-primary text-xs font-bold mt-1 inline-flex items-center gap-1">
+            <FaShieldAlt size={10} /> مدير النظام (Admin)
+          </span>
         </div>
       </div>
 
       {savedMsg && <AlertMessage type="success" message={savedMsg} />}
       {error && <AlertMessage type="error" message={typeof error === 'string' ? error : error.msg} />}
 
-      <form onSubmit={handleSave} className="card mb-6 space-y-4">
-        <h2 className="text-lg font-bold text-textDark">بيانات الحساب</h2>
+      {/* Account Info Form */}
+      <form onSubmit={handleSave} className="card space-y-4">
+        <h3 className="font-bold text-textDark text-sm pb-1 border-b border-neutral">البيانات الأساسية</h3>
         <div>
-          <label className="mb-1 block text-sm font-bold text-textDark">الاسم</label>
+          <label className="mb-1.5 block text-xs font-bold text-textDark">الاسم الكامل</label>
           <input
             value={account.name}
             onChange={(e) => setAccount((a) => ({ ...a, name: e.target.value }))}
@@ -107,7 +115,7 @@ export default function AdminProfilePage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-bold text-textDark">رقم الهاتف</label>
+          <label className="mb-1.5 block text-xs font-bold text-textDark">رقم الهاتف</label>
           <input
             value={account.phone}
             onChange={(e) => setAccount((a) => ({ ...a, phone: e.target.value }))}
@@ -115,24 +123,24 @@ export default function AdminProfilePage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-bold text-textDark">البريد الإلكتروني</label>
-          <input value={user?.email || ''} disabled className="input-field bg-neutral text-textGray" />
+          <label className="mb-1.5 block text-xs font-bold text-textDark">البريد الإلكتروني</label>
+          <input value={user?.email || ''} disabled className="input-field bg-neutral text-textGray cursor-not-allowed" />
         </div>
-        <button type="submit" disabled={isLoading} className="btn-primary w-full">
-          {isLoading ? 'جاري الحفظ...' : 'حفظ التغييرات'}
+        <button type="submit" disabled={isLoading} className="btn-primary w-full py-2.5 text-xs font-bold shadow-sm">
+          {isLoading ? 'جاري الحفظ...' : 'حفظ التعديلات'}
         </button>
       </form>
 
-      <div className="mb-6">
-        <ChangePasswordCard />
-      </div>
+      {/* Password Card */}
+      <ChangePasswordCard />
 
+      {/* Logout */}
       <button
         type="button"
         onClick={handleLogout}
-        className="flex w-full items-center justify-center gap-2 rounded-lg border border-emergency px-4 py-3 text-sm font-bold text-emergency hover:bg-emergency/5"
+        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-emergency/30 bg-emergency/5 px-4 py-3 text-xs font-bold text-emergency hover:bg-emergency hover:text-white transition-all shadow-sm"
       >
-        <FaSignOutAlt /> تسجيل الخروج
+        <FaSignOutAlt size={14} /> تسجيل الخروج من لوحة الإدارة
       </button>
     </div>
   );

@@ -110,64 +110,97 @@
         }
 
         res.status(200).json({ msg: "Notification deleted successfully" });
-    } catch (error) {
-        console.log(error);
-        res.status(500).json({ msg: "Server error", error: error.message });
-    }
-    };
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
 
-    // ========== 6. Create Notification (Centralized Arabic Helper) ==========
-    const ARABIC_MESSAGES = {
-      order_created: { title: 'طلب جديد 🟣', body: (d) => `${d.customerName || 'عميل'} قام بتقديم طلب جديد: ${d.profession || ''}`.trim() },
-      order_accepted: { title: 'تم قبول الطلب 🟠', body: () => 'قام الحرفي بقبول طلبك وتحديد السعر' },
-      order_rejected: { title: 'تم رفض الطلب 🔴', body: () => 'عذراً، تعذر قبول الطلب في الوقت الحالي' },
-      order_cancelled: { title: 'تم إلغاء الطلب 🔴', body: (d) => `${d.byName || 'المستخدم'} قام بإلغاء الطلب` },
-      order_completed: { title: 'تم إكتمال الطلب 🟢', body: () => 'تم إنجاز وإتمام العمل بنجاح' },
-      price_confirmed: { title: 'تأكيد السعر 🟠', body: () => 'قام العميل بتأكيد السعر المباشر للطلب' },
-      handyman_on_the_way: { title: 'الحرفي في الطريق 🟠', body: () => 'الحرفي في طريقه إليك الآن' },
-      payment_confirmed: { title: 'تأكيد الدفع 🟢', body: (d) => d.customBody || 'تم تأكيد استلام المبلغ نقداً بنجاح' },
-      payment_method_selected: { title: 'طريقة الدفع 🟡', body: (d) => d.customBody || 'تم اختيار طريقة الدفع' },
-      new_message: { title: 'رسالة جديدة 🔵', body: (d) => `لديك رسالة جديدة من ${d.senderName || 'المستخدم'}` },
-      penalty_warning: { title: 'تحذير غرامة 🟡', body: (d) => `تم تطبيق غرامة بقيمة ${d.penaltyAmount || 50} ج.م بسبب إلغاء الطلبات المتكرر` },
-      report_filed: { title: 'بلاغ جديد 🟡', body: () => 'تم إرسال البلاغ وقيد مراجعة فريق الدعم' },
-      report_resolved: { title: 'تم معالجة البلاغ 🔵', body: () => 'تمت مراجعة البلاغ واتخاذ الإجراء المناسب' },
-      emergency_request: { title: 'طلب طارئ فوري 🟣', body: () => 'يوجد طلب فوري طارئ يتطلب الاستجابة' },
-      reschedule_request: { title: 'طلب تغيير الموعد 🟡', body: () => 'تم تقديم طلب لإعادة جدولة موعد الخدمة' },
-      reschedule_response: { title: 'رد على تغيير الموعد 🟠', body: () => 'تم الرد على طلب إعادة الجدولة' },
-      handyman_verified: { title: 'تم توثيق الحساب 🟢', body: () => 'تهانينا! تم الاعتماد وتوثيق حسابك بنجاح' },
-      handyman_rejected: { title: 'رفض طلب التوثيق 🔴', body: (d) => d.reason ? `تم رفض طلب التوثيق. السبب: ${d.reason}` : 'تم رفض طلب التوثيق. يرجى مراجعة البيانات' },
-      handyman_suspended: { title: 'إيقاف الحساب 🔴', body: (d) => d.reason ? `تم إيقاف حسابك مؤقتاً. السبب: ${d.reason}` : 'تم إيقاف حسابك مؤقتاً من قبل الإدارة' },
-      handyman_unsuspended: { title: 'تنشيط الحساب 🔵', body: () => 'تم إلغاء الإيقاف وإعادة تنشيط حسابك' },
-      account_blocked: { title: 'حظر الحساب 🔴', body: () => 'تم حظر حسابك لمخالفة الشروط والأحكام' },
-      account_deleted: { title: 'حذف الحساب 🔴', body: () => 'تم حذف الحساب بشكل نهائي' },
-      system_alert: { title: 'تنبيه من النظام 🔵', body: (d) => d.customBody || 'تنبيه جديد من إدارة المنصة' },
-      promotion: { title: 'عرض خاص 🔵', body: (d) => d.customBody || 'عروض وتحديثات جديدة متاحة الآن' },
-    };
-
-    const createNotification = async (io, userId, type, title, body, data = {}) => {
-      try {
-        const arabicConfig = ARABIC_MESSAGES[type];
-        const finalTitle = arabicConfig ? arabicConfig.title : (title || 'إشعار جديد');
-        const finalBody = arabicConfig ? arabicConfig.body({ ...data, customBody: body }) : (body || 'لديك إشعار جديد');
-
-        const notification = await Notification.create({
-          userId,
-          type,
-          title: finalTitle,
-          body: finalBody,
-          data,
-        });
-
-        if (io) {
-          io.to(`user_${userId}`).emit('new-notification', notification);
-        }
-
-        return notification;
-      } catch (error) {
-        console.log(' Error creating notification:', error);
-        return null;
+// ========== 6. Create Notification (Centralized Arabic Helper) ==========
+const ARABIC_MESSAGES = {
+  order_created: { title: 'طلب جديد 🟣', body: (d) => `${d.customerName || 'عميل'} قام بتقديم طلب جديد: ${d.profession || ''}`.trim() },
+  order_accepted: { title: 'تم قبول الطلب 🟠', body: () => 'قام الحرفي بقبول طلبك وتحديد السعر' },
+  order_rejected: { title: 'تم رفض الطلب 🔴', body: () => 'عذراً، تعذر قبول الطلب في الوقت الحالي' },
+  order_cancelled: { title: 'تم إلغاء الطلب 🔴', body: (d) => `${d.byName || 'المستخدم'} قام بإلغاء الطلب` },
+  order_completed: { title: 'تم إكتمال الطلب 🟢', body: () => 'تم إنجاز وإتمام العمل بنجاح' },
+  price_confirmed: { title: 'تأكيد السعر 🟠', body: () => 'قام العميل بتأكيد السعر المباشر للطلب' },
+  handyman_on_the_way: { title: 'الحرفي في الطريق 🟠', body: () => 'الحرفي في طريقه إليك الآن' },
+  payment_confirmed: { title: 'تأكيد الدفع 🟢', body: (d) => d.customBody || 'تم تأكيد استلام المبلغ نقداً بنجاح' },
+  payment_method_selected: { title: 'طريقة الدفع 🟡', body: (d) => d.customBody || 'تم اختيار طريقة الدفع' },
+  new_message: { title: 'رسالة جديدة 🔵', body: (d) => `لديك رسالة جديدة من ${d.senderName || 'المستخدم'}` },
+  penalty_warning: { title: 'تحذير غرامة 🟡', body: (d) => `تم تطبيق غرامة بقيمة ${d.penaltyAmount || 50} ج.م بسبب إلغاء الطلبات المتكرر` },
+  report_filed: { title: 'بلاغ جديد 🟡', body: () => 'تم إرسال البلاغ وقيد مراجعة فريق الدعم' },
+  report_resolved: { title: 'تم معالجة البلاغ 🔵', body: () => 'تمت مراجعة البلاغ واتخاذ الإجراء المناسب' },
+  emergency_request: { title: 'طلب طارئ فوري 🟣', body: () => 'يوجد طلب فوري طارئ يتطلب الاستجابة' },
+  reschedule_request: {
+    title: () => 'طلب إعادة جدولة جديد 🟡',
+    body: (d) => {
+      if (d.senderRole === 'handyman') {
+        return `الحرفي ${d.senderName || ''} طلب إعادة جدولة طلبك إلى ${d.formattedNewDate || d.newDate || ''}.`.trim();
+      } else if (d.senderRole === 'customer') {
+        return `العميل ${d.senderName || ''} طلب إعادة جدولة الطلب إلى ${d.formattedNewDate || d.newDate || ''}.`.trim();
       }
-    };
+      return d.customBody || 'تم تقديم طلب لإعادة جدولة موعد الخدمة';
+    },
+  },
+  reschedule_response: {
+    title: (d) => (d.accepted ? 'تمت الموافقة على إعادة الجدولة 🟢' : 'تم رفض طلب إعادة الجدولة 🔴'),
+    body: (d) => {
+      if (d.accepted) {
+        return `وافق ${d.responderName || d.senderName || 'الطرف الآخر'} على الموعد الجديد للطلب #${String(d.orderId || '').slice(-6)}.`;
+      } else {
+        const reasonText = d.rejectionReason ? ` (السبب: ${d.rejectionReason})` : '';
+        return `رفض ${d.responderName || d.senderName || 'الطرف الآخر'} طلب إعادة الجدولة للطلب #${String(d.orderId || '').slice(-6)}${reasonText}.`;
+      }
+    },
+  },
+  handyman_verified: { title: 'تم توثيق الحساب 🟢', body: () => 'تهانينا! تم الاعتماد وتوثيق حسابك بنجاح' },
+  handyman_rejected: { title: 'رفض طلب التوثيق 🔴', body: (d) => d.reason ? `تم رفض طلب التوثيق. السبب: ${d.reason}` : 'تم رفض طلب التوثيق. يرجى مراجعة البيانات' },
+  handyman_suspended: { title: 'إيقاف الحساب 🔴', body: (d) => d.reason ? `تم إيقاف حسابك مؤقتاً. السبب: ${d.reason}` : 'تم إيقاف حسابك مؤقتاً من قبل الإدارة' },
+  handyman_unsuspended: { title: 'تنشيط الحساب 🔵', body: () => 'تم إلغاء الإيقاف وإعادة تنشيط حسابك' },
+  account_blocked: { title: 'حظر الحساب 🔴', body: () => 'تم حظر حسابك لمخالفة الشروط والأحكام' },
+  account_deleted: { title: 'حذف الحساب 🔴', body: () => 'تم حذف الحساب بشكل نهائي' },
+  system_alert: { title: 'تنبيه من النظام 🔵', body: (d) => d.customBody || 'تنبيه جديد من إدارة المنصة' },
+  promotion: { title: 'عرض خاص 🔵', body: (d) => d.customBody || 'عروض وتحديثات جديدة متاحة الآن' },
+};
+
+const createNotification = async (io, userId, type, title, body, data = {}) => {
+  try {
+    const arabicConfig = ARABIC_MESSAGES[type];
+    let finalTitle = title;
+    if (arabicConfig) {
+      if (typeof arabicConfig.title === 'function') {
+        finalTitle = arabicConfig.title(data);
+      } else if (arabicConfig.title) {
+        finalTitle = arabicConfig.title;
+      }
+    }
+    if (!finalTitle) finalTitle = 'إشعار جديد';
+
+    let finalBody = body;
+    if (arabicConfig && typeof arabicConfig.body === 'function') {
+      finalBody = arabicConfig.body({ ...data, customBody: body });
+    }
+    if (!finalBody) finalBody = 'لديك إشعار جديد';
+
+    const notification = await Notification.create({
+      userId,
+      type,
+      title: finalTitle,
+      body: finalBody,
+      data,
+    });
+
+    if (io) {
+      io.to(`user_${userId}`).emit('new-notification', notification);
+    }
+
+    return notification;
+  } catch (error) {
+    console.log(' Error creating notification:', error);
+    return null;
+  }
+};
 
     module.exports = {
       getNotifications,

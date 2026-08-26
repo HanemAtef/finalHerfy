@@ -92,6 +92,11 @@ const handymanSchema = new mongoose.Schema(
       default: 0,
     },
 
+    penaltyCount: {
+      type: Number,
+      default: 0,
+    },
+
     monthlyCancellationCount: {
       type: Number,
       default: 0,
@@ -145,9 +150,7 @@ const handymanSchema = new mongoose.Schema(
     // ** إضافة الملفات المرفقة **
     nationalId: {
       type: String, // مسار الصورة
-      required: function() {
-        return this.registrationStatus === 'pending';
-      }
+      default: '',
     },
 
     certificate: {
@@ -171,7 +174,16 @@ const handymanSchema = new mongoose.Schema(
     },
 
     address: {
-      type: String
+      type: String,
+      default: "",
+    },
+    city: {
+      type: String,
+      default: "",
+    },
+    area: {
+      type: String,
+      default: "",
     },
 
     // ** حقل للـ rejected القديم (للتوافق مع الكود الموجود) **

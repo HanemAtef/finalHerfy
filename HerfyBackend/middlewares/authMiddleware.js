@@ -54,12 +54,30 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
+    // Check user registration status (support routes exempt)
+    if (!user.isAdmin && !req.originalUrl?.includes('/api/support')) {
+      if (user.status === 'pending') {
+        return res.status(403).json({
+          success: false,
+          msg: "Your registration is pending admin approval.",
+          status: 'pending'
+        });
+      }
+      if (user.status === 'rejected') {
+        return res.status(403).json({
+          success: false,
+          msg: "Your registration request has been rejected.",
+          status: 'rejected'
+        });
+      }
+    }
+
     // =====================================================
     // ========== HANDYMAN SPECIFIC CHECKS ==========
     // =====================================================
     
-    // If user is handyman, check registration status
-    if (user.role === 'handyman') {
+    // If user is handyman, check registration status (support routes are exempt so users can contact admin)
+    if (user.role === 'handyman' && !req.originalUrl?.includes('/api/support')) {
       const handyman = await Handyman.findOne({ userId: user._id });
       
       if (!handyman) {
@@ -89,8 +107,8 @@ const authMiddleware = async (req, res, next) => {
         });
       }
 
-      // Check if handyman is suspended
-      if (handyman.isSuspended) {
+      // Check if handyman is suspended (exempt support and fines settlement routes)
+      if (handyman.isSuspended && !req.originalUrl?.includes('/fines') && !req.originalUrl?.includes('/penalty') && !req.originalUrl?.includes('/status')) {
         return res.status(403).json({
           success: false,
           msg: handyman.suspendedReason ? `حسابك معلق مؤقتاً: ${handyman.suspendedReason}` : "حسابك معلق مؤقتاً",

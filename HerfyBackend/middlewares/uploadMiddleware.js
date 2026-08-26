@@ -62,5 +62,25 @@ const uploadAudio = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB per voice note
 });
 
+// ===== Documents (KYC, National ID, Certificates, etc. - Images and PDF) =====
+const docExtRegex = /\.(jpeg|jpg|png|webp|gif|pdf)$/i;
+const docMimeRegex = /^(image\/(jpeg|jpg|png|webp|gif)|application\/pdf)$/i;
+
+const docFileFilter = (req, file, cb) => {
+  const extValid = docExtRegex.test(path.extname(file.originalname).toLowerCase());
+  const mimeValid = docMimeRegex.test(file.mimetype);
+  if (extValid || mimeValid) {
+    return cb(null, true);
+  }
+  cb(new Error("نوع الملف غير مدعوم. الملفات المسموحة: الصور (JPG, PNG, WebP) و PDF"));
+};
+
+const uploadDoc = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: docFileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
+
 module.exports = upload;
 module.exports.uploadAudio = uploadAudio;
+module.exports.uploadDoc = uploadDoc;

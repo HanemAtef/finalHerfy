@@ -8,14 +8,13 @@ const auditLogSchema = new mongoose.Schema(
     adminId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
     },
     action: {
       type: String,
       required: true, // e.g. "handyman.approve", "user.ban", "report.resolve"
     },
     targetType: {
-      type: String, // "User" | "Handyman" | "Order" | "Report" | "City" | "ServiceType"
+      type: String, // "User" | "Handyman" | "Order" | "Report" | "ServiceType"
     },
     targetId: {
       type: mongoose.Schema.Types.ObjectId,
