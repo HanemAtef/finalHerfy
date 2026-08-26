@@ -48,6 +48,8 @@ import OrderPaymentPage from './pages/payment/OrderPaymentPage';
 import PaymentSuccess from './pages/payment/PaymentSuccess';
 import PaymentCancel from './pages/payment/PaymentCancel';
 
+import ChatbotWidget from './components/chatbot/ChatbotWidget';
+
 function App() {
   return (
     <BrowserRouter>
@@ -73,9 +75,18 @@ function App() {
             <Route path="home" element={<HomePage />} />
             <Route path="map" element={<MapPage />} />
             <Route path="handyman/:id" element={<HandymanProfilePage />} />
-            <Route path="create-order/:handymanId" element={<CreateOrderPage />} />
-            <Route path="tracking/:orderId" element={<TrackingPage />} />
-            <Route path="review/:orderId" element={<ReviewPage />} />
+            <Route
+              path="create-order/:handymanId"
+              element={<CreateOrderPage />}
+            />
+            <Route
+              path="tracking/:orderId"
+              element={<TrackingPage />}
+            />
+            <Route
+              path="review/:orderId"
+              element={<ReviewPage />}
+            />
             <Route path="dashboard" element={<CustomerDashboard />} />
             <Route path="support" element={<CustomerSupportPage />} />
             <Route path="profile" element={<CustomerProfilePage />} />
@@ -92,14 +103,38 @@ function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<HandymanDashboard />} />
-            <Route path="orders" element={<HandymanOrdersPage />} />
-            <Route path="orders/:id" element={<HandymanOrderDetailsPage />} />
-            <Route path="support" element={<HandymanSupportPage />} />
-            <Route path="notifications" element={<NotificationsPage />} />
-            <Route path="reports" element={<MyReportsPage />} />
-            <Route path="profile" element={<HandymanSettingsPage />} />
+            <Route
+              index
+              element={<Navigate to="dashboard" replace />}
+            />
+            <Route
+              path="dashboard"
+              element={<HandymanDashboard />}
+            />
+            <Route
+              path="orders"
+              element={<HandymanOrdersPage />}
+            />
+            <Route
+              path="orders/:id"
+              element={<HandymanOrderDetailsPage />}
+            />
+            <Route
+              path="support"
+              element={<HandymanSupportPage />}
+            />
+            <Route
+              path="notifications"
+              element={<NotificationsPage />}
+            />
+            <Route
+              path="reports"
+              element={<MyReportsPage />}
+            />
+            <Route
+              path="profile"
+              element={<HandymanSettingsPage />}
+            />
           </Route>
 
           {/* Admin */}
@@ -111,21 +146,60 @@ function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<AdminDashboard />} />
-            <Route path="users" element={<AdminUsersPage />} />
-            <Route path="users/:userId" element={<AdminUserDetailPage />} />
-            <Route path="support" element={<AdminSupportPage />} />
-            <Route path="verifications" element={<AdminVerificationsPage />} />
-            <Route path="reports" element={<AdminReportsPage />} />
-            <Route path="wallets" element={<AdminWalletsPage />} />
-            <Route path="reference-data" element={<AdminReferenceDataPage />} />
-            <Route path="analytics" element={<AdminAnalyticsPage />} />
-            <Route path="audit-log" element={<AdminAuditLogPage />} />
-            <Route path="profile" element={<AdminProfilePage />} />
-            <Route path="notifications" element={<AdminNotificationsPage />} />
+            <Route
+              index
+              element={<Navigate to="dashboard" replace />}
+            />
+            <Route
+              path="dashboard"
+              element={<AdminDashboard />}
+            />
+            <Route
+              path="users"
+              element={<AdminUsersPage />}
+            />
+            <Route
+              path="users/:userId"
+              element={<AdminUserDetailPage />}
+            />
+            <Route
+              path="support"
+              element={<AdminSupportPage />}
+            />
+            <Route
+              path="verifications"
+              element={<AdminVerificationsPage />}
+            />
+            <Route
+              path="reports"
+              element={<AdminReportsPage />}
+            />
+            <Route
+              path="wallets"
+              element={<AdminWalletsPage />}
+            />
+            <Route
+              path="reference-data"
+              element={<AdminReferenceDataPage />}
+            />
+            <Route
+              path="analytics"
+              element={<AdminAnalyticsPage />}
+            />
+            <Route
+              path="audit-log"
+              element={<AdminAuditLogPage />}
+            />
+            <Route
+              path="profile"
+              element={<AdminProfilePage />}
+            />
+            <Route
+              path="notifications"
+              element={<AdminNotificationsPage />}
+            />
           </Route>
-            
+
           {/* Chat (customer & handyman) */}
           <Route
             path="/chat/:orderId"
@@ -145,6 +219,7 @@ function App() {
               </ProtectedRoute>
             }
           />
+
           <Route
             path="/customer/orders/:orderId"
             element={
@@ -153,15 +228,29 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route path="/payment/success" element={<PaymentSuccess />} />
-          <Route path="/payment/cancel" element={<PaymentCancel />} />
+
+          <Route
+            path="/payment/success"
+            element={<PaymentSuccess />}
+          />
+
+          <Route
+            path="/payment/cancel"
+            element={<PaymentCancel />}
+          />
 
           {/* Fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route
+            path="*"
+            element={<Navigate to="/" replace />}
+          />
         </Routes>
+
+        {/* Chatbot */}
+        <ChatbotWidget />
       </AuthInit>
     </BrowserRouter>
   );
 }
-        
+
 export default App;

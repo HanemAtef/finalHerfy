@@ -176,3 +176,6 @@ export const adminService = {
   rejectSettlementRequest: (id, data = {}) => api.patch(`/admin/settlement-requests/${id}/reject`, data),
   getFinePayments: () => api.get('/admin/fine-payments'),
 };
+export const chatbotService = {
+  ask: (data) => api.post('/chatbot/ask', data),
+};
