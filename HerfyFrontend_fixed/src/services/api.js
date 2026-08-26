@@ -67,6 +67,12 @@ export const handymanService = {
   requestFineSettlement: (data = {}) => api.post('/handymen/fines/request-settlement', data),
 };
 
+export const subscriptionService = {
+  // Returns the authenticated handyman's plan info from the backend.
+  // The backend is always the source of truth — never trust client-side plan state.
+  getSubscription: () => api.get('/handymen/subscription'),
+};
+
 export const orderService = {
   create: (data) => api.post('/orders/create', data),
   getById: (id) => api.get(`/orders/${id}`),
