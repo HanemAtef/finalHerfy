@@ -44,11 +44,14 @@ export const connectSocket = (token) => {
   lastHandshakeToken = token;
   socket = io(SOCKET_URL, {
     auth: { token },
-    transports: ['websocket'],
+    transports: ['polling', 'websocket'],
+    upgrade: true,
     autoConnect: false,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 20000,
   });
 
   console.log('[SOCKET AUDIT] connectSocket CREATE', {
