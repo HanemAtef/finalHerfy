@@ -259,6 +259,10 @@ app.use((err, req, res, next) => {
     });
   }
 });
+// subscription routes
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+
+app.use('/api/subscriptions', subscriptionRoutes);
 
 // ========== Server ==========
 const port = process.env.PORT || 8000;

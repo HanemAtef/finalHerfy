@@ -18,7 +18,7 @@ import {
   FaCreditCard,
 } from 'react-icons/fa';
 import { getPendingOrders, updateOrderStatus } from '../../store/slices/orderSlice';
-import { handymanService } from '../../services/api';
+import { handymanService, subscriptionService } from '../../services/api';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import PendingReviewCard from '../../components/handyman/PendingReviewCard';
 import MonthlyTargetBar from '../../components/handyman/MonthlyTargetBar';
@@ -48,6 +48,7 @@ export default function HandymanDashboard() {
   const [requestingSettlement, setRequestingSettlement] = useState(false);
   const [settlementSuccessMsg, setSettlementSuccessMsg] = useState(null);
   const [settlementErrorMsg, setSettlementErrorMsg] = useState(null);
+  const [subscription, setSubscription] = useState(null);
 
   useEffect(() => {
     const checkStatus = async () => {
@@ -189,6 +190,7 @@ export default function HandymanDashboard() {
           setHandymanData(prev => prev ? { ...prev, verified: res.data.verified } : prev);
         }
       }).catch(() => {});
+      subscriptionService.getSubscription().then((res) => setSubscription(res.data)).catch(() => {});
       handymanService
         .getById(user._id)
         .then((res) => {
@@ -601,6 +603,98 @@ export default function HandymanDashboard() {
           isTrusted={handymanData?.verified}
         />
       )}
+
+     {/* Subscription Card */}
+{subscription && (
+  <div
+    className={`mb-6 overflow-hidden rounded-3xl border bg-white p-5 shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all hover:shadow-lg ${
+      subscription.subscriptionPlan === 'PREMIUM'
+        ? 'border-yellow-300'
+        : 'border-neutral'
+    }`}
+  >
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex items-center gap-3">
+        <div
+          className={`flex h-10 w-10 items-center justify-center rounded-xl text-lg ${
+            subscription.subscriptionPlan === 'PREMIUM'
+              ? 'bg-yellow-100 text-yellow-600'
+              : 'bg-neutral text-textGray'
+          }`}
+        >
+          {subscription.subscriptionPlan === 'PREMIUM' ? '⭐' : '🆓'}
+        </div>
+
+        <div>
+          <p className="text-sm font-bold text-textDark">
+            {subscription.subscriptionPlan === 'PREMIUM'
+              ? 'باقة بريميوم'
+              : 'الباقة المجانية'}
+          </p>
+
+          <p className="text-xs text-textGray">
+            {subscription.subscriptionPlan === 'PREMIUM'
+              ? '200 ج.م / شهر'
+              : 'مجاناً'}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="text-center">
+          <p className="text-xs text-textGray">عمولة المنصة</p>
+          <p
+            className={`text-lg font-bold ${
+              subscription.subscriptionPlan === 'PREMIUM'
+                ? 'text-yellow-600'
+                : 'text-primary'
+            }`}
+          >
+            {subscription.commissionRate}%
+          </p>
+        </div>
+
+        <div className="text-center">
+          <p className="text-xs text-textGray">العملاء النشطون</p>
+          <p
+            className={`text-lg font-bold ${
+              subscription.remainingSlots === 0
+                ? 'text-emergency'
+                : 'text-tertiary'
+            }`}
+          >
+            {subscription.activeClients} /{' '}
+            {subscription.maxActiveClients}
+          </p>
+        </div>
+
+        <div className="text-center">
+          <p className="text-xs text-textGray">المتاح</p>
+          <p
+            className={`text-lg font-bold ${
+              subscription.remainingSlots === 0
+                ? 'text-emergency'
+                : 'text-tertiary'
+            }`}
+          >
+            {subscription.remainingSlots}
+          </p>
+        </div>
+
+        {/* Upgrade Button - FREE only */}
+        {subscription.subscriptionPlan === 'FREE' && (
+          <Link
+            to="/handyman/subscription"
+            className="btn-primary flex items-center gap-2 text-xs py-2.5 px-4"
+          >
+            <FaCreditCard size={12} />
+            ترقية إلى Premium
+          </Link>
+        )}
+      </div>
+    </div>
+  </div>
+)}
 
       {/* 4 Stats Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -195,7 +195,18 @@ const handymanSchema = new mongoose.Schema(
     rejectedReason: {
       type: String,
       default: null
-    }
+    },
+
+    // ========== Subscription ==========
+    // Plan defaults to FREE so all existing handymen are automatically
+    // on the free tier without any migration.
+    // Stripe integration will update this field via webhook — do NOT
+    // accept this field from user-facing request bodies.
+    subscriptionPlan: {
+      type: String,
+      enum: ["FREE", "PREMIUM"],
+      default: "FREE",
+    },
   },
   { timestamps: true }
 );

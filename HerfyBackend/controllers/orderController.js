@@ -9,7 +9,7 @@ const { createNotification } = require("./notificationController");
 const { cleanupThrottle } = require("../socket/liveTrackingThrottle");
 const {
   WALLET_DEBT_SUSPENSION_REASON,
-  ORDER_STATUS,
+  SUBSCRIPTION_PLANS,
   GEOFENCE_ALLOWED_RADIUS_METERS,
   normalizeOrderStatus,
   isAllowedStatusTransition,
@@ -57,13 +57,10 @@ const checkScheduleConflict = async ({
     const existingDurationHours = existing.expectedDuration ? Math.max(0.5, Number(existing.expectedDuration)) : 1;
     let existingEnd = existingStart + existingDurationHours * 60 * 60 * 1000;
 
-    // If order is currently in-progress or arrived and past its planned duration,
-    // its effective end extends to at least current time.
     if (["in-progress", "arrived"].includes(existing.status) && existingEnd < now) {
       existingEnd = now;
     }
 
-    // Overlap test: (newStart < existingEnd) && (existingStart < newEnd)
     if (newStart < existingEnd && existingStart < newEnd) {
       return {
         hasConflict: true,
@@ -124,9 +121,7 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ msg: "You cannot create an order for yourself" });
     }
 
-    const handymanProfile = await Handyman.findOne({
-      userId: handymanId,
-    });
+    const handymanProfile = await Handyman.findOne({ userId: handymanId });
 
     if (!handymanProfile || !handymanProfile.isAvailable) {
       return res.status(400).json({
@@ -144,7 +139,6 @@ const createOrder = async (req, res) => {
       customerCoords = customer.location.coordinates;
     }
 
-    // Validate coordinates
     if (
       !customerCoords ||
       customerCoords.length !== 2 ||
@@ -162,7 +156,6 @@ const createOrder = async (req, res) => {
 
     const now = new Date();
 
-    // Distance & Travel Time Validation:
     let handymanCoords = null;
     if (Array.isArray(handymanProfile?.location?.coordinates) && handymanProfile.location.coordinates.length === 2) {
       handymanCoords = handymanProfile.location.coordinates;
@@ -171,7 +164,7 @@ const createOrder = async (req, res) => {
     }
 
     let distanceKm = null;
-    let travelTimeMinutes = 10; // baseline travel time
+    let travelTimeMinutes = 10;
 
     if (
       handymanCoords &&
@@ -183,10 +176,6 @@ const createOrder = async (req, res) => {
     ) {
       const [hLng, hLat] = handymanCoords;
       const [cLng, cLat] = customerCoords;
-
-      const distanceMeters = calculateRoute
-        ? ((cLat - hLat) ** 2 + (cLng - hLng) ** 2) // placeholder for formula
-        : 0;
 
       const R = 6371000;
       const dLat = ((cLat - hLat) * Math.PI) / 180;
@@ -223,14 +212,12 @@ const createOrder = async (req, res) => {
     if (scheduledDate) {
       orderScheduledDate = new Date(scheduledDate);
 
-      // Reject past date/time (allow 2 min buffer for network request lag)
       if (orderScheduledDate.getTime() < now.getTime() - 2 * 60 * 1000) {
         return res.status(400).json({
           msg: "لا يمكن حجز موعد في وقت سابق. يرجى اختيار موعد قادم.",
         });
       }
 
-      // Validation: Earliest allowed appointment time = Current time + travel time + safety buffer
       if (orderScheduledDate.getTime() < minAllowedTime.getTime() - 2 * 60 * 1000) {
         const timeOpts = { hour: '2-digit', minute: '2-digit' };
         const minTimeStr = minAllowedTime.toLocaleTimeString('ar-EG', timeOpts);
@@ -248,7 +235,6 @@ const createOrder = async (req, res) => {
 
     const orderDuration = expectedDuration ? Number(expectedDuration) : null;
 
-    // Check for schedule conflict with handyman's existing active orders
     const scheduleConflict = await checkScheduleConflict({
       handymanId,
       scheduledDate: orderScheduledDate,
@@ -267,7 +253,18 @@ const createOrder = async (req, res) => {
     let penaltyAmount = 0;
     let totalPrice = serviceAmount + penaltyAmount;
 
-    const commissionRate = isEmergencyBool ? 15 : 10;
+    // Commission rate: emergency orders always use 15% (existing rule).
+    // For normal orders, use the handyman's subscription plan rate.
+    // The rate is snapshotted onto the order at creation so it is
+    // immutable even if the handyman later changes plan.
+    let commissionRate;
+    if (isEmergencyBool) {
+      commissionRate = 15;
+    } else {
+      const plan = handymanProfile.subscriptionPlan || "FREE";
+      commissionRate = SUBSCRIPTION_PLANS[plan]?.commissionRate ?? SUBSCRIPTION_PLANS.FREE.commissionRate;
+    }
+
     const expectedEndTime = orderDuration
       ? new Date(orderScheduledDate.getTime() + orderDuration * 60 * 60 * 1000)
       : null;
@@ -308,12 +305,10 @@ const createOrder = async (req, res) => {
       isEmergency: isEmergencyBool,
     });
 
-    // Update handyman totalOffers
     handymanProfile.totalOffers += 1;
     handymanProfile.acceptanceRate = handymanProfile.acceptedOffers / handymanProfile.totalOffers;
     await handymanProfile.save();
 
-    // ========== NOTIFICATION: New order to handyman ==========
     const io = req.app.get('io');
     await createNotification(
       io,
@@ -474,6 +469,7 @@ const updateOrderStatus = async (req, res) => {
 
     const currentStatus = order.status;
     const currentNormalized = normalizeOrderStatus(currentStatus);
+    let orderAlreadySaved = false;
 
     if (currentNormalized === "completed") {
       return res.status(400).json({ msg: "Cannot update a completed order" });
@@ -483,20 +479,18 @@ const updateOrderStatus = async (req, res) => {
       return res.status(400).json({ msg: "Cannot update an already cancelled order" });
     }
 
-    // Validate workflow transition unless admin
     if (!isAdmin && !isAllowedStatusTransition(currentNormalized, normalizedStatus)) {
       return res.status(400).json({
         msg: `انتقال غير مسموح لحالة الطلب من (${currentStatus}) إلى (${normalizedStatus}) وفقاً لقواعد العمل.`,
       });
     }
 
-    // ========== Arrived Logic (50m Geo-Fencing Protected) ==========
+    // ========== Arrived Logic (Geo-Fencing Protected) ==========
     if (normalizedStatus === "arrived") {
       if (!isHandyman && !isAdmin) {
         return res.status(403).json({ msg: "Only handyman can mark order as arrived" });
       }
 
-      // Verify Geo-Fencing on arrival with mandatory GPS coordinates
       const hLat = Number(req.body.latitude ?? req.body.handymanLocation?.latitude ?? req.body.coordinates?.[1] ?? req.body.handymanLocation?.coordinates?.[1]);
       const hLng = Number(req.body.longitude ?? req.body.handymanLocation?.longitude ?? req.body.coordinates?.[0] ?? req.body.handymanLocation?.coordinates?.[0]);
 
@@ -524,7 +518,7 @@ const updateOrderStatus = async (req, res) => {
           Math.cos((cLat * Math.PI) / 180) *
           Math.sin(dLon / 2) ** 2;
       const distM = Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-      const allowedRadius = Number(process.env.GEO_FENCE_RADIUS_METERS) || 50;
+      const allowedRadius = Number(process.env.GEO_FENCE_RADIUS_METERS) || GEOFENCE_ALLOWED_RADIUS_METERS;
 
       if (distM > allowedRadius) {
         return res.status(400).json({
@@ -550,7 +544,6 @@ const updateOrderStatus = async (req, res) => {
         order.liveTracking.updatedAt = new Date();
       }
 
-      // Auto-expire pending reschedule request on arrival
       if (order.rescheduleRequest && order.rescheduleRequest.status === "pending") {
         order.rescheduleRequest.status = "expired";
         order.rescheduleRequest.rejectedAt = new Date();
@@ -602,13 +595,10 @@ const updateOrderStatus = async (req, res) => {
       order.trackingStatus = "stopped";
 
       if (isHandyman) {
-        const handyman = await Handyman.findOne({
-          userId: order.handymanId,
-        });
+        const handyman = await Handyman.findOne({ userId: order.handymanId });
 
         if (handyman) {
           const now = new Date();
-
           if (
             handyman.monthlyCancellationMonth !== now.getMonth() ||
             handyman.monthlyCancellationYear !== now.getFullYear()
@@ -666,7 +656,6 @@ const updateOrderStatus = async (req, res) => {
           console.log('[ORDER] Tracking expired - penalty waived');
           order.penaltyAmount = 0;
         } else if (!order.penaltyAmount || order.penaltyAmount === 0) {
-          // Progressive penalty: 50 + (penaltyCount * 10) - Idempotent
           const customer = await User.findById(order.customerId);
           if (customer) {
             const currentPenaltyCount = customer.penaltyCount || 0;
@@ -694,11 +683,8 @@ const updateOrderStatus = async (req, res) => {
         }
       }
 
-      order.trackingStatus = "stopped";
-      order.isHandymanOnTheWay = false;
       cleanupThrottle(id);
 
-      // Auto-cancel any pending reschedule request
       if (order.rescheduleRequest && order.rescheduleRequest.status === "pending") {
         order.rescheduleRequest.status = "cancelled";
         order.rescheduleRequest.rejectedAt = new Date();
@@ -707,7 +693,6 @@ const updateOrderStatus = async (req, res) => {
       await order.save();
       orderAlreadySaved = true;
 
-      // ========== NOTIFICATION: Order cancelled ==========
       const io = req.app.get('io');
       const recipientId = isCustomer ? order.handymanId : order.customerId;
       await createNotification(
@@ -721,12 +706,12 @@ const updateOrderStatus = async (req, res) => {
     }
 
     // ========== Accept Logic ==========
-    if (status === "accepted") {
+    if (normalizedStatus === "accepted") {
       if (!isHandyman && !isAdmin) {
         return res.status(403).json({ msg: "Only handyman can accept order" });
       }
 
-      if (currentStatus !== "pending") {
+      if (currentNormalized !== "pending") {
         return res.status(400).json({ msg: "Only a pending order can be accepted" });
       }
 
@@ -740,115 +725,145 @@ const updateOrderStatus = async (req, res) => {
 
         const handymanUser = await User.findById(req.user.id);
         const penaltyDue = Math.max(handymanProfile?.penaltyAmount || 0, handymanUser?.penaltyAmount || 0);
-
         if (penaltyDue > 0) {
           return res.status(403).json({
-            msg: `لا يمكنك قبول طلبات جديدة لوجود غرامة مستحقة على حسابك بقيمة ${penaltyDue} ج.م بسبب إلغاء الطلبات. يرجى تسوية الغرامة أولاً.`,
+            msg: `لا يمكنك قبول طلبات جديدة لوجود غرامة مستحقة على حسابك بقيمة ${penaltyDue} ج.م. يرجى تسوية الغرامة أولاً.`,
             penaltyAmount: penaltyDue,
             penaltyCount: handymanProfile?.penaltyCount || handymanUser?.penaltyCount || 0,
           });
         }
-      }
 
-      // Check if handyman already has an active ongoing order
-      const activeOrder = await Order.findOne({
-        handymanId: order.handymanId,
-        _id: { $ne: order._id },
-        status: { $in: ["accepted", "price_confirmed", "in-progress", "arrived"] },
-      });
+        // Subscription-based active-client cap
+        const plan = handymanProfile?.subscriptionPlan || "FREE";
+        const maxActiveClients = SUBSCRIPTION_PLANS[plan]?.maxActiveClients
+          ?? SUBSCRIPTION_PLANS.FREE.maxActiveClients;
 
-      if (activeOrder) {
-        return res.status(400).json({
-          msg: "لديك طلب نشط بالفعل قيد التنفيذ. يجب إكمال الطلب الحالي قبل قبول طلب جديد.",
-          activeOrderId: activeOrder._id,
-        });
-      }
-
-      if (price !== undefined) {
-        order.price = price;
-        order.serviceAmount = price;
-        order.totalPrice = price + (order.penaltyAmount || 0);
-      }
-
-      if (req.body.expectedDuration !== undefined && req.body.expectedDuration !== null) {
-        const dur = Number(req.body.expectedDuration);
-        if (dur > 0) {
-          order.expectedDuration = dur;
-          order.expectedEndTime = new Date(new Date(order.scheduledDate).getTime() + dur * 60 * 60 * 1000);
+        if (price !== undefined) {
+          order.price = price;
+          order.serviceAmount = price;
+          order.totalPrice = price + (order.penaltyAmount || 0);
         }
-      }
 
-      order.status = "accepted";
+        if (req.body.expectedDuration !== undefined && req.body.expectedDuration !== null) {
+          const dur = Number(req.body.expectedDuration);
+          if (dur > 0) {
+            order.expectedDuration = dur;
+            order.expectedEndTime = new Date(new Date(order.scheduledDate).getTime() + dur * 60 * 60 * 1000);
+          }
+        }
 
-      const session = await mongoose.startSession();
-      try {
-        await session.withTransaction(async () => {
-          // Re-check scheduling conflicts atomically within transaction
-          const conflict = await checkScheduleConflict({
+        order.status = "accepted";
+
+        // Wrap schedule-conflict recheck AND subscription cap in one transaction
+        const session = await mongoose.startSession();
+        try {
+          await session.withTransaction(async () => {
+            const conflict = await checkScheduleConflict({
+              handymanId: order.handymanId,
+              scheduledDate: order.scheduledDate,
+              expectedDuration: order.expectedDuration,
+              excludeOrderId: order._id,
+              session,
+            });
+            if (conflict.hasConflict) {
+              const conflictError = new Error("SCHEDULE_CONFLICT");
+              conflictError.isConflict = true;
+              conflictError.details = conflict.conflictDetails;
+              throw conflictError;
+            }
+
+            const raceCount = await Order.countDocuments({
+              handymanId: order.handymanId,
+              status: "in-progress",
+            }).session(session);
+            if (raceCount >= maxActiveClients) {
+              const capError = new Error("IN_PROGRESS_CAP_REACHED");
+              capError.isCapError = true;
+              capError.maxActiveClients = maxActiveClients;
+              capError.plan = plan;
+              throw capError;
+            }
+
+            await order.save({ session });
+          });
+          orderAlreadySaved = true;
+        } catch (txErr) {
+          if (txErr.isConflict) {
+            return res.status(400).json({
+              msg: "لا يمكن قبول الطلب لوجود تعارض في المواعيد مع طلب آخر مجدول.",
+              conflict: txErr.details,
+            });
+          }
+          if (txErr.isCapError) {
+            return res.status(400).json({
+              msg: `You have reached the maximum number of active orders for your plan (${txErr.maxActiveClients}). Please complete one first.`,
+              maxActiveClients: txErr.maxActiveClients,
+              subscriptionPlan: txErr.plan,
+            });
+          }
+          // Standalone Mongo fallback (no replica set)
+          console.log("Accept transaction unavailable, falling back:", txErr.message);
+          const fallbackConflict = await checkScheduleConflict({
             handymanId: order.handymanId,
             scheduledDate: order.scheduledDate,
             expectedDuration: order.expectedDuration,
             excludeOrderId: order._id,
-            session,
           });
-
-          if (conflict.hasConflict) {
-            const conflictError = new Error("SCHEDULE_CONFLICT");
-            conflictError.isConflict = true;
-            conflictError.details = conflict.conflictDetails;
-            throw conflictError;
+          if (fallbackConflict.hasConflict) {
+            return res.status(400).json({
+              msg: "لا يمكن قبول الطلب لوجود تعارض في المواعيد مع طلب آخر مجدول.",
+              conflict: fallbackConflict.conflictDetails,
+            });
           }
+          const inProgressOrders = await Order.countDocuments({
+            handymanId: order.handymanId,
+            status: "in-progress",
+          });
+          if (inProgressOrders >= maxActiveClients) {
+            return res.status(400).json({
+              msg: `You have reached the maximum number of active orders for your plan (${maxActiveClients}). Please complete one first.`,
+              maxActiveClients,
+              subscriptionPlan: plan,
+            });
+          }
+          await order.save();
+          orderAlreadySaved = true;
+        } finally {
+          session.endSession();
+        }
 
-          await order.save({ session });
-        });
-        orderAlreadySaved = true;
-      } catch (txErr) {
-        if (txErr.isConflict) {
-          return res.status(400).json({
-            msg: "لا يمكن قبول الطلب لوجود تعارض في المواعيد مع طلب آخر مجدول.",
-            conflict: txErr.details,
-          });
+        handymanProfile.acceptedOffers += 1;
+        if (handymanProfile.totalOffers > 0) {
+          handymanProfile.acceptanceRate = handymanProfile.acceptedOffers / handymanProfile.totalOffers;
         }
-        // Standalone Mongo fallback
-        console.log("Accept transaction unavailable, falling back:", txErr.message);
-        const conflict = await checkScheduleConflict({
-          handymanId: order.handymanId,
-          scheduledDate: order.scheduledDate,
-          expectedDuration: order.expectedDuration,
-          excludeOrderId: order._id,
-        });
-        if (conflict.hasConflict) {
-          return res.status(400).json({
-            msg: "لا يمكن قبول الطلب لوجود تعارض في المواعيد مع طلب آخر مجدول.",
-            conflict: conflict.conflictDetails,
-          });
+        await handymanProfile.save();
+      } else {
+        // Admin accepting on behalf — no plan cap applied
+        if (price !== undefined) {
+          order.price = price;
+          order.serviceAmount = price;
+          order.totalPrice = price + (order.penaltyAmount || 0);
         }
-        await order.save();
-        orderAlreadySaved = true;
-      } finally {
-        session.endSession();
+        order.status = "accepted";
       }
 
-      // ========== NOTIFICATION: Order accepted ==========
-      const io = req.app.get('io');
+      const ioAccept = req.app.get('io');
       await createNotification(
-        io,
+        ioAccept,
         order.customerId,
         'order_accepted',
         ' Order Accepted',
         `${req.user.name} accepted your order`,
         { orderId: order._id, handymanName: req.user.name }
       );
-
-      if (isHandyman) {
-        const handymanProfile = await Handyman.findOne({ userId: req.user.id });
-        if (handymanProfile) {
-          handymanProfile.acceptedOffers += 1;
-          if (handymanProfile.totalOffers > 0) {
-            handymanProfile.acceptanceRate = handymanProfile.acceptedOffers / handymanProfile.totalOffers;
-          }
-          await handymanProfile.save();
-        }
+      try {
+        ioAccept.to(id).emit('trackingStarted', {
+          orderId: id,
+          handymanName: req.user.name,
+          message: 'Handyman is on the way!',
+        });
+      } catch (socketErr) {
+        console.log('Socket.io error:', socketErr.message);
       }
     }
 
@@ -861,18 +876,33 @@ const updateOrderStatus = async (req, res) => {
         return res.status(403).json({ msg: "Only handyman can start work" });
       }
 
-      // Ensure craftsman does not have another active order currently physically being worked on on-site
-      const activeWorkOrders = await Order.find({
+      // Subscription-based concurrent client cap check
+      const handymanProfileForCap = await Handyman.findOne({ userId: order.handymanId });
+      const planForCap = handymanProfileForCap?.subscriptionPlan || "FREE";
+      const maxClientsForCap = SUBSCRIPTION_PLANS[planForCap]?.maxActiveClients
+        ?? SUBSCRIPTION_PLANS.FREE.maxActiveClients;
+
+      const inProgressCount = await Order.countDocuments({
         handymanId: order.handymanId,
         _id: { $ne: order._id },
         status: { $in: ["in-progress", "arrived"] },
       });
 
-      if (activeWorkOrders.length > 0) {
+      if (inProgressCount >= maxClientsForCap) {
         return res.status(400).json({
-          msg: "لديك طلب آخر قيد التنفيذ حالياً. يرجى إكماله أولاً.",
-          activeOrderId: activeWorkOrders[0]._id,
+          msg: `لديك ${inProgressCount} طلب(ات) نشطة. الحد الأقصى لخطتك هو ${maxClientsForCap}. يرجى إكمال طلب قبل بدء آخر.`,
+          activeCount: inProgressCount,
+          maxActiveClients: maxClientsForCap,
+          subscriptionPlan: planForCap,
         });
+      }
+
+      // Mark handyman unavailable when at cap after this order starts
+      if (inProgressCount + 1 >= maxClientsForCap) {
+        await Handyman.findOneAndUpdate(
+          { userId: order.handymanId },
+          { isAvailable: false }
+        );
       }
 
       // Server-Side Geo-Fencing Verification
@@ -894,7 +924,7 @@ const updateOrderStatus = async (req, res) => {
       }
 
       const [cLng, cLat] = serviceCoords;
-      const R = 6371000; // Earth radius in meters
+      const R = 6371000;
       const dLat = ((cLat - hLat) * Math.PI) / 180;
       const dLon = ((cLng - hLng) * Math.PI) / 180;
       const a =
@@ -904,7 +934,7 @@ const updateOrderStatus = async (req, res) => {
           Math.sin(dLon / 2) ** 2;
       const serverCalculatedDistance = Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 
-      const allowedRadius = Number(process.env.GEO_FENCE_RADIUS_METERS) || 50;
+      const allowedRadius = Number(process.env.GEO_FENCE_RADIUS_METERS) || GEOFENCE_ALLOWED_RADIUS_METERS;
 
       if (serverCalculatedDistance > allowedRadius) {
         return res.status(400).json({
@@ -939,17 +969,32 @@ const updateOrderStatus = async (req, res) => {
       }
       order.completionImage = completionImage;
 
+      // commissionRate was snapshotted at order creation — use it as-is.
       const commissionRate = order.commissionRate || 10;
       const commissionAmount = (order.price * commissionRate) / 100;
       const netAmount = order.price - commissionAmount;
-
       order.commissionAmount = commissionAmount;
       order.netAmount = netAmount;
 
+      // Update handyman stats and restore availability based on subscription cap
       const handymanDoc = await Handyman.findOne({ userId: order.handymanId });
       if (handymanDoc) {
+        const planForComplete = handymanDoc.subscriptionPlan || "FREE";
+        const maxClientsForComplete = SUBSCRIPTION_PLANS[planForComplete]?.maxActiveClients
+          ?? SUBSCRIPTION_PLANS.FREE.maxActiveClients;
+
+        const remainingInProgress = await Order.countDocuments({
+          handymanId: order.handymanId,
+          _id: { $ne: order._id },
+          status: { $in: ["in-progress", "arrived"] },
+        });
+
         handymanDoc.completedOrders = (handymanDoc.completedOrders || 0) + 1;
-        handymanDoc.isAvailable = true;
+        // Restore availability if dropping below the cap after this completion
+        if (remainingInProgress < maxClientsForComplete) {
+          handymanDoc.isAvailable = true;
+        }
+        // Auto-verify if thresholds met
         const isVerified = (handymanDoc.completedOrders >= 10) && ((handymanDoc.rating || 0) >= 4.5);
         handymanDoc.verified = isVerified;
         await handymanDoc.save();
@@ -961,7 +1006,6 @@ const updateOrderStatus = async (req, res) => {
       order.isHandymanOnTheWay = false;
       cleanupThrottle(id);
 
-      // Auto-expire pending reschedule request when order completes
       if (order.rescheduleRequest && order.rescheduleRequest.status === "pending") {
         order.rescheduleRequest.status = "expired";
         order.rescheduleRequest.rejectedAt = new Date();
@@ -971,7 +1015,6 @@ const updateOrderStatus = async (req, res) => {
       orderAlreadySaved = true;
       console.log(`[ORDER] Order ${order._id} completed and saved. Status: ${order.status}`);
 
-      // ========== NOTIFICATION: Order completed ==========
       const io = req.app.get('io');
       await createNotification(
         io,
@@ -990,7 +1033,6 @@ const updateOrderStatus = async (req, res) => {
         if (order.trackingStatus !== 'expired') {
           order.trackingStatus = 'stopped';
         }
-        // Auto-expire pending reschedule request on any non-scheduled status
         if (order.rescheduleRequest && order.rescheduleRequest.status === "pending") {
           order.rescheduleRequest.status = normalizedStatus === 'cancelled' ? 'cancelled' : 'expired';
           order.rescheduleRequest.rejectedAt = new Date();
@@ -1009,7 +1051,7 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
-// ========== 6. confirm price ================
+// ========== 6. confirm price ==========
 const confirmPrice = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1028,7 +1070,6 @@ const confirmPrice = async (req, res) => {
 
     if (confirmed) {
       order.status = "price_confirmed";
-      // ========== NOTIFICATION: Price confirmed ==========
       const io = req.app.get('io');
       await createNotification(
         io,
@@ -1092,7 +1133,7 @@ const getPendingOrders = async (req, res) => {
   }
 };
 
-// ========= 8. requestReschedule ===============
+// ========== 8. requestReschedule ==========
 const requestReschedule = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1112,7 +1153,6 @@ const requestReschedule = async (req, res) => {
       return res.status(400).json({ msg: "لا يمكن إعادة جدولة هذا الطلب في حالته الحالية." });
     }
 
-    // Prevent multiple pending reschedule requests at the same time
     if (order.rescheduleRequest && order.rescheduleRequest.status === "pending" && order.rescheduleRequest.newDate) {
       return res.status(400).json({ msg: "يوجد بالفعل طلب إعادة جدولة قيد المراجعة." });
     }
@@ -1126,14 +1166,12 @@ const requestReschedule = async (req, res) => {
       return res.status(400).json({ msg: "تاريخ الموعد غير صحيح" });
     }
 
-    // Do not allow rescheduling to a date/time in the past
     if (targetDate.getTime() < Date.now() - 2 * 60 * 1000) {
       return res.status(400).json({ msg: "لا يمكن اختيار موعد في الماضي. يرجى اختيار موعد قادم." });
     }
 
     const duration = newDuration ? Number(newDuration) : order.expectedDuration;
 
-    // Check Handyman schedule conflict
     const conflict = await checkScheduleConflict({
       handymanId: order.handymanId,
       scheduledDate: targetDate,
@@ -1166,12 +1204,10 @@ const requestReschedule = async (req, res) => {
 
     await order.save();
 
-    // Populate customer and handyman names for notification if needed
     const populatedOrder = await Order.findById(id).populate('customerId', 'name').populate('handymanId', 'name');
     const senderName = req.user.name || (isCustomer ? populatedOrder.customerId?.name : populatedOrder.handymanId?.name) || 'مستخدم';
     const formattedNewDate = `${targetDate.toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' })} (${newTimeStr})`;
 
-    // ========== NOTIFICATION: Reschedule request ==========
     const io = req.app.get('io');
     const recipientId = isCustomer ? order.handymanId : order.customerId;
     await createNotification(
@@ -1202,7 +1238,7 @@ const requestReschedule = async (req, res) => {
   }
 };
 
-// ========= 9. respondReschedule ===============
+// ========== 9. respondReschedule ==========
 const respondReschedule = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1237,7 +1273,6 @@ const respondReschedule = async (req, res) => {
     const responderName = req.user.name || (isOrderCustomer ? 'العميل' : 'الحرفي');
 
     if (accepted) {
-      // Validate target date is still in the future
       if (new Date(reqData.newDate).getTime() < Date.now() - 2 * 60 * 1000) {
         return res.status(400).json({ msg: "انتهت صلاحية الموعد المقترح لأنه أصبح في الماضي. يرجى إنشاء طلب جديد." });
       }
@@ -1270,12 +1305,8 @@ const respondReschedule = async (req, res) => {
       });
 
       order.scheduledDate = reqData.newDate;
-      if (reqData.newTime) {
-        order.scheduledTime = reqData.newTime;
-      }
-      if (reqData.newDuration) {
-        order.expectedDuration = reqData.newDuration;
-      }
+      if (reqData.newTime) order.scheduledTime = reqData.newTime;
+      if (reqData.newDuration) order.expectedDuration = reqData.newDuration;
       order.rescheduleRequest.status = "approved";
       order.rescheduleRequest.approvedAt = new Date();
       order.rescheduleRequest.approvedBy = req.user.id;
@@ -1302,7 +1333,6 @@ const respondReschedule = async (req, res) => {
 
     await order.save();
 
-    // Mark previous reschedule_request notifications for this order as read for responder
     try {
       await Notification.updateMany(
         { userId: req.user.id, type: 'reschedule_request', 'data.orderId': order._id, isRead: false },
@@ -1312,7 +1342,6 @@ const respondReschedule = async (req, res) => {
       console.log('Error updating notification read status:', e);
     }
 
-    // ========== NOTIFICATION: Reschedule response to the requester ==========
     const io = req.app.get('io');
     const recipientId = reqData.requestedBy === "customer"
       ? order.customerId
@@ -1341,7 +1370,7 @@ const respondReschedule = async (req, res) => {
   }
 };
 
-// ========= 10. startOrder (Dedicated Geo-Fenced Execution Endpoint) ===============
+// ========== 10. startOrder (dedicated geo-fenced execution endpoint) ==========
 const startOrder = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1358,17 +1387,24 @@ const startOrder = async (req, res) => {
       return res.status(400).json({ msg: "Order must be price confirmed or arrived before starting work" });
     }
 
-    // Active concurrency check
+    // Subscription-based concurrent client cap check
+    const handymanProfileForCap = await Handyman.findOne({ userId: order.handymanId });
+    const planForCap = handymanProfileForCap?.subscriptionPlan || "FREE";
+    const maxClientsForCap = SUBSCRIPTION_PLANS[planForCap]?.maxActiveClients
+      ?? SUBSCRIPTION_PLANS.FREE.maxActiveClients;
+
     const activeWorkOrders = await Order.find({
       handymanId: order.handymanId,
       _id: { $ne: order._id },
       status: { $in: ["in-progress", "arrived"] },
     });
 
-    if (activeWorkOrders.length > 0) {
+    if (activeWorkOrders.length >= maxClientsForCap) {
       return res.status(400).json({
-        msg: "لديك طلب آخر قيد التنفيذ حالياً. يرجى إكماله أولاً.",
-        activeOrderId: activeWorkOrders[0]._id,
+        msg: `لديك ${activeWorkOrders.length} طلب(ات) نشطة. الحد الأقصى لخطتك هو ${maxClientsForCap}. يرجى إكمال طلب قبل بدء آخر.`,
+        activeCount: activeWorkOrders.length,
+        maxActiveClients: maxClientsForCap,
+        subscriptionPlan: planForCap,
       });
     }
 
@@ -1400,8 +1436,7 @@ const startOrder = async (req, res) => {
         Math.cos((cLat * Math.PI) / 180) *
         Math.sin(dLon / 2) ** 2;
     const serverCalculatedDistance = Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
-
-    const allowedRadius = Number(process.env.GEO_FENCE_RADIUS_METERS) || 50;
+    const allowedRadius = Number(process.env.GEO_FENCE_RADIUS_METERS) || GEOFENCE_ALLOWED_RADIUS_METERS;
 
     if (serverCalculatedDistance > allowedRadius) {
       return res.status(400).json({
@@ -1418,6 +1453,11 @@ const startOrder = async (req, res) => {
     order.executionStartLongitude = hLng;
     order.executionStartDistance = serverCalculatedDistance;
     order.startedBy = req.user.id;
+
+    // Mark unavailable if at cap after this order starts
+    if (activeWorkOrders.length + 1 >= maxClientsForCap) {
+      await Handyman.findOneAndUpdate({ userId: order.handymanId }, { isAvailable: false });
+    }
 
     await order.save();
 
@@ -1437,7 +1477,7 @@ const startOrder = async (req, res) => {
   }
 };
 
-// ========== Confirm Cash Payment ==========
+// ========== 11. confirmCashPayment ==========
 const confirmCashPayment = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1462,8 +1502,8 @@ const confirmCashPayment = async (req, res) => {
       return res.status(400).json({ msg: "Payment already confirmed" });
     }
 
-    if (order.paymentMethod !== 'cash') {
-      return res.status(400).json({ msg: 'Cash confirmation is only available for cash payments' });
+    if (order.paymentMethod !== "cash") {
+      return res.status(400).json({ msg: "Cash confirmation is only available for cash payments" });
     }
 
     order.paymentStatus = "paid";
@@ -1477,7 +1517,7 @@ const confirmCashPayment = async (req, res) => {
       );
     }
 
-    const WALLET_SUSPENSION_THRESHOLD = 500; // EGP
+    const WALLET_SUSPENSION_THRESHOLD = 500;
     const handyman = await Handyman.findOne({ userId: order.handymanId });
     let justSuspended = false;
     if (handyman) {
@@ -1518,137 +1558,7 @@ const confirmCashPayment = async (req, res) => {
   }
 };
 
-/**
- * Helper: Calculate scheduled appointment timestamp in ms
- * Combines scheduledDate with scheduledTime (e.g. "16:40")
- */
-const getScheduledAppointmentTime = (scheduledDate, scheduledTimeStr) => {
-  if (!scheduledDate) return null;
-  const d = new Date(scheduledDate);
-  if (isNaN(d.getTime())) return null;
-
-  if (scheduledTimeStr && typeof scheduledTimeStr === 'string' && scheduledTimeStr.includes(':')) {
-    const parts = scheduledTimeStr.trim().split(':');
-    const hours = parseInt(parts[0], 10);
-    const minutes = parseInt(parts[1], 10);
-    if (!isNaN(hours) && !isNaN(minutes)) {
-      d.setHours(hours, minutes, 0, 0);
-      return d.getTime();
-    }
-  }
-  return d.getTime();
-};
-
-/**
- * Helper: Compute realistic departure window for a scheduled order.
- * - originCoords: [lng, lat] of handyman's current location (or Handyman profile)
- * - destinationCoords: [lng, lat] of order location snapshot
- * - safetyMarginMinutes: default 10 minutes buffer
- */
-const computeDepartureWindow = async ({ order, handymanCoords = null, safetyMarginMinutes = 10 }) => {
-  const isScheduled = order.requestType === 'scheduled' || !!order.scheduledDate;
-  const appointmentMs = getScheduledAppointmentTime(order.scheduledDate, order.scheduledTime);
-
-  if (!appointmentMs) {
-    return {
-      canDepart: true,
-      isScheduled: false,
-      reason: 'No scheduled appointment time',
-      travelTimeMinutes: 15,
-      safetyMarginMinutes: 0,
-      departureTimeMs: Date.now(),
-      appointmentTimeMs: Date.now(),
-      timeUntilDepartureMinutes: 0,
-    };
-  }
-
-  const nowMs = Date.now();
-  const serviceCoords = (order.orderLocation?.coordinates && order.orderLocation.coordinates.length === 2 && (order.orderLocation.coordinates[0] !== 0 || order.orderLocation.coordinates[1] !== 0))
-    ? order.orderLocation.coordinates
-    : order.customerLocation?.coordinates;
-
-  let hCoords = handymanCoords;
-  if (!hCoords || hCoords.length !== 2 || (hCoords[0] === 0 && hCoords[1] === 0)) {
-    if (order.handymanLiveLocation?.coordinates?.length === 2 && (order.handymanLiveLocation.coordinates[0] !== 0 || order.handymanLiveLocation.coordinates[1] !== 0)) {
-      hCoords = order.handymanLiveLocation.coordinates;
-    } else {
-      const hDoc = await Handyman.findOne({ userId: order.handymanId });
-      if (hDoc?.location?.coordinates?.length === 2) {
-        hCoords = hDoc.location.coordinates;
-      }
-    }
-  }
-
-  let travelTimeMinutes = 15; // default fallback (15 min)
-  let calculatedDistKm = 5;
-
-  if (hCoords && hCoords.length === 2 && serviceCoords && serviceCoords.length === 2) {
-    const [hLng, hLat] = hCoords;
-    const [cLng, cLat] = serviceCoords;
-    if (hLat !== 0 && hLng !== 0 && cLat !== 0 && cLng !== 0) {
-      const R = 6371000;
-      const dLat = ((cLat - hLat) * Math.PI) / 180;
-      const dLon = ((cLng - hLng) * Math.PI) / 180;
-      const a =
-        Math.sin(dLat / 2) ** 2 +
-        Math.cos((hLat * Math.PI) / 180) *
-          Math.cos((cLat * Math.PI) / 180) *
-          Math.sin(dLon / 2) ** 2;
-      const distM = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      calculatedDistKm = distM / 1000;
-      travelTimeMinutes = Math.max(5, Math.round((calculatedDistKm / 30) * 60)); // 30 km/h avg
-
-      try {
-        const routeData = await calculateRoute({ lat: hLat, lng: hLng }, { lat: cLat, lng: cLng });
-        if (routeData && Number.isFinite(routeData.eta) && routeData.eta > 0) {
-          travelTimeMinutes = Math.round(routeData.eta);
-        }
-      } catch (e) {
-        console.warn('[DEPARTURE WINDOW] TomTom route calculation fallback:', e.message);
-      }
-    }
-  }
-
-  const totalLeadMinutes = travelTimeMinutes + safetyMarginMinutes;
-  const departureTimeMs = appointmentMs - (totalLeadMinutes * 60 * 1000);
-  const canDepart = nowMs >= departureTimeMs;
-  const timeUntilDepartureMinutes = Math.max(0, Math.round((departureTimeMs - nowMs) / (60 * 1000)));
-
-  return {
-    canDepart,
-    isScheduled: true,
-    appointmentTime: new Date(appointmentMs).toISOString(),
-    appointmentTimeMs: appointmentMs,
-    departureTime: new Date(departureTimeMs).toISOString(),
-    departureTimeMs,
-    travelTimeMinutes,
-    safetyMarginMinutes,
-    totalLeadMinutes,
-    timeUntilDepartureMinutes,
-    distanceKm: Number(calculatedDistKm.toFixed(1)),
-  };
-};
-
-// ========== Query Departure Window (for UI and Pre-check) ==========
-const getDepartureWindow = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const order = await Order.findById(id);
-    if (!order) return res.status(404).json({ msg: "Order not found" });
-
-    const hLat = Number(req.query.latitude ?? req.body?.latitude);
-    const hLng = Number(req.query.longitude ?? req.body?.longitude);
-    const handymanCoords = (Number.isFinite(hLat) && Number.isFinite(hLng)) ? [hLng, hLat] : null;
-
-    const windowInfo = await computeDepartureWindow({ order, handymanCoords });
-    res.status(200).json({ data: windowInfo });
-  } catch (error) {
-    console.error('Error in getDepartureWindow:', error);
-    res.status(500).json({ msg: "Server error", error: error.message });
-  }
-};
-
-// ========== Handyman marks "on the way" ==========
+// ========== 12. markOnTheWay ==========
 const markOnTheWay = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1669,7 +1579,7 @@ const markOnTheWay = async (req, res) => {
       return res.status(400).json({ msg: "Order must be price confirmed before starting the trip" });
     }
 
-    // Departure Window Validation for Scheduled Orders
+    // Departure Window Validation
     const reqLat = Number(req.body.latitude ?? req.body.handymanLocation?.latitude ?? req.body.coordinates?.[1]);
     const reqLng = Number(req.body.longitude ?? req.body.handymanLocation?.longitude ?? req.body.coordinates?.[0]);
     const handymanCoordsParam = (Number.isFinite(reqLat) && Number.isFinite(reqLng)) ? [reqLng, reqLat] : null;
@@ -1686,11 +1596,12 @@ const markOnTheWay = async (req, res) => {
       const mins = remainingMin % 60;
       const timeStr = hours > 0 ? `${hours} ساعة و ${mins} دقيقة` : `${mins} دقيقة`;
       return res.status(400).json({
-        msg: `لا يمكن بدء التوجه الآن. موعد الطلب محدد في (${departureWindow.appointmentTime}). تبدأ نافذة التحرك قبل الموعد بـ (${departureWindow.totalLeadMinutes} دقيقة) لتغطية وقت الطريق (${departureWindow.travelTimeMinutes} دقيقة) وهامش الأمان. المتبقي لبدء التحرك: ${timeStr}.`,
+        msg: `لا يمكن بدء التوجه الآن. موعد الطلب محدد في (${departureWindow.appointmentTime}). تبدأ نافذة التحرك قبل الموعد بـ (${departureWindow.totalLeadMinutes} دقيقة). المتبقي لبدء التحرك: ${timeStr}.`,
         departureWindow,
       });
     }
 
+    // Prevent duplicate active tracking on another order
     if (order.trackingStatus !== "active") {
       const handymanOrders = await Order.find({
         handymanId: order.handymanId,
@@ -1706,7 +1617,6 @@ const markOnTheWay = async (req, res) => {
       });
 
       if (activeOtherOrder) {
-        console.warn(`[TRACKING REJECTED] Handyman ${order.handymanId} already has active tracking order ${activeOtherOrder._id}`);
         return res.status(400).json({
           msg: "لديك طلب آخر قيد التتبع حالياً. يجب وصول الطلب الحالي قبل تتبع طلب جديد.",
           activeOrderId: activeOtherOrder._id,
@@ -1715,7 +1625,7 @@ const markOnTheWay = async (req, res) => {
     }
 
     if (order.trackingStatus === "active" && order.trackingExpiresAt) {
-      console.log(`[TRACKING] Order ${id} already active — preserving existing tracking window expiring at ${order.trackingExpiresAt.toISOString()}`);
+      // Already active — preserve existing window
     } else {
       order.isHandymanOnTheWay = true;
       order.onTheWayAt = new Date();
@@ -1756,7 +1666,6 @@ const markOnTheWay = async (req, res) => {
               Math.sin(dLon / 2) ** 2;
           const distM = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
           calculatedDistKm = distM / 1000;
-          // Actual distance based travel time (~30 km/h urban transit)
           initialEta = Math.max(5, Math.round((calculatedDistKm / 30) * 60));
 
           try {
@@ -1770,9 +1679,7 @@ const markOnTheWay = async (req, res) => {
         }
       }
 
-      if (!Number.isFinite(initialEta) || initialEta <= 0) {
-        initialEta = 15;
-      }
+      if (!Number.isFinite(initialEta) || initialEta <= 0) initialEta = 15;
 
       order.eta = initialEta;
       if (calculatedDistKm != null) order.distance = Number(calculatedDistKm.toFixed(1));
@@ -1797,11 +1704,7 @@ const markOnTheWay = async (req, res) => {
           timestamp: new Date(),
         };
       } else {
-        order.liveTracking = {
-          isActive: true,
-          updatedAt: new Date(),
-          timestamp: new Date(),
-        };
+        order.liveTracking = { isActive: true, updatedAt: new Date(), timestamp: new Date() };
       }
     }
 
@@ -1834,7 +1737,7 @@ const markOnTheWay = async (req, res) => {
   }
 };
 
-// ========== Update Handyman Live Location via REST API ==========
+// ========== 13. updateLiveLocation ==========
 const updateLiveLocation = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1869,7 +1772,6 @@ const updateLiveLocation = async (req, res) => {
     const incomingTime = timestamp ? new Date(timestamp).getTime() : Date.now();
     const lastUpdateMs = order.liveTracking?.timestamp ? new Date(order.liveTracking.timestamp).getTime() : 0;
 
-    // Discard stale timestamp replay
     if (incomingTime < lastUpdateMs) {
       return res.status(200).json({ msg: "Stale location update ignored", order });
     }
@@ -1893,7 +1795,6 @@ const updateLiveLocation = async (req, res) => {
 
     await order.save();
 
-    // Broadcast update via Socket.IO
     const io = req.app.get('io');
     if (io) {
       io.to(id).emit('locationUpdate', {
@@ -1910,17 +1811,14 @@ const updateLiveLocation = async (req, res) => {
       });
     }
 
-    res.status(200).json({
-      msg: "Live location updated",
-      liveTracking: order.liveTracking,
-    });
+    res.status(200).json({ msg: "Live location updated", liveTracking: order.liveTracking });
   } catch (error) {
     console.error('Error in updateLiveLocation:', error);
     res.status(500).json({ msg: "Server error", error: error.message });
   }
 };
 
-// ========== Create Stripe Payment Intent ==========
+// ========== 14. createStripePaymentIntent ==========
 const createStripePaymentIntent = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1977,7 +1875,7 @@ const createStripePaymentIntent = async (req, res) => {
   }
 };
 
-// ========== Customer selects payment method (cash or card) after completion ==========
+// ========== 15. selectPaymentMethod ==========
 const selectPaymentMethod = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2038,6 +1936,128 @@ const selectPaymentMethod = async (req, res) => {
   }
 };
 
+// ========== Helper: getScheduledAppointmentTime ==========
+const getScheduledAppointmentTime = (scheduledDate, scheduledTimeStr) => {
+  if (!scheduledDate) return null;
+  const d = new Date(scheduledDate);
+  if (isNaN(d.getTime())) return null;
+
+  if (scheduledTimeStr && typeof scheduledTimeStr === 'string' && scheduledTimeStr.includes(':')) {
+    const parts = scheduledTimeStr.trim().split(':');
+    const hours = parseInt(parts[0], 10);
+    const minutes = parseInt(parts[1], 10);
+    if (!isNaN(hours) && !isNaN(minutes)) {
+      d.setHours(hours, minutes, 0, 0);
+      return d.getTime();
+    }
+  }
+  return d.getTime();
+};
+
+// ========== Helper: computeDepartureWindow ==========
+const computeDepartureWindow = async ({ order, handymanCoords = null, safetyMarginMinutes = 10 }) => {
+  const appointmentMs = getScheduledAppointmentTime(order.scheduledDate, order.scheduledTime);
+
+  if (!appointmentMs) {
+    return {
+      canDepart: true,
+      isScheduled: false,
+      reason: 'No scheduled appointment time',
+      travelTimeMinutes: 15,
+      safetyMarginMinutes: 0,
+      departureTimeMs: Date.now(),
+      appointmentTimeMs: Date.now(),
+      timeUntilDepartureMinutes: 0,
+    };
+  }
+
+  const nowMs = Date.now();
+  const serviceCoords = (order.orderLocation?.coordinates && order.orderLocation.coordinates.length === 2 && (order.orderLocation.coordinates[0] !== 0 || order.orderLocation.coordinates[1] !== 0))
+    ? order.orderLocation.coordinates
+    : order.customerLocation?.coordinates;
+
+  let hCoords = handymanCoords;
+  if (!hCoords || hCoords.length !== 2 || (hCoords[0] === 0 && hCoords[1] === 0)) {
+    if (order.handymanLiveLocation?.coordinates?.length === 2 && (order.handymanLiveLocation.coordinates[0] !== 0 || order.handymanLiveLocation.coordinates[1] !== 0)) {
+      hCoords = order.handymanLiveLocation.coordinates;
+    } else {
+      const hDoc = await Handyman.findOne({ userId: order.handymanId });
+      if (hDoc?.location?.coordinates?.length === 2) {
+        hCoords = hDoc.location.coordinates;
+      }
+    }
+  }
+
+  let travelTimeMinutes = 15;
+  let calculatedDistKm = 5;
+
+  if (hCoords && hCoords.length === 2 && serviceCoords && serviceCoords.length === 2) {
+    const [hLng, hLat] = hCoords;
+    const [cLng, cLat] = serviceCoords;
+    if (hLat !== 0 && hLng !== 0 && cLat !== 0 && cLng !== 0) {
+      const R = 6371000;
+      const dLat = ((cLat - hLat) * Math.PI) / 180;
+      const dLon = ((cLng - hLng) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos((hLat * Math.PI) / 180) *
+          Math.cos((cLat * Math.PI) / 180) *
+          Math.sin(dLon / 2) ** 2;
+      const distM = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      calculatedDistKm = distM / 1000;
+      travelTimeMinutes = Math.max(5, Math.round((calculatedDistKm / 30) * 60));
+
+      try {
+        const routeData = await calculateRoute({ lat: hLat, lng: hLng }, { lat: cLat, lng: cLng });
+        if (routeData && Number.isFinite(routeData.eta) && routeData.eta > 0) {
+          travelTimeMinutes = Math.round(routeData.eta);
+        }
+      } catch (e) {
+        console.warn('[DEPARTURE WINDOW] TomTom route calculation fallback:', e.message);
+      }
+    }
+  }
+
+  const totalLeadMinutes = travelTimeMinutes + safetyMarginMinutes;
+  const departureTimeMs = appointmentMs - (totalLeadMinutes * 60 * 1000);
+  const canDepart = nowMs >= departureTimeMs;
+  const timeUntilDepartureMinutes = Math.max(0, Math.round((departureTimeMs - nowMs) / (60 * 1000)));
+
+  return {
+    canDepart,
+    isScheduled: true,
+    appointmentTime: new Date(appointmentMs).toISOString(),
+    appointmentTimeMs: appointmentMs,
+    departureTime: new Date(departureTimeMs).toISOString(),
+    departureTimeMs,
+    travelTimeMinutes,
+    safetyMarginMinutes,
+    totalLeadMinutes,
+    timeUntilDepartureMinutes,
+    distanceKm: Number(calculatedDistKm.toFixed(1)),
+  };
+};
+
+// ========== getDepartureWindow (route handler) ==========
+const getDepartureWindow = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = await Order.findById(id);
+    if (!order) return res.status(404).json({ msg: "Order not found" });
+
+    const hLat = Number(req.query.latitude ?? req.body?.latitude);
+    const hLng = Number(req.query.longitude ?? req.body?.longitude);
+    const handymanCoords = (Number.isFinite(hLat) && Number.isFinite(hLng)) ? [hLng, hLat] : null;
+
+    const windowInfo = await computeDepartureWindow({ order, handymanCoords });
+    res.status(200).json({ data: windowInfo });
+  } catch (error) {
+    console.error('Error in getDepartureWindow:', error);
+    res.status(500).json({ msg: "Server error", error: error.message });
+  }
+};
+
+// ========== module.exports ==========
 module.exports = {
   createOrder,
   getOrder,

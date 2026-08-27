@@ -42,6 +42,7 @@ const {
   approveRegistrationRequest,
   rejectRegistrationRequest
 } = require("../controllers/adminControllers");
+const { setSubscriptionPlan } = require("../controllers/subscriptionController");
 
 // All admin routes require authentication + admin role
 router.use(authMiddleware, allowedToMiddleware("admin"));
@@ -92,6 +93,14 @@ router.patch("/handymen/auto-verify-all", autoVerifyAll);
 // ========== HANDYMAN MODERATION (Manual) ==========
 // =====================================================
 router.patch("/handymen/:handymanId/suspend", suspendHandyman);
+
+// =====================================================
+// ========== SUBSCRIPTION MANAGEMENT (Admin) ==========
+// =====================================================
+// Admin-only: set a handyman's subscription plan (FREE or PREMIUM).
+// Used for testing and for manual overrides until Stripe is integrated.
+// A normal handyman cannot reach this endpoint.
+router.patch("/handymen/:handymanId/subscription", setSubscriptionPlan);
 
 // =====================================================
 // ========== AUDIT LOG ==========

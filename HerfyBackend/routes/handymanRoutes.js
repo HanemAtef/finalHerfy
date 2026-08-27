@@ -5,6 +5,7 @@ const router = express.Router();
 const { authMiddleware, allowedToMiddleware, checkHandymanActive } = require("../middlewares/authMiddleware");
 const validate = require("../middlewares/validationMiddleware");
 const updateValidationSchema = require("../validations/updateValidationSchema");
+const { getSubscription } = require("../controllers/subscriptionController");
 
 const {
   getNearbyHandymen,
@@ -36,6 +37,15 @@ router.get(
   authMiddleware,
   allowedToMiddleware("handyman"),
   getHandymanStatus
+);
+
+// Subscription info for the authenticated handyman
+router.get(
+  "/subscription",
+  authMiddleware,
+  allowedToMiddleware("handyman"),
+  checkHandymanActive,
+  getSubscription
 );
 
 router.get(

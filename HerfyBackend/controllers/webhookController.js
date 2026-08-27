@@ -2,6 +2,7 @@ const stripe = require('../config/stripe');
 const Order = require('../models/Order');
 const Handyman = require('../models/Handyman');
 const User = require('../models/User');
+const StripeSubscription = require('../models/StripeSubscription');
 const { createNotification } = require('./notificationController');
 
 // POST /api/webhooks/stripe
@@ -23,15 +24,12 @@ const handleStripeWebhook = async (req, res) => {
         const pi = event.data.object;
 
         // ---- Penalty settlement payment (metadata-routed) ----
-        // Independent penalty payments carry metadata.type = 'penalty_settlement'
         if (pi.metadata && pi.metadata.type === 'penalty_settlement') {
           const userId = pi.metadata.userId;
           if (!userId) {
             console.error('[Webhook] penalty_settlement missing userId in metadata');
             break;
           }
-          // Atomic + idempotent: only sets to 0 if currently > 0.
-          // A duplicate webhook will find penaltyAmount already 0 → no-op.
           const result = await User.findOneAndUpdate(
             { _id: userId, penaltyAmount: { $gt: 0 } },
             { $set: { penaltyAmount: 0 } },
@@ -60,12 +58,9 @@ const handleStripeWebhook = async (req, res) => {
         }
 
         // ---- Order payment (existing flow) ----
-        // Find the order but DO NOT update yet — check idempotency first.
         const order = await Order.findOne({ stripePaymentIntentId: pi.id });
         if (!order) break;
 
-        // IDEMPOTENCY GUARD (atomic): only one webhook can transition to 'paid'.
-        // A duplicate webhook will not match the filter → no-op.
         const updatedOrder = await Order.findOneAndUpdate(
           { _id: order._id, paymentStatus: { $ne: 'paid' } },
           { paymentStatus: 'paid', paidAt: new Date() },
@@ -76,8 +71,6 @@ const handleStripeWebhook = async (req, res) => {
           break;
         }
 
-        // Settle legacy penalty on the order (new orders have penaltyAmount = 0).
-        // Atomic + idempotent: only sets to 0 if currently > 0.
         if (updatedOrder.penaltyAmount > 0) {
           await User.findOneAndUpdate(
             { _id: updatedOrder.customerId, penaltyAmount: { $gt: 0 } },
@@ -85,7 +78,6 @@ const handleStripeWebhook = async (req, res) => {
           );
         }
 
-        // Credit the handyman's pending earnings (order price minus commission)
         const net = (updatedOrder.totalPrice || updatedOrder.price || 0) - (updatedOrder.commissionAmount || 0);
         if (net > 0) {
           await Handyman.findOneAndUpdate(
@@ -111,7 +103,6 @@ const handleStripeWebhook = async (req, res) => {
       case 'payment_intent.payment_failed': {
         const pi = event.data.object;
 
-        // Penalty payment failure
         if (pi.metadata && pi.metadata.type === 'penalty_settlement') {
           const userId = pi.metadata.userId;
           if (userId) {
@@ -148,6 +139,67 @@ const handleStripeWebhook = async (req, res) => {
             { orderId: failedOrder._id }
           );
         }
+        break;
+      }
+
+      // ---- Handyman subscription payment succeeded ----
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object;
+
+        const subscriptionId =
+          invoice.parent?.subscription_details?.subscription || invoice.subscription;
+
+        if (!subscriptionId) break;
+
+        const stripeSubDoc = await StripeSubscription.findOneAndUpdate(
+          { stripeSubscriptionId: subscriptionId },
+          { status: 'active' },
+          { new: true }
+        );
+
+        if (!stripeSubDoc) {
+          console.log(`[Webhook] No local StripeSubscription found for ${subscriptionId}`);
+          break;
+        }
+
+        // idempotent: لو الحرفي أصلاً PREMIUM، منعملش تحديث تاني
+        const handyman = await Handyman.findOneAndUpdate(
+          { userId: stripeSubDoc.user, subscriptionPlan: { $ne: 'PREMIUM' } },
+          { subscriptionPlan: 'PREMIUM' },
+          { new: true }
+        );
+
+        if (handyman) {
+          console.log(`[Webhook] Handyman ${stripeSubDoc.user} upgraded to PREMIUM`);
+          await createNotification(
+            null, stripeSubDoc.user, 'payment_confirmed',
+            'تم تفعيل باقتك بنجاح',
+            'تم الاشتراك بنجاح، عمولة المنصة وعدد العملاء المتاحين تحدثوا فورًا.',
+            { subscriptionPlan: 'PREMIUM' }
+          );
+        } else {
+          console.log(`[Webhook] Duplicate invoice.payment_succeeded for sub ${subscriptionId} — already PREMIUM`);
+        }
+        break;
+      }
+
+      // ---- Handyman subscription canceled/expired ----
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object;
+
+        const stripeSubDoc = await StripeSubscription.findOneAndUpdate(
+          { stripeSubscriptionId: sub.id },
+          { status: 'canceled' },
+          { new: true }
+        );
+        if (!stripeSubDoc) break;
+
+        await Handyman.findOneAndUpdate(
+          { userId: stripeSubDoc.user },
+          { subscriptionPlan: 'FREE' }
+        );
+
+        console.log(`[Webhook] Handyman ${stripeSubDoc.user} downgraded to FREE (subscription canceled)`);
         break;
       }
 
