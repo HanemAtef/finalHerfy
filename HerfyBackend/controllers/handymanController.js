@@ -13,6 +13,8 @@ const { checkScheduleConflict } = require("./orderController");
 
 const EARTH_RADIUS_M = 6371000;
 const ASSUMED_AVG_SPEED_KMH = 30;
+// MongoDB's spherical distance cannot exceed half the Earth's circumference.
+const MAX_GEOSPHERE_DISTANCE_METERS = 20037508;
 
 function haversineDistanceMeters([lng1, lat1], [lng2, lat2]) {
   const toRad = (deg) => (deg * Math.PI) / 180;
@@ -39,7 +41,7 @@ const getNearbyHandymen = async (req, res) => {
     const {
       lat,
       lng,
-      radius = 50000000,
+      radius = MAX_GEOSPHERE_DISTANCE_METERS,
       profession,
       sort = "distance",
       scheduledDate,
@@ -55,6 +57,7 @@ const getNearbyHandymen = async (req, res) => {
 
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lng);
+    const requestedRadius = Number(radius);
 
     if (
       isNaN(latitude) ||
@@ -69,17 +72,43 @@ const getNearbyHandymen = async (req, res) => {
       });
     }
 
+    if (!Number.isFinite(requestedRadius) || requestedRadius <= 0) {
+      return res.status(400).json({
+        msg: "Radius must be a positive number of meters",
+      });
+    }
+
+    // `$near` uses Handyman.location's 2dsphere index. Cap a larger supplied
+    // radius at the maximum valid spherical distance rather than passing an
+    // invalid value to MongoDB.
+    const effectiveRadius = Math.min(
+      requestedRadius,
+      MAX_GEOSPHERE_DISTANCE_METERS
+    );
+
     // Build filter for approved, available, non-suspended handymen
     const handymanFilter = {
       registrationStatus: "approved",
       isSuspended: false,
       isAvailable: true,
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: [longitude, latitude],
+          },
+          $maxDistance: effectiveRadius,
+        },
+      },
     };
 
     if (profession && profession.trim().length > 0) {
       handymanFilter.profession = profession.trim();
     }
 
+    // MongoDB filters and returns candidates nearest-first through the
+    // 2dsphere index. Haversine below is retained only for display distance
+    // and optional smart-score normalization.
     const handymenDetails = await Handyman.find(handymanFilter)
       .populate("userId", "name email phone profileImage location address isBanned deletedAt")
       .lean();
@@ -90,13 +119,10 @@ const getNearbyHandymen = async (req, res) => {
       const user = h.userId;
       if (!user || user.isBanned || user.deletedAt) continue;
 
-      // Extract Base Location coordinates (from Handyman profile or User doc)
-      let coords = null;
-      if (Array.isArray(h.location?.coordinates) && h.location.coordinates.length === 2) {
-        coords = h.location.coordinates;
-      } else if (Array.isArray(user.location?.coordinates) && user.location.coordinates.length === 2) {
-        coords = user.location.coordinates;
-      }
+      // `$near` guarantees an indexed Handyman location. User.location is
+      // populated for profile data but is not a discovery fallback because it
+      // belongs to a different collection/index.
+      const coords = h.location.coordinates;
 
       // Calculate distance from Handyman Base Location to Order Service Location
       let distance = null;
@@ -110,11 +136,6 @@ const getNearbyHandymen = async (req, res) => {
         distanceKm = Number((meters / 1000).toFixed(1));
         distanceText = distance < 1000 ? `${distance} م` : `${distanceKm} كم`;
         eta = Math.max(1, Math.round((meters / 1000 / ASSUMED_AVG_SPEED_KMH) * 60));
-      }
-
-      // Filter by max radius if applicable
-      if (distance !== null && Number(radius) > 0 && distance > Number(radius)) {
-        continue;
       }
 
       // Schedule conflict check if appointment date is requested
@@ -175,7 +196,7 @@ const getNearbyHandymen = async (req, res) => {
       const DIST_WEIGHT = parseFloat(process.env.MATCHING_DISTANCE_WEIGHT) || 0.4;
       const RATING_WEIGHT = parseFloat(process.env.MATCHING_RATING_WEIGHT) || 0.4;
       const ACCEPT_WEIGHT = parseFloat(process.env.MATCHING_ACCEPTANCE_WEIGHT) || 0.2;
-      const maxDistance = Number(radius) || 50000;
+      const maxDistance = effectiveRadius;
 
       candidates.forEach((h) => {
         const normDist = h.distance ? Math.max(0, (maxDistance - h.distance) / maxDistance) : 0;
