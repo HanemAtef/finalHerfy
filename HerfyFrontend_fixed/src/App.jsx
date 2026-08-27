@@ -50,6 +50,7 @@ import PaymentCancel from './pages/payment/PaymentCancel';
 
 import ChatbotWidget from './components/chatbot/ChatbotWidget';
 
+import SubscriptionPlans from './components/stripe/SubscriptionPlans';
 function App() {
   return (
     <BrowserRouter>
@@ -135,6 +136,14 @@ function App() {
               path="profile"
               element={<HandymanSettingsPage />}
             />
+            <Route
+  path="subscription"
+  element={
+    <ProtectedRoute allowedRoles={['handyman']}>
+      <SubscriptionPlans />
+    </ProtectedRoute>
+  }
+/>
           </Route>
 
           {/* Admin */}

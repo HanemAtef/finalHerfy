@@ -6,7 +6,7 @@ const Handyman = require("../models/Handyman");
 const Order = require("../models/Order");
 const { SUBSCRIPTION_PLANS } = require("../utils/constants");
 
-// Map plan names to your real Stripe Price IDs (create these in Stripe Dashboard)
+// خطط الاشتراك المربوطة بـ Stripe Price IDs الحقيقية (من الـ Dashboard، test mode)
 const PLANS = {
   monthly: { priceId: process.env.STRIPE_PRICE_MONTHLY, label: "Monthly Plan" },
   yearly:  { priceId: process.env.STRIPE_PRICE_YEARLY,  label: "Yearly Plan"  },
@@ -64,18 +64,29 @@ exports.setSubscriptionPlan = async (req, res, next) => {
 };
 
 // POST /api/subscriptions/create
-// Body: { userId, plan: "monthly"|"yearly", paymentMethodId }
+// Body: { plan: "monthly" | "yearly" }
 exports.createSubscription = async (req, res, next) => {
   try {
-    const { plan, paymentMethodId } = req.body;
-    const userId = req.user._id; // set by authMiddleware
+    const { plan } = req.body;
+    const userId = req.user._id;
+
     const planConfig = PLANS[plan];
-    if (!planConfig) return res.status(400).json({ message: "Invalid plan" });
+    if (!planConfig) {
+      return res.status(400).json({ message: "Invalid plan" });
+    }
+    if (!planConfig.priceId) {
+      // بيحمينا لو نسينا نحط الـ Price ID في env
+      console.error(`[createSubscription] Missing Stripe Price ID for plan: ${plan}`);
+      return res.status(500).json({ message: "Subscription plan is not configured correctly" });
+    }
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user.email) {
+      return res.status(400).json({ message: "User must have an email to subscribe" });
+    }
 
-    // Create or reuse Stripe Customer
+    // إنشاء أو استخدام Stripe Customer موجود
     let customerId = user.stripeCustomerId;
     if (!customerId) {
       const customer = await stripe.customers.create({
@@ -88,34 +99,40 @@ exports.createSubscription = async (req, res, next) => {
       await user.save();
     }
 
-    // Attach payment method to customer
-    await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
-    await stripe.customers.update(customerId, {
-      invoice_settings: { default_payment_method: paymentMethodId },
-    });
+// إنشاء الاشتراك
+const subscription = await stripe.subscriptions.create({
+  customer: customerId,
+  items: [{ price: planConfig.priceId }],
+  payment_behavior: "default_incomplete",
+  payment_settings: {
+    save_default_payment_method: "on_subscription",
+    payment_method_types: ["card"],
+  },
+  expand: ["latest_invoice.confirmation_secret"], // ✅ مش latest_invoice.payment_intent
+});
 
-    // Create subscription — expand latest_invoice.payment_intent for clientSecret
-    const subscription = await stripe.subscriptions.create({
-      customer: customerId,
-      items: [{ price: planConfig.priceId }],
-      payment_behavior: "default_incomplete",
-      expand: ["latest_invoice.payment_intent"],
-    });
+// ✅ ناخد الـ client_secret من confirmation_secret مباشرة
+const confirmationSecret = subscription.latest_invoice?.confirmation_secret;
+if (!confirmationSecret || !confirmationSecret.client_secret) {
+  console.error("[createSubscription] No confirmation_secret returned:", subscription.id);
+  return res.status(500).json({ message: "Failed to create payment for this subscription" });
+}
 
-    await StripeSubscription.create({
-      user: userId,
-      stripeCustomerId: customerId,
-      stripeSubscriptionId: subscription.id,
-      plan,
-      stripePriceId: planConfig.priceId,
-      status: subscription.status,
-    });
+await StripeSubscription.create({
+  user: userId,
+  stripeCustomerId: customerId,
+  stripeSubscriptionId: subscription.id,
+  plan,
+  stripePriceId: planConfig.priceId,
+  status: subscription.status,
+});
 
-    res.json({
-      clientSecret: subscription.latest_invoice.payment_intent.client_secret,
-      subscriptionId: subscription.id,
-    });
+res.json({
+  clientSecret: confirmationSecret.client_secret,
+  subscriptionId: subscription.id,
+});
   } catch (err) {
+    console.error("[createSubscription] Stripe error:", err.message);
     next(err);
   }
 };
@@ -125,6 +142,10 @@ exports.createSubscription = async (req, res, next) => {
 exports.cancelSubscription = async (req, res, next) => {
   try {
     const { subscriptionId } = req.body;
+    if (!subscriptionId) {
+      return res.status(400).json({ message: "subscriptionId is required" });
+    }
+
     await stripe.subscriptions.cancel(subscriptionId);
     await StripeSubscription.findOneAndUpdate(
       { stripeSubscriptionId: subscriptionId },
@@ -132,6 +153,7 @@ exports.cancelSubscription = async (req, res, next) => {
     );
     res.json({ message: "Subscription canceled" });
   } catch (err) {
+    console.error("[cancelSubscription] Stripe error:", err.message);
     next(err);
   }
 };
