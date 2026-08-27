@@ -356,6 +356,7 @@ HerfyFrontend_fixed/
   tailwind.config.js
   vite.config.js
 HerfyAnalysis.md
+HerfyDefenseGuide.md
 skills-lock.json
 </directory_structure>
 
@@ -13795,6 +13796,286 @@ flowchart TD
 The **Harfey** codebase is clean, well-architected, and structured with separation of concerns between business logic, data models, real-time gateways, and UI components. The system has end-to-end coverage of the service marketplace lifecycle—from onboarding and KYC to real-time dispatching, live GPS tracking, and post-service dual-mode payment resolution.
 </file>
 
+<file path="HerfyDefenseGuide.md">
+# Harfey: Code-Accurate Defense Guide
+
+> Scope: this guide describes the repository as inspected on 27 August 2026. It deliberately separates **implemented behaviour** from intended behaviour, dependencies that are merely installed, and known code defects. It is not based on the earlier thesis or `HerfyAnalysis.md` where they disagree with source code.
+
+## 1. One-minute project explanation
+
+Harfey is a React/Express/MongoDB marketplace for home-maintenance work. A customer registers, finds an approved available handyman, creates a scheduled or immediate service order, agrees a price, follows the trip, receives the work, then chooses cash or card payment and can review the handyman. Handymen have an approval profile, availability, cancellation penalties, a cash-commission balance, and card-payment earnings awaiting administrator payout. Administrators moderate users, registration records, reports, reference data, and financial records.
+
+The system is a single-page React client (`HerfyFrontend_fixed`) calling an Express REST API and a Socket.IO server (`HerfyBackend`). MongoDB stores the business records. Stripe is used for order card payments and penalty payments, TomTom is used for road routes/ETA, Cloudinary is used for uploads, Nodemailer sends mail, and Google Gemini powers the authenticated assistant.
+
+```text
+Customer / Handyman / Administrator browser
+                |
+ React 19 + Redux Toolkit + Axios + Socket.IO client
+                |
+      REST (HTTP)              Socket.IO handshake/events
+                |                         |
+ Express routes -> middleware -> controllers <- socket handlers
+                |                         |
+             Mongoose / MongoDB       TomTom / Stripe / Cloudinary / Gemini / SMTP
+```
+
+There is no Docker, CI/CD, TLS termination, AWS deployment, Redis adapter, or Swagger server implemented in this repository. Those must not be claimed as current infrastructure.
+
+## 2. Repository map and responsibilities
+
+```text
+HerfyFrontend_fixed/
+  src/App.jsx                  React Router route tree and role layouts
+  src/api/axios.js             Axios instance; attaches the stored access token
+  src/services/api.js          Named REST calls used by pages/slices
+  src/store/                   Redux store and auth/order/chat/location/... slices
+  src/socket/socket.js         Singleton authenticated Socket.IO client
+  src/pages/                   38 role-specific screen components
+  src/components/              layouts, maps, Stripe UI, chatbot, shared UI
+  src/hooks/                   `useSocket`, `useCurrentLocation`
+  src/utils/                   order-status, geocoding, idempotency and map helpers
+
+HerfyBackend/
+  app.js                       Express/HTTP/Socket.IO composition and route mounting
+  routes/                      17 physical route modules; HTTP boundary and middleware order
+  controllers/                 20 controller files; most business logic is here
+  models/                      19 Mongoose collection definitions
+  middlewares/                 JWT/RBAC, validation, uploads and idempotency
+  socket/                      chat, notifications and live-location event handlers
+  utils/tomtom.js              TomTom Routing API adapter
+  config/                      MongoDB, Stripe, Cloudinary and Gemini configuration
+  validations/                 Joi request schemas
+  tests/                       six Jest/Supertest suites, 87 statically discoverable tests
+```
+
+The backend is *mostly* route -> middleware -> controller -> Mongoose/external API. There is no general service layer: important rules live in `controllers/orderController.js`, `controllers/handymanController.js`, and the Socket.IO files. That is workable for this size of application, but makes `orderController.js` a large, high-risk module.
+
+## 3. Roles and enforcement
+
+`models/User.js` only permits `role: 'customer' | 'handyman'`. An administrator is a user with `isAdmin: true`; it is **not** a third value of the `role` enum. The frontend normalizes this for layout selection, and `allowedToMiddleware` grants an `isAdmin` user access before testing roles.
+
+| Actor | Main UI | Main actions | Main server enforcement |
+|---|---|---|---|
+| Customer | `/customer/*`, `/customer/payment/:orderId`, `/chat/:orderId` | profile, discovery, create/cancel order, choose payment, review, report, support | JWT; `allowedToMiddleware('customer')` on selected routes; controller checks `order.customerId` |
+| Handyman | `/handyman/*`, `/chat/:orderId` | approved profile, availability, accept, price, trip, completion, cash confirmation, fine settlement | JWT; handyman approval/suspension checks; controller checks `order.handymanId` |
+| Admin | `/admin/*` | users, registration, financial records/payout records, reports, analytics, reference data | `authMiddleware` then `allowedToMiddleware('admin')` in `adminRoutes.js`; this accepts `isAdmin` |
+
+`middlewares/authMiddleware.js` verifies `Authorization: Bearer <JWT>`, loads the User, blocks banned/soft-deleted/unverified users, and blocks pending/rejected handyman registrations except for support routes. `checkHandymanActive` additionally requires an approved and non-suspended Handyman document.
+
+Important caveat for a defense: `reportRoutes.js` exposes `GET /api/reports` and `PATCH /api/reports/resolve/:id` with authentication only, even though their controller operations are administrative. Also, several controller checks use `req.user.role === 'admin'`, which cannot be true under the User schema; admin access should consistently use `req.user.isAdmin` or the route middleware.
+
+## 4. Authentication flow
+
+### Registration and verification
+
+1. `RegisterPage.jsx` sends multipart registration data to `POST /api/users/register`.
+2. `routes/authRoutes.js` accepts optional documents, normalizes location coordinates, validates with `validations/registerValidationSchema.js`, and calls `registerUser` in `controllers/authController.js`.
+3. Password hashing is done by `User`'s pre-save hook with bcrypt cost 10. For handyman registrations, the controller creates the related `Handyman` profile with `registrationStatus: 'pending'`.
+4. `sendVerificationEmail.js` sends an email OTP. `POST /api/users/verify-email` marks the User as verified; `resend-otp` resends it.
+5. An administrator later approves/rejects the handyman profile through `/api/admin/approve-registration/:handymanId` or `/reject-registration/:handymanId`.
+
+### Login, refresh, logout and password reset
+
+`loginUser` validates credentials with `user.matchPassword`, then `issueTokenPair` creates an access JWT and a random refresh token. `RefreshToken` stores only a SHA-256 hash with expiry/revocation data. `POST /api/users/refresh` rotates this record and issues a replacement; `POST /logout` revokes it. `forgot-password` and `reset-password` use OTP fields on User. The client initializes its session in `components/layout/AuthInit.jsx` and stores/uses the access token through the Redux auth slice and `api/axios.js`.
+
+Why this design: the short-lived JWT proves each request without server session storage; the database-backed refresh-token record gives the project a revocation/rotation mechanism. The access token itself cannot be revoked before expiry.
+
+## 5. Data model: the essential relationships
+
+| Model | Purpose and important links |
+|---|---|
+| `User` | identity, password, role/isAdmin, verification, GeoJSON location, ban/soft-delete and customer penalty fields; 2dsphere index on `location` |
+| `Handyman` | one-to-one extension of User (`userId` is unique): profession, price, rating, availability, approval, GeoJSON base location, wallet/earnings, cancellation counters; 2dsphere index on `location` |
+| `Order` | customerId and handymanId both reference User; scheduled date/time, location snapshots/live location, lifecycle, price/commission, payment, tracking and reschedule embedded objects |
+| `Review` | references one order, one customer and one handyman; unique compound index `(customerId, orderId)` |
+| `Message` | references an order and sender; text/image/audio, seen/deleted flags |
+| `Notification` | references user; typed message and JSON data; seven-day TTL via `createdAt` |
+| `Report` | references order, reporter, accused user and resolver; stores pre-dispute status and SLA fields |
+| `Fine`, `SettlementRequest`, `FinancialRecord`, `PayoutHistory` | penalty and payout audit trail; not a single normalized payment ledger |
+| `RefreshToken`, `IdempotencyKey` | refresh-token rotation and cached response support; idempotency records expire after 24 hours |
+| `StripePayment`, `StripeSubscription` | separate generic product/cart and subscription records; neither is the core Order payment document |
+| `SupportConversation`, `SupportMessage`, `ServiceType`, `AuditLog` | support chat, admin-managed professions, and administrative action audit trail |
+
+MongoDB suits flexible order snapshots, embedded tracking/rescheduling state, and rapid iteration. It does not provide relational foreign-key enforcement: controllers must enforce ownership and related-record consistency.
+
+## 6. Discovery and “smart matching” — exact behaviour
+
+The public endpoint is `GET /api/handyman/nearby` (also mounted under `/api/handymen/nearby`) in `routes/handymanRoutes.js`; its controller is `getNearbyHandymen` in `controllers/handymanController.js`.
+
+Actual algorithm (updated to use the declared geospatial index):
+
+1. Require `lat` and `lng`, validate latitude/longitude ranges.
+2. Query Handyman profiles where `registrationStatus: 'approved'`, `isSuspended: false`, and `isAvailable: true`, using `$near` over `Handyman.location` with a GeoJSON Point and `$maxDistance`; optionally match exact `profession`.
+3. Populate the linked User and ignore banned/soft-deleted users.
+4. Choose the Handyman profile location, falling back to the User location, then calculate great-circle distance with the controller's `haversineDistanceMeters` function.
+5. MongoDB discards candidates outside `radius` through `$maxDistance`; the controller caps the radius at the maximum valid spherical distance (20,037,508 metres).
+6. If a requested schedule exists, call `checkScheduleConflict` for each candidate; exclude conflicts unless `includeUnavailable=true`.
+7. Sort by `distance`, `rating`, `price`, or `smart`. Smart score is: `normalizedDistance * 0.4 + rating/5 * 0.4 + acceptanceRate * 0.2`, unless environment weight overrides are set.
+
+GeoJSON uses `[longitude, latitude]`, and `User.location`/`Handyman.location` have declared `2dsphere` indexes. Discovery now uses `$near` on `Handyman.location`, so MongoDB performs the indexed radius filter and nearest-first candidate retrieval. Haversine remains only for the response display distance and optional smart-score normalization; it is not used to discover every handyman.
+
+## 7. Order state machine and payment point
+
+Intended transitions are defined in `utils/orderConstants.js`:
+
+```text
+pending -> accepted -> scheduled/price-confirmed -> on_the_way -> arrived
+        -> in-progress -> completed
+Any allowed active state can branch to cancelled; disputed can be restored/cancelled by admin.
+```
+
+The source has a real inconsistency: `normalizeOrderStatus('price_confirmed')` returns `scheduled`, while `Order.status` and controllers still contain both `price_confirmed` and `scheduled` (plus `on_the_way`/`on-the-way` and `in-progress`/`in_progress`). Explain it as a current code defect, not as two clean persisted stages.
+
+### Order lifecycle — diagram to use in the defense
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: Customer creates order
+
+    pending --> accepted: Handyman accepts
+    pending --> cancelled: Customer / handyman / admin cancels
+
+    accepted --> scheduled: Customer confirms price
+    accepted --> cancelled: Customer / handyman / admin cancels
+
+    scheduled --> on_the_way: Handyman starts trip
+    scheduled --> arrived: Handyman confirms arrival (50 m geofence)
+    scheduled --> in_progress: Handyman starts work (50 m geofence)
+    scheduled --> cancelled: Authorized cancellation
+
+    on_the_way --> arrived: Arrival + 50 m geofence
+    on_the_way --> cancelled: Authorized cancellation
+
+    arrived --> in_progress: Handyman starts work + 50 m geofence
+    arrived --> cancelled: Authorized cancellation
+
+    in_progress --> completed: Completion image + commission calculation
+    in_progress --> disputed: Customer or handyman submits report
+    in_progress --> cancelled: Authorized cancellation
+
+    disputed --> in_progress: Admin restores previous status
+    disputed --> cancelled: Admin resolves by cancellation
+
+    completed --> [*]: Customer selects payment, then cash/card payment and review
+```
+
+### What each status means in the current implementation
+
+| Stored/canonical status | Meaning | Main actor/action | Key validation and side effects |
+|---|---|---|---|
+| `pending` | Newly created request awaiting the assigned handyman | Customer creates the order | Creates Order; may notify the handyman; customer cannot have an outstanding penalty |
+| `accepted` | Handyman accepted and may supply a price/duration | Assigned handyman via `PATCH /api/orders/:id/status` | Checks active-order conflict, suspension/penalty, and schedule conflict |
+| `scheduled` | The implementation's canonical value after price confirmation | Customer via `PATCH /api/orders/:id/confirm-price` | The code also accepts `price_confirmed`; treat the two names as one business stage |
+| `on_the_way` | Handyman has begun the trip | Assigned handyman via `PATCH /api/orders/:id/on-the-way` | Starts `trackingStatus: active`, calculates ETA/expiry, emits notifications/tracking events |
+| `arrived` | Handyman is at the service location | Handyman/admin through status endpoint | Requires valid handyman coordinates within `GEO_FENCE_RADIUS_METERS` (50 m by default); stops tracking |
+| `in-progress` | Work has started | Handyman/admin through status endpoint or `POST /:id/start` | Requires arrival-compatible state and 50 m geofence; prevents simultaneous active work |
+| `completed` | Work is finished, but payment may still be pending | Handyman/admin through status endpoint | Requires `completionImage`; calculates commission, net amount, completion timestamp; payment happens afterward |
+| `cancelled` | Order was cancelled | Participant/admin under transition rules | Saves canceller/reason; applies customer or handyman cancellation rules when applicable |
+| `disputed` | A participant reported the order for review | Customer or handyman through `POST /:orderId/report` | Saves Report and prior order status; admin resolves to restore/cancel |
+
+### Important distinction: `status` vs `trackingStatus`
+
+`status` is the business state of the job. `trackingStatus` is only the GPS-trip state: `stopped`, `active`, or `expired`. An order can be `on_the_way` while tracking is `active`, and it can remain in a business state even if tracking becomes `expired`. Tracking expiry is **not** completion or cancellation.
+
+### Honest implementation caveat
+
+The diagram expresses the intended/canonical flow. The actual code has mixed aliases (`price_confirmed`/`scheduled`, `on_the_way`/`on-the-way`, and `in-progress`/`in_progress`) and an undeclared `orderAlreadySaved` variable in `updateOrderStatus`. In a defense, say that the lifecycle is implemented with validation but needs status normalization cleanup before production release.
+
+| Operation | Route/controller | Actor | Main effects |
+|---|---|---|---|
+| Create | `POST /api/orders/create` -> `createOrder` | customer | validates schedule/location/pending penalty; saves pending order and notifies handyman |
+| Accept and offer price | `PATCH /:id/status` -> `updateOrderStatus` | assigned handyman | validates state, active jobs, schedule conflicts; increments acceptance data |
+| Confirm price | `PATCH /:id/confirm-price` -> `confirmPrice` | customer | changes accepted order to price-confirmed/scheduled representation |
+| Depart | `PATCH /:id/on-the-way` -> `markOnTheWay` | assigned handyman | starts tracking, calculates initial ETA/window |
+| Arrive/start/complete | `PATCH /:id/status`, `POST /:id/start` | handyman | 50 m geofence for arrival/start; completion requires `completionImage`; calculates commission/net |
+| Pay | `PATCH /select-payment-method`, card intent or cash confirmation | customer then Stripe/handyman | payment takes place **after `completed`** |
+| Review | `POST /api/reviews/addreview` -> `addReview` | order customer | only completed order; recalculates rating and verification threshold |
+
+`updateOrderStatus` is particularly risky: it assigns `orderAlreadySaved` without declaration. In non-strict CommonJS this can create shared global state. It must be declared locally or removed, then regression-tested.
+
+## 8. Tracking and TomTom
+
+`order.status` describes business work (accepted, arrived, completed); `trackingStatus` independently says `stopped | active | expired`.
+
+`markOnTheWay` starts tracking only from price-confirmed/scheduled/in-progress conditions, records trip fields, computes a departure window, and assigns expiry as initial ETA plus `TRACKING_GRACE_PERIOD_MINUTES` (default 15). `socket/livetracking.socket.js` accepts `joinOrderRoom`, `sendCustomerLocation`, `sendLocation`, `startTracking`, and `stopTracking`. It verifies socket identity/participant access and valid GPS before persisting/relaying location. It keeps in-memory route/trip/arrival state; restart or horizontal scaling loses this state because no Redis/shared adapter exists.
+
+Arrival and service start use Haversine-style geofencing against the stored service coordinate; default radius is `GEO_FENCE_RADIUS_METERS || 50`. Tracking can also emit `trackingExpired`; the socket module has in-memory guards to reduce duplicate emissions for one process.
+
+`utils/tomtom.js:calculateRoute(origin, destination)` calls TomTom `routing/1/calculateRoute/{lat,lng}:{lat,lng}/json` with traffic and fastest car route. It returns road distance, ETA, traffic delay, arrival time and route geometry. On missing key/API failure it returns null routing data and `isFallback: true`; `markOnTheWay` uses a rough 30 km/h Haversine estimate when TomTom does not yield ETA. Mongo proximity and TomTom routing are different: one is straight-line candidate ranking in this code; the other is road navigation/ETA.
+
+## 9. Payments, cancellation and penalties
+
+### Order payments
+
+After completion, customer calls `PATCH /api/orders/:id/select-payment-method`. Card payments use `POST /api/orders/:id/create-payment-intent` in `createStripePaymentIntent`: EGP amount is `round((totalPrice || price) * 100)`, with order/customer/handyman metadata. The Stripe webhook (`POST /api/webhooks/stripe`, raw body/signature verification in `webhookController.js`) atomically changes an unpaid order to paid and credits `Handyman.pendingEarnings` by price minus commission. Duplicate successful webhooks do not re-credit because `findOneAndUpdate` requires `paymentStatus != paid`.
+
+Cash payment is selected after completion, then the assigned handyman calls `PATCH /api/orders/:id/confirm-payment`. It marks paid and adds the commission to `Handyman.walletBalance`. At a 500 EGP wallet balance it suspends the handyman. The generic `POST /api/payments/create-payment-intent` is a different legacy/cart flow: USD, hard-coded products, and `StripePayment`; it is not linked to Order lifecycle.
+
+### Cancellation
+
+In `updateOrderStatus`, customer cancellation from price-confirmed/scheduled/on-the-way/arrived/in-progress creates a progressive outstanding penalty: `50 + penaltyCount * 10`, except if tracking is expired. It saves the amount on User and the order and blocks a new order in `createOrder` while `customer.penaltyAmount > 0`.
+
+For handyman cancellation in the same active states, the monthly count increments and rating drops by 0.5. At the third monthly cancellation, a 50 EGP `Fine` is created and penalty fields increase. This differs from a simple "every cancellation is 50 EGP" story.
+
+Handyman cash fine settlement is a request (`/api/handyman/fines/request-settlement`) which an admin confirms/rejects. Stripe penalty settlement creates/retrieves a dedicated PaymentIntent and, after successful verification/webhook, clears `penaltyAmount` while retaining `penaltyCount`. Database updates are partially atomic, but full cross-document transaction consistency is not guaranteed everywhere.
+
+## 10. Chat, notifications, uploads and Gemini
+
+**Order chat:** REST endpoints in `messageRoutes.js` create/read/delete `Message` records. Socket events in `socket/chatSocket.js` include `joinRoom`, `sendMessage`, `receiveMessage`, `deleteMessage`, `messageDeleted`, `typing`, and support-chat equivalents. Participation is checked against the order/conversation before room access. Messages support text, image and audio; model validation requires text for text messages and a media URL for media messages.
+
+**Notifications:** `createNotification` in `notificationController.js` persists a Notification and emits it to `user_<userId>` if Socket.IO is available. The model has typed events, read status and a seven-day TTL. HTTP routes list, mark one/all read, count unread, and delete. Frontend notification Redux/UI consumes both REST and socket state.
+
+**Uploads:** `middlewares/uploadMiddleware.js` uses Multer/Cloudinary storage and validates configured image/document/audio types/limits. `/api/uploads/image`, `/images`, `/audio`, `/document` call `uploadController.js`. Registration uploads in `authRoutes.js` use a separate memory-storage route and `uploadBufferToCloudinary`; on Cloudinary failure it falls back to a data URI, so do not promise that every file is securely externalized. The frontend must send multipart data without manually forcing a JSON `Content-Type` so the browser sets the multipart boundary.
+
+**Gemini:** `POST /api/chatbot/ask` is authenticated, Joi-validated and rate-limited to 15 requests/minute in `routes/chatbotRoutes.js`. `askChatbot` builds an Arabic platform-scoped system instruction in `chatbotController.js`, fetches active ServiceType names, submits client-supplied history plus message to `@google/genai`, and returns `response.text`. Default model is `gemini-2.5-flash` (`config/gemini.js`). It does not query orders, payments, messages, or private database data; its only dynamic database context is active profession names and the authenticated user's name/role in its prompt.
+
+## 11. Security and production limitations
+
+Implemented controls: bcrypt password hashing; JWT verification; refresh-token hashes; banned/deleted/verification checks; Joi on several inputs; Helmet; explicit CORS allowlist for localhost development URLs; mongo-sanitize; HPP; raw signed Stripe webhook; request idempotency on selected order mutations; ownership checks in many controllers; socket token authentication; upload filtering; and chatbot-only rate limiting.
+
+Important weaknesses to volunteer if asked:
+
+1. Global API rate limiting in `app.js` is commented out.
+2. CORS is development-localhost only; no production origin/configuration is shown.
+3. Some authorization is duplicated in controllers and inconsistent (`role === 'admin'` vs `isAdmin`); `reportRoutes.js` is a concrete route-level exposure.
+4. Matching now uses `$near` and the `Handyman.location` 2dsphere index for candidate retrieval, but scheduled searches still perform one schedule-conflict check per candidate and require pagination/limits for large result sets.
+5. Socket tracking/cache state is process memory, so it is not horizontally scalable and disappears on restart.
+6. The order status vocabulary is duplicated/inconsistent; `orderAlreadySaved` is undeclared.
+7. There are no frontend automated tests, deployment manifests, observability/monitoring, load tests, or verified current pass/fail test run in the repository.
+8. `subscriptionController.cancelSubscription` receives an arbitrary subscription ID and does not establish ownership before cancelling it.
+
+## 12. Defense questions: concise high-value answers
+
+| Question | Strong answer |
+|---|---|
+| Why MongoDB? | Orders contain evolving embedded tracking, rescheduling and payment metadata, and the application uses Mongoose schemas for validation. It trades database foreign keys for controller-enforced references/ownership. |
+| Do you use MongoDB geospatial search? | Schemas declare GeoJSON and 2dsphere indexes, but the current nearby controller loads filtered handyman profiles and calculates Haversine distances in Node. It is geospatial *data-ready*, not currently a `$near` implementation. |
+| Why longitude before latitude? | GeoJSON coordinates are specified as `[longitude, latitude]`; reversing them places points incorrectly. TomTom's URL uses `latitude,longitude`, so adapters deliberately convert order. |
+| Why Socket.IO and REST together? | REST is used for durable commands/queries and standard HTTP errors. Socket.IO distributes low-latency location, chat, typing and notification events to authenticated rooms. |
+| When does the customer pay? | The order payment flow starts only after `order.status === 'completed'`; customer selects cash/card. Card confirmation is authoritative through Stripe webhook; cash is confirmed by the assigned handyman. |
+| Why PaymentIntent/webhook? | PaymentIntent models asynchronous card completion. The webhook, signature-verified with the raw request body, is the server-side authority for crediting card earnings. |
+| How are duplicate Stripe events handled? | Webhook updates only an order whose payment status is not already `paid`; a repeat event gets no matching update and does not credit pending earnings again. |
+| How does tracking expire? | `markOnTheWay` stores an expiry based on ETA plus grace period. Socket tracking checks it and emits expiry with in-memory guards; status becomes `expired`, separate from the business order status. |
+| Biggest current technical debt? | Consolidate order statuses, repair the undeclared `orderAlreadySaved`, make sensitive routes consistently admin-only, and move matching/tracking shared state toward scalable database/Redis-backed designs. |
+
+## 13. Ten flows to memorize
+
+1. Register -> OTP verification -> handyman admin approval -> JWT login.
+2. Customer location -> nearby controller filters profiles -> Haversine/smart sort -> profile page.
+3. Create order -> idempotency/validation -> Order pending -> handyman notification.
+4. Handyman accepts -> conflict/penalty checks -> price -> customer confirms.
+5. Mark on the way -> departure window + TomTom/fallback ETA -> tracking active -> socket room updates.
+6. Arrival/start -> server geofence -> order status, trip/tracking fields and notifications.
+7. Complete -> completion photo -> commission/net -> status completed.
+8. Card payment -> PaymentIntent -> Stripe -> signed webhook -> paid + pending earnings.
+9. Cash payment -> handyman confirms -> paid + commission wallet balance/suspension threshold.
+10. Cancellation -> actor/state checks -> customer progressive penalty or handyman cancellation counters/fine -> settlement path.
+
+## 14. Final presentation story
+
+“The customer opens the React application and authenticates through the Express API. The API verifies the JWT and the account state, while MongoDB holds the User and service data. The customer searches for an approved and available handyman. In the current implementation the backend filters profiles, calculates straight-line Haversine distance, and can rank candidates with distance, rating and acceptance-rate weights. After an order is created, the assigned handyman accepts it and a price is confirmed. When the handyman travels, the REST action starts tracking and Socket.IO sends authenticated room updates. TomTom provides a road route and ETA when available; server geofencing protects arrival and starting work. On completion, a photo is required and the server calculates commission. Only then does the customer select cash or card. Cash is confirmed by the handyman; card payment is finalized by a Stripe-signed webhook, which prevents duplicate earning credits. Messages, notifications, reports, reviews, uploads and an authenticated Gemini assistant support the workflow. The admin uses a separate protected dashboard for verification, moderation, finance and governance. The main limitations we would address next are status consistency, route authorization, geospatial database querying, test verification, and scalable Socket.IO state.”
+</file>
+
 <file path="skills-lock.json">
 {
   "version": 1,
@@ -20373,18 +20654,6 @@ const stripeSubscriptionSchema = new mongoose.Schema(
 module.exports = mongoose.model("StripeSubscription", stripeSubscriptionSchema);
 </file>
 
-<file path="HerfyBackend/routes/subscriptionRoutes.js">
-const express = require("express");
-const router = express.Router();
-const { createSubscription, cancelSubscription } = require("../controllers/subscriptionController");
-const { authMiddleware } = require("../middlewares/authMiddleware");
-
-router.post("/create", authMiddleware, createSubscription);
-router.post("/cancel", authMiddleware, cancelSubscription);
-
-module.exports = router;
-</file>
-
 <file path="HerfyBackend/tests/setup.js">
 // tests/setup.js — runs before all test files (before Jest globals are available)
 process.env.NODE_ENV = 'test';
@@ -21766,19 +22035,6 @@ export default function CreateOrderPage() {
 }
 </file>
 
-<file path="HerfyFrontend_fixed/src/services/stripeService.js">
-import api from '../api/axios';
-
-export const createPaymentIntent = (items) =>
-  api.post('/payments/create-payment-intent', { items });
-
-export const createSubscription = (plan) =>
-  api.post('/subscriptions/create', { plan });
-
-export const cancelSubscription = (subscriptionId) =>
-  api.post('/subscriptions/cancel', { subscriptionId });
-</file>
-
 <file path="HerfyFrontend_fixed/src/utils/helpers.js">
 export const haversineDistance = (lat1, lon1, lat2, lon2) => {
   const R = 6371;
@@ -21899,168 +22155,6 @@ const connectDB = async () => {
 module.exports = connectDB;
 </file>
 
-<file path="HerfyBackend/controllers/subscriptionController.js">
-const Stripe = require("stripe");
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
-const User = require("../models/User");
-const StripeSubscription = require("../models/StripeSubscription");
-const Handyman = require("../models/Handyman");
-const Order = require("../models/Order");
-const { SUBSCRIPTION_PLANS } = require("../utils/constants");
-
-// خطط الاشتراك المربوطة بـ Stripe Price IDs الحقيقية (من الـ Dashboard، test mode)
-const PLANS = {
-  monthly: { priceId: process.env.STRIPE_PRICE_MONTHLY, label: "Monthly Plan" },
-  yearly:  { priceId: process.env.STRIPE_PRICE_YEARLY,  label: "Yearly Plan"  },
-};
-
-// GET /api/handymen/subscription
-exports.getSubscription = async (req, res, next) => {
-  try {
-    if (req.user.role !== "handyman") {
-      return res.status(403).json({ message: "Only handymen can view subscription details" });
-    }
-
-    const handyman = await Handyman.findOne({ userId: req.user._id });
-    if (!handyman) return res.status(404).json({ message: "Handyman profile not found" });
-
-    const subscriptionPlan = handyman.subscriptionPlan || "FREE";
-    const planConfig = SUBSCRIPTION_PLANS[subscriptionPlan] || SUBSCRIPTION_PLANS.FREE;
-    const activeClients = await Order.countDocuments({
-      handymanId: req.user._id,
-      status: { $in: ["accepted", "price_confirmed", "scheduled", "in-progress", "arrived"] },
-    });
-
-    res.json({
-      subscriptionPlan,
-      commissionRate: planConfig.commissionRate,
-      maxActiveClients: planConfig.maxActiveClients,
-      activeClients,
-      remainingSlots: Math.max(0, planConfig.maxActiveClients - activeClients),
-      price: planConfig.price,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// PATCH /api/admin/handymen/:handymanId/subscription
-exports.setSubscriptionPlan = async (req, res, next) => {
-  try {
-    const { subscriptionPlan } = req.body;
-    if (!Object.prototype.hasOwnProperty.call(SUBSCRIPTION_PLANS, subscriptionPlan)) {
-      return res.status(400).json({ message: "Invalid subscription plan" });
-    }
-
-    const handyman = await Handyman.findOneAndUpdate(
-      { userId: req.params.handymanId },
-      { subscriptionPlan },
-      { new: true, runValidators: true }
-    );
-    if (!handyman) return res.status(404).json({ message: "Handyman profile not found" });
-
-    res.json({ subscriptionPlan: handyman.subscriptionPlan });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// POST /api/subscriptions/create
-// Body: { plan: "monthly" | "yearly" }
-exports.createSubscription = async (req, res, next) => {
-  try {
-    const { plan } = req.body;
-    const userId = req.user._id;
-
-    const planConfig = PLANS[plan];
-    if (!planConfig) {
-      return res.status(400).json({ message: "Invalid plan" });
-    }
-    if (!planConfig.priceId) {
-      // بيحمينا لو نسينا نحط الـ Price ID في env
-      console.error(`[createSubscription] Missing Stripe Price ID for plan: ${plan}`);
-      return res.status(500).json({ message: "Subscription plan is not configured correctly" });
-    }
-
-    const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: "User not found" });
-    if (!user.email) {
-      return res.status(400).json({ message: "User must have an email to subscribe" });
-    }
-
-    // إنشاء أو استخدام Stripe Customer موجود
-    let customerId = user.stripeCustomerId;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: user.email,
-        name: user.name,
-        metadata: { userId: userId.toString() },
-      });
-      customerId = customer.id;
-      user.stripeCustomerId = customerId;
-      await user.save();
-    }
-
-// إنشاء الاشتراك
-const subscription = await stripe.subscriptions.create({
-  customer: customerId,
-  items: [{ price: planConfig.priceId }],
-  payment_behavior: "default_incomplete",
-  payment_settings: {
-    save_default_payment_method: "on_subscription",
-    payment_method_types: ["card"],
-  },
-  expand: ["latest_invoice.confirmation_secret"], // ✅ مش latest_invoice.payment_intent
-});
-
-// ✅ ناخد الـ client_secret من confirmation_secret مباشرة
-const confirmationSecret = subscription.latest_invoice?.confirmation_secret;
-if (!confirmationSecret || !confirmationSecret.client_secret) {
-  console.error("[createSubscription] No confirmation_secret returned:", subscription.id);
-  return res.status(500).json({ message: "Failed to create payment for this subscription" });
-}
-
-await StripeSubscription.create({
-  user: userId,
-  stripeCustomerId: customerId,
-  stripeSubscriptionId: subscription.id,
-  plan,
-  stripePriceId: planConfig.priceId,
-  status: subscription.status,
-});
-
-res.json({
-  clientSecret: confirmationSecret.client_secret,
-  subscriptionId: subscription.id,
-});
-  } catch (err) {
-    console.error("[createSubscription] Stripe error:", err.message);
-    next(err);
-  }
-};
-
-// POST /api/subscriptions/cancel
-// Body: { subscriptionId }
-exports.cancelSubscription = async (req, res, next) => {
-  try {
-    const { subscriptionId } = req.body;
-    if (!subscriptionId) {
-      return res.status(400).json({ message: "subscriptionId is required" });
-    }
-
-    await stripe.subscriptions.cancel(subscriptionId);
-    await StripeSubscription.findOneAndUpdate(
-      { stripeSubscriptionId: subscriptionId },
-      { status: "canceled" }
-    );
-    res.json({ message: "Subscription canceled" });
-  } catch (err) {
-    console.error("[cancelSubscription] Stripe error:", err.message);
-    next(err);
-  }
-};
-</file>
-
 <file path="HerfyBackend/models/Notification.js">
 const mongoose = require("mongoose");
 
@@ -22149,13 +22243,14 @@ const Notification = mongoose.model("Notification", notificationSchema);
 module.exports = Notification;
 </file>
 
-<file path="HerfyBackend/routes/webhookRoutes.js">
-const express = require('express');
+<file path="HerfyBackend/routes/subscriptionRoutes.js">
+const express = require("express");
 const router = express.Router();
-const { handleStripeWebhook } = require('../controllers/webhookController');
+const { createSubscription, cancelSubscription } = require("../controllers/subscriptionController");
+const { authMiddleware } = require("../middlewares/authMiddleware");
 
-// express.raw() is required — Stripe signature verification needs the raw body
-router.post('/stripe', express.raw({ type: 'application/json' }), handleStripeWebhook);
+router.post("/create", authMiddleware, createSubscription);
+router.post("/cancel", authMiddleware, cancelSubscription);
 
 module.exports = router;
 </file>
@@ -23515,218 +23610,6 @@ export default function HandymanLayout() {
         <main className="min-w-0 flex-1 px-4 py-5 lg:px-0">
           <Outlet />
         </main>
-      </div>
-    </div>
-  );
-}
-</file>
-
-<file path="HerfyFrontend_fixed/src/components/stripe/SubscriptionPlans.jsx">
-import { useState } from 'react';
-import { loadStripe } from '@stripe/stripe-js';
-import { Elements, useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
-import { createSubscription } from '../../services/stripeService';
-import { FaCheckCircle, FaCrown, FaArrowRight, FaLock } from 'react-icons/fa';
-
-const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
-const stripePromise = stripePublishableKey
-  ? loadStripe(stripePublishableKey)
-  : Promise.reject(new Error('Stripe publishable key is not configured.'));
-
-const PLANS = [
-  {
-    id: 'monthly',
-    label: 'الباقة الشهرية',
-    price: '$9.99',
-    period: '/شهريًا',
-    features: ['عمولة أقل على الطلبات', 'عدد عملاء أكبر', 'دعم فني مباشر'],
-  },
-  {
-    id: 'yearly',
-    label: 'الباقة السنوية',
-    price: '$99.99',
-    period: '/سنويًا',
-    badge: 'وفّر شهرين',
-    features: ['كل مميزات الباقة الشهرية', 'سعر أقل بالسنة', 'أولوية في الدعم'],
-  },
-];
-
-function SubscriptionCheckoutForm({ plan, onBack, onSuccess }) {
-  const stripe = useStripe();
-  const elements = useElements();
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!stripe || !elements) return;
-    setLoading(true);
-    setError(null);
-
-    const { error: submitError } = await elements.submit();
-    if (submitError) {
-      setError(submitError.message);
-      setLoading(false);
-      return;
-    }
-
-    const { error: confirmError, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        return_url: `${window.location.origin}/payment/success`,
-      },
-      redirect: 'if_required', // يفضل في نفس الصفحة لو مش محتاج 3DS redirect
-    });
-
-    if (confirmError) {
-      setError(confirmError.message);
-      setLoading(false);
-      return;
-    }
-
-    if (paymentIntent?.status === 'succeeded') {
-      onSuccess?.();
-    }
-    setLoading(false);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="max-w-md mx-auto rounded-2xl bg-white p-6 shadow-card border border-neutral">
-      <div className="mb-5 flex items-center gap-2">
-        <FaLock className="text-primary" size={16} />
-        <h3 className="font-bold text-textDark text-base">إتمام الاشتراك — {plan}</h3>
-      </div>
-
-      <PaymentElement />
-
-      {error && (
-        <p className="mt-3 text-xs font-medium text-emergency bg-emergency/10 rounded-lg p-2.5">{error}</p>
-      )}
-
-      <button
-        type="submit"
-        disabled={!stripe || loading}
-        className="btn-primary w-full mt-5 text-sm py-3 disabled:opacity-50"
-      >
-        {loading ? 'جاري تنفيذ عملية الدفع...' : 'تأكيد الاشتراك'}
-      </button>
-
-      <button
-        type="button"
-        onClick={onBack}
-        className="mt-3 w-full text-xs text-textGray hover:text-textDark underline"
-      >
-        العودة لاختيار الباقة
-      </button>
-
-      <p className="mt-4 text-[11px] text-textGray text-center">
-        وضع الاختبار: استخدم رقم الكارت <span className="font-mono font-bold">4242 4242 4242 4242</span>، أي تاريخ مستقبلي، وأي CVC مكوّن من 3 أرقام.
-      </p>
-    </form>
-  );
-}
-
-export default function SubscriptionPlans() {
-  const [clientSecret, setClientSecret] = useState(null);
-  const [selectedPlan, setSelectedPlan] = useState(null);
-  const [error, setError] = useState(null);
-  const [loadingPlanId, setLoadingPlanId] = useState(null);
-  const [success, setSuccess] = useState(false);
-
-  const handleSelectPlan = async (plan) => {
-    setLoadingPlanId(plan.id);
-    setError(null);
-    try {
-      const { data } = await createSubscription(plan.id);
-      setClientSecret(data.clientSecret);
-      setSelectedPlan(plan);
-    } catch (err) {
-      setError(err.response?.data?.message || 'حدث خطأ أثناء تجهيز الاشتراك، حاول مرة أخرى');
-    } finally {
-      setLoadingPlanId(null);
-    }
-  };
-
-  if (success) {
-    return (
-      <div className="max-w-md mx-auto text-center rounded-2xl bg-white p-8 shadow-card border border-neutral mt-10">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-tertiary/10 text-tertiary">
-          <FaCheckCircle size={30} />
-        </div>
-        <h2 className="text-xl font-bold text-textDark mb-2">تم الاشتراك بنجاح 🎉</h2>
-        <p className="text-xs text-textGray">هيتم تفعيل باقتك خلال لحظات.</p>
-      </div>
-    );
-  }
-
-  if (clientSecret && selectedPlan) {
-    return (
-      <Elements stripe={stripePromise} options={{ clientSecret }}>
-        <SubscriptionCheckoutForm
-          plan={selectedPlan.label}
-          onBack={() => {
-            setClientSecret(null);
-            setSelectedPlan(null);
-          }}
-          onSuccess={() => setSuccess(true)}
-        />
-      </Elements>
-    );
-  }
-
-  return (
-    <div className="max-w-2xl mx-auto p-6">
-      <div className="text-center mb-8">
-        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-yellow-100 text-yellow-600">
-          <FaCrown size={24} />
-        </div>
-        <h2 className="text-2xl font-extrabold text-textDark">اختر باقتك</h2>
-        <p className="text-xs text-textGray mt-1">قلل عمولة المنصة وزوّد عدد عملائك النشطين</p>
-      </div>
-
-      {error && (
-        <p className="text-xs font-medium text-emergency bg-emergency/10 rounded-lg p-3 mb-4 text-center">
-          {error}
-        </p>
-      )}
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        {PLANS.map((plan) => (
-          <div
-            key={plan.id}
-            className="relative flex flex-col rounded-2xl border border-neutral bg-white p-5 shadow-card hover:shadow-lg transition-all"
-          >
-            {plan.badge && (
-              <span className="absolute -top-3 right-4 rounded-full bg-tertiary text-white text-[10px] font-bold px-3 py-1 shadow-sm">
-                {plan.badge}
-              </span>
-            )}
-            <p className="font-bold text-textDark text-base">{plan.label}</p>
-            <div className="flex items-baseline gap-1 mt-1 mb-4">
-              <span className="text-2xl font-extrabold text-primary">{plan.price}</span>
-              <span className="text-xs text-textGray">{plan.period}</span>
-            </div>
-            <ul className="space-y-2 mb-5 flex-1">
-              {plan.features.map((f) => (
-                <li key={f} className="flex items-center gap-2 text-xs text-textDark">
-                  <FaCheckCircle className="text-tertiary shrink-0" size={12} />
-                  {f}
-                </li>
-              ))}
-            </ul>
-            <button
-              onClick={() => handleSelectPlan(plan)}
-              disabled={loadingPlanId === plan.id}
-              className="btn-primary w-full text-sm py-2.5 flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              {loadingPlanId === plan.id ? 'جاري التجهيز...' : (
-                <>
-                  اشترك الآن <FaArrowRight size={12} />
-                </>
-              )}
-            </button>
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -25942,6 +25825,19 @@ export default function PaymentCancel() {
 }
 </file>
 
+<file path="HerfyFrontend_fixed/src/services/stripeService.js">
+import api from '../api/axios';
+
+export const createPaymentIntent = (items) =>
+  api.post('/payments/create-payment-intent', { items });
+
+export const createSubscription = (plan) =>
+  api.post('/subscriptions/create', { plan });
+
+export const cancelSubscription = (subscriptionId) =>
+  api.post('/subscriptions/cancel', { subscriptionId });
+</file>
+
 <file path="HerfyFrontend_fixed/src/store/slices/authSlice.js">
 // HerfyFrontend_fixed/src/store/slices/authSlice.js
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
@@ -27257,22 +27153,6 @@ export default orderSlice.reducer;
 }
 </file>
 
-<file path="HerfyFrontend_fixed/.env.example">
-# Harfey Frontend Environment Variables
-
-# Backend API URL
-VITE_API_URL=http://localhost:5000
-
-# Socket.io server URL
-VITE_SOCKET_URL=http://localhost:5000
-
-# TomTom Maps API Key (get from https://developer.tomtom.com/)
-VITE_TOMTOM_API_KEY=your_tomtom_api_key_here
-
-# Stripe Publishable Key (get from https://dashboard.stripe.com/apikeys)
-VITE_STRIPE_PUBLISHABLE_KEY=pk_test_<your_stripe_publishable_key>
-</file>
-
 <file path="HerfyBackend/controllers/notificationController.js">
 const Notification = require("../models/Notification");
 
@@ -27488,6 +27368,168 @@ const createNotification = async (io, userId, type, title, body, data = {}) => {
     };
 </file>
 
+<file path="HerfyBackend/controllers/subscriptionController.js">
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const User = require("../models/User");
+const StripeSubscription = require("../models/StripeSubscription");
+const Handyman = require("../models/Handyman");
+const Order = require("../models/Order");
+const { SUBSCRIPTION_PLANS } = require("../utils/constants");
+
+// خطط الاشتراك المربوطة بـ Stripe Price IDs الحقيقية (من الـ Dashboard، test mode)
+const PLANS = {
+  monthly: { priceId: process.env.STRIPE_PRICE_MONTHLY, label: "Monthly Plan" },
+  yearly:  { priceId: process.env.STRIPE_PRICE_YEARLY,  label: "Yearly Plan"  },
+};
+
+// GET /api/handymen/subscription
+exports.getSubscription = async (req, res, next) => {
+  try {
+    if (req.user.role !== "handyman") {
+      return res.status(403).json({ message: "Only handymen can view subscription details" });
+    }
+
+    const handyman = await Handyman.findOne({ userId: req.user._id });
+    if (!handyman) return res.status(404).json({ message: "Handyman profile not found" });
+
+    const subscriptionPlan = handyman.subscriptionPlan || "FREE";
+    const planConfig = SUBSCRIPTION_PLANS[subscriptionPlan] || SUBSCRIPTION_PLANS.FREE;
+    const activeClients = await Order.countDocuments({
+      handymanId: req.user._id,
+      status: { $in: ["accepted", "price_confirmed", "scheduled", "in-progress", "arrived"] },
+    });
+
+    res.json({
+      subscriptionPlan,
+      commissionRate: planConfig.commissionRate,
+      maxActiveClients: planConfig.maxActiveClients,
+      activeClients,
+      remainingSlots: Math.max(0, planConfig.maxActiveClients - activeClients),
+      price: planConfig.price,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PATCH /api/admin/handymen/:handymanId/subscription
+exports.setSubscriptionPlan = async (req, res, next) => {
+  try {
+    const { subscriptionPlan } = req.body;
+    if (!Object.prototype.hasOwnProperty.call(SUBSCRIPTION_PLANS, subscriptionPlan)) {
+      return res.status(400).json({ message: "Invalid subscription plan" });
+    }
+
+    const handyman = await Handyman.findOneAndUpdate(
+      { userId: req.params.handymanId },
+      { subscriptionPlan },
+      { new: true, runValidators: true }
+    );
+    if (!handyman) return res.status(404).json({ message: "Handyman profile not found" });
+
+    res.json({ subscriptionPlan: handyman.subscriptionPlan });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/subscriptions/create
+// Body: { plan: "monthly" | "yearly" }
+exports.createSubscription = async (req, res, next) => {
+  try {
+    const { plan } = req.body;
+    const userId = req.user._id;
+
+    const planConfig = PLANS[plan];
+    if (!planConfig) {
+      return res.status(400).json({ message: "Invalid plan" });
+    }
+    if (!planConfig.priceId) {
+      // بيحمينا لو نسينا نحط الـ Price ID في env
+      console.error(`[createSubscription] Missing Stripe Price ID for plan: ${plan}`);
+      return res.status(500).json({ message: "Subscription plan is not configured correctly" });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user.email) {
+      return res.status(400).json({ message: "User must have an email to subscribe" });
+    }
+
+    // إنشاء أو استخدام Stripe Customer موجود
+    let customerId = user.stripeCustomerId;
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        name: user.name,
+        metadata: { userId: userId.toString() },
+      });
+      customerId = customer.id;
+      user.stripeCustomerId = customerId;
+      await user.save();
+    }
+
+// إنشاء الاشتراك
+const subscription = await stripe.subscriptions.create({
+  customer: customerId,
+  items: [{ price: planConfig.priceId }],
+  payment_behavior: "default_incomplete",
+  payment_settings: {
+    save_default_payment_method: "on_subscription",
+    payment_method_types: ["card"],
+  },
+  expand: ["latest_invoice.confirmation_secret"], // ✅ مش latest_invoice.payment_intent
+});
+
+// ✅ ناخد الـ client_secret من confirmation_secret مباشرة
+const confirmationSecret = subscription.latest_invoice?.confirmation_secret;
+if (!confirmationSecret || !confirmationSecret.client_secret) {
+  console.error("[createSubscription] No confirmation_secret returned:", subscription.id);
+  return res.status(500).json({ message: "Failed to create payment for this subscription" });
+}
+
+await StripeSubscription.create({
+  user: userId,
+  stripeCustomerId: customerId,
+  stripeSubscriptionId: subscription.id,
+  plan,
+  stripePriceId: planConfig.priceId,
+  status: subscription.status,
+});
+
+res.json({
+  clientSecret: confirmationSecret.client_secret,
+  subscriptionId: subscription.id,
+});
+  } catch (err) {
+    console.error("[createSubscription] Stripe error:", err.message);
+    next(err);
+  }
+};
+
+// POST /api/subscriptions/cancel
+// Body: { subscriptionId }
+exports.cancelSubscription = async (req, res, next) => {
+  try {
+    const { subscriptionId } = req.body;
+    if (!subscriptionId) {
+      return res.status(400).json({ message: "subscriptionId is required" });
+    }
+
+    await stripe.subscriptions.cancel(subscriptionId);
+    await StripeSubscription.findOneAndUpdate(
+      { stripeSubscriptionId: subscriptionId },
+      { status: "canceled" }
+    );
+    res.json({ message: "Subscription canceled" });
+  } catch (err) {
+    console.error("[cancelSubscription] Stripe error:", err.message);
+    next(err);
+  }
+};
+</file>
+
 <file path="HerfyBackend/routes/handymanRoutes.js">
 // HerfyBackend/routes/handymanRoutes.js
 const express = require("express");
@@ -27619,6 +27661,17 @@ router.post("/create-payment-intent", authMiddleware, createPaymentIntent);
 // ========== Penalty settlement via Card ==========
 router.post("/penalty/create-intent", authMiddleware, createPenaltyPaymentIntent);
 router.post("/penalty/verify-intent", authMiddleware, verifyPenaltyPaymentIntent);
+
+module.exports = router;
+</file>
+
+<file path="HerfyBackend/routes/webhookRoutes.js">
+const express = require('express');
+const router = express.Router();
+const { handleStripeWebhook } = require('../controllers/webhookController');
+
+// express.raw() is required — Stripe signature verification needs the raw body
+router.post('/stripe', express.raw({ type: 'application/json' }), handleStripeWebhook);
 
 module.exports = router;
 </file>
@@ -28316,6 +28369,218 @@ export default function CheckoutForm({ orderId, amount, penaltyMode }) {
         {loading ? 'جاري الدفع...' : 'ادفع الآن'}
       </button>
     </form>
+  );
+}
+</file>
+
+<file path="HerfyFrontend_fixed/src/components/stripe/SubscriptionPlans.jsx">
+import { useState } from 'react';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
+import { createSubscription } from '../../services/stripeService';
+import { FaCheckCircle, FaCrown, FaArrowRight, FaLock } from 'react-icons/fa';
+
+const stripePublishableKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
+const stripePromise = stripePublishableKey
+  ? loadStripe(stripePublishableKey)
+  : Promise.reject(new Error('Stripe publishable key is not configured.'));
+
+const PLANS = [
+  {
+    id: 'monthly',
+    label: 'الباقة الشهرية',
+    price: '$9.99',
+    period: '/شهريًا',
+    features: ['عمولة أقل على الطلبات', 'عدد عملاء أكبر', 'دعم فني مباشر'],
+  },
+  {
+    id: 'yearly',
+    label: 'الباقة السنوية',
+    price: '$99.99',
+    period: '/سنويًا',
+    badge: 'وفّر شهرين',
+    features: ['كل مميزات الباقة الشهرية', 'سعر أقل بالسنة', 'أولوية في الدعم'],
+  },
+];
+
+function SubscriptionCheckoutForm({ plan, onBack, onSuccess }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    setLoading(true);
+    setError(null);
+
+    const { error: submitError } = await elements.submit();
+    if (submitError) {
+      setError(submitError.message);
+      setLoading(false);
+      return;
+    }
+
+    const { error: confirmError, paymentIntent } = await stripe.confirmPayment({
+      elements,
+      confirmParams: {
+        return_url: `${window.location.origin}/payment/success`,
+      },
+      redirect: 'if_required', // يفضل في نفس الصفحة لو مش محتاج 3DS redirect
+    });
+
+    if (confirmError) {
+      setError(confirmError.message);
+      setLoading(false);
+      return;
+    }
+
+    if (paymentIntent?.status === 'succeeded') {
+      onSuccess?.();
+    }
+    setLoading(false);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="max-w-md mx-auto rounded-2xl bg-white p-6 shadow-card border border-neutral">
+      <div className="mb-5 flex items-center gap-2">
+        <FaLock className="text-primary" size={16} />
+        <h3 className="font-bold text-textDark text-base">إتمام الاشتراك — {plan}</h3>
+      </div>
+
+      <PaymentElement />
+
+      {error && (
+        <p className="mt-3 text-xs font-medium text-emergency bg-emergency/10 rounded-lg p-2.5">{error}</p>
+      )}
+
+      <button
+        type="submit"
+        disabled={!stripe || loading}
+        className="btn-primary w-full mt-5 text-sm py-3 disabled:opacity-50"
+      >
+        {loading ? 'جاري تنفيذ عملية الدفع...' : 'تأكيد الاشتراك'}
+      </button>
+
+      <button
+        type="button"
+        onClick={onBack}
+        className="mt-3 w-full text-xs text-textGray hover:text-textDark underline"
+      >
+        العودة لاختيار الباقة
+      </button>
+
+      <p className="mt-4 text-[11px] text-textGray text-center">
+        وضع الاختبار: استخدم رقم الكارت <span className="font-mono font-bold">4242 4242 4242 4242</span>، أي تاريخ مستقبلي، وأي CVC مكوّن من 3 أرقام.
+      </p>
+    </form>
+  );
+}
+
+export default function SubscriptionPlans() {
+  const [clientSecret, setClientSecret] = useState(null);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [error, setError] = useState(null);
+  const [loadingPlanId, setLoadingPlanId] = useState(null);
+  const [success, setSuccess] = useState(false);
+
+  const handleSelectPlan = async (plan) => {
+    setLoadingPlanId(plan.id);
+    setError(null);
+    try {
+      const { data } = await createSubscription(plan.id);
+      setClientSecret(data.clientSecret);
+      setSelectedPlan(plan);
+    } catch (err) {
+      setError(err.response?.data?.message || 'حدث خطأ أثناء تجهيز الاشتراك، حاول مرة أخرى');
+    } finally {
+      setLoadingPlanId(null);
+    }
+  };
+
+  if (success) {
+    return (
+      <div className="max-w-md mx-auto text-center rounded-2xl bg-white p-8 shadow-card border border-neutral mt-10">
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-tertiary/10 text-tertiary">
+          <FaCheckCircle size={30} />
+        </div>
+        <h2 className="text-xl font-bold text-textDark mb-2">تم الاشتراك بنجاح 🎉</h2>
+        <p className="text-xs text-textGray">هيتم تفعيل باقتك خلال لحظات.</p>
+      </div>
+    );
+  }
+
+  if (clientSecret && selectedPlan) {
+    return (
+      <Elements stripe={stripePromise} options={{ clientSecret }}>
+        <SubscriptionCheckoutForm
+          plan={selectedPlan.label}
+          onBack={() => {
+            setClientSecret(null);
+            setSelectedPlan(null);
+          }}
+          onSuccess={() => setSuccess(true)}
+        />
+      </Elements>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-6">
+      <div className="text-center mb-8">
+        <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-yellow-100 text-yellow-600">
+          <FaCrown size={24} />
+        </div>
+        <h2 className="text-2xl font-extrabold text-textDark">اختر باقتك</h2>
+        <p className="text-xs text-textGray mt-1">قلل عمولة المنصة وزوّد عدد عملائك النشطين</p>
+      </div>
+
+      {error && (
+        <p className="text-xs font-medium text-emergency bg-emergency/10 rounded-lg p-3 mb-4 text-center">
+          {error}
+        </p>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {PLANS.map((plan) => (
+          <div
+            key={plan.id}
+            className="relative flex flex-col rounded-2xl border border-neutral bg-white p-5 shadow-card hover:shadow-lg transition-all"
+          >
+            {plan.badge && (
+              <span className="absolute -top-3 right-4 rounded-full bg-tertiary text-white text-[10px] font-bold px-3 py-1 shadow-sm">
+                {plan.badge}
+              </span>
+            )}
+            <p className="font-bold text-textDark text-base">{plan.label}</p>
+            <div className="flex items-baseline gap-1 mt-1 mb-4">
+              <span className="text-2xl font-extrabold text-primary">{plan.price}</span>
+              <span className="text-xs text-textGray">{plan.period}</span>
+            </div>
+            <ul className="space-y-2 mb-5 flex-1">
+              {plan.features.map((f) => (
+                <li key={f} className="flex items-center gap-2 text-xs text-textDark">
+                  <FaCheckCircle className="text-tertiary shrink-0" size={12} />
+                  {f}
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={() => handleSelectPlan(plan)}
+              disabled={loadingPlanId === plan.id}
+              className="btn-primary w-full text-sm py-2.5 flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {loadingPlanId === plan.id ? 'جاري التجهيز...' : (
+                <>
+                  اشترك الآن <FaArrowRight size={12} />
+                </>
+              )}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 </file>
@@ -29818,6 +30083,22 @@ export default function ChatPage() {
 }
 </file>
 
+<file path="HerfyFrontend_fixed/.env.example">
+# Harfey Frontend Environment Variables
+
+# Backend API URL
+VITE_API_URL=http://localhost:5000
+
+# Socket.io server URL
+VITE_SOCKET_URL=http://localhost:5000
+
+# TomTom Maps API Key (get from https://developer.tomtom.com/)
+VITE_TOMTOM_API_KEY=your_tomtom_api_key_here
+
+# Stripe Publishable Key (get from https://dashboard.stripe.com/apikeys)
+VITE_STRIPE_PUBLISHABLE_KEY=pk_test_<your_stripe_publishable_key>
+</file>
+
 <file path="HerfyBackend/controllers/reportController.js">
 // Reports & dispute resolution: either party on an order can file a report;
 // the order flips to "disputed" (chat/actions freeze) until an admin
@@ -30034,174 +30315,6 @@ const getDisputeDetail = async (req, res) => {
 };
 
 module.exports = { createReport, getReports, resolveReport, getMyReports, getDisputeDetail };
-</file>
-
-<file path="HerfyBackend/controllers/webhookController.js">
-const stripe = require('../config/stripe');
-const Order = require('../models/Order');
-const Handyman = require('../models/Handyman');
-const User = require('../models/User');
-const { createNotification } = require('./notificationController');
-
-// POST /api/webhooks/stripe
-// Registered with express.raw() in app.js BEFORE express.json()
-const handleStripeWebhook = async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-
-  let event;
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.error('Webhook signature verification failed:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  try {
-    switch (event.type) {
-      case 'payment_intent.succeeded': {
-        const pi = event.data.object;
-
-        // ---- Penalty settlement payment (metadata-routed) ----
-        // Independent penalty payments carry metadata.type = 'penalty_settlement'
-        if (pi.metadata && pi.metadata.type === 'penalty_settlement') {
-          const userId = pi.metadata.userId;
-          if (!userId) {
-            console.error('[Webhook] penalty_settlement missing userId in metadata');
-            break;
-          }
-          // Atomic + idempotent: only sets to 0 if currently > 0.
-          // A duplicate webhook will find penaltyAmount already 0 → no-op.
-          const result = await User.findOneAndUpdate(
-            { _id: userId, penaltyAmount: { $gt: 0 } },
-            { $set: { penaltyAmount: 0 } },
-            { returnDocument: 'after' }
-          );
-
-          const handymanResult = await Handyman.findOneAndUpdate(
-            { userId: userId, penaltyAmount: { $gt: 0 } },
-            { $set: { penaltyAmount: 0 } },
-            { returnDocument: 'after' }
-          );
-
-          if (result || handymanResult) {
-            const currentPenaltyCount = result?.penaltyCount || handymanResult?.penaltyCount || 0;
-            console.log(`[Webhook] Penalty settled for user ${userId} via Stripe. penaltyCount remains ${currentPenaltyCount}.`);
-            await createNotification(
-              null, userId, 'payment_confirmed',
-              'تم تسوية الغرامة',
-              'تم استلام دفعة الغرامة بنجاح عبر البطاقة. يمكنك الآن استخدام المنصة بشكل طبيعي.',
-              { penaltyAmount: 0, penaltyCount: currentPenaltyCount }
-            );
-          } else {
-            console.log(`[Webhook] Duplicate penalty settlement for user ${userId} — already settled, skipping.`);
-          }
-          break;
-        }
-
-        // ---- Order payment (existing flow) ----
-        // Find the order but DO NOT update yet — check idempotency first.
-        const order = await Order.findOne({ stripePaymentIntentId: pi.id });
-        if (!order) break;
-
-        // IDEMPOTENCY GUARD (atomic): only one webhook can transition to 'paid'.
-        // A duplicate webhook will not match the filter → no-op.
-        const updatedOrder = await Order.findOneAndUpdate(
-          { _id: order._id, paymentStatus: { $ne: 'paid' } },
-          { paymentStatus: 'paid', paidAt: new Date() },
-          { new: true }
-        );
-        if (!updatedOrder) {
-          console.log(`[Webhook] Duplicate payment_intent.succeeded for ${pi.id} — order already paid, skipping`);
-          break;
-        }
-
-        // Settle legacy penalty on the order (new orders have penaltyAmount = 0).
-        // Atomic + idempotent: only sets to 0 if currently > 0.
-        if (updatedOrder.penaltyAmount > 0) {
-          await User.findOneAndUpdate(
-            { _id: updatedOrder.customerId, penaltyAmount: { $gt: 0 } },
-            { $set: { penaltyAmount: 0 } }
-          );
-        }
-
-        // Credit the handyman's pending earnings (order price minus commission)
-        const net = (updatedOrder.totalPrice || updatedOrder.price || 0) - (updatedOrder.commissionAmount || 0);
-        if (net > 0) {
-          await Handyman.findOneAndUpdate(
-            { userId: updatedOrder.handymanId },
-            { $inc: { pendingEarnings: net } }
-          );
-        }
-        await createNotification(
-          null, updatedOrder.customerId, 'payment_confirmed',
-          'تم الدفع بنجاح',
-          'تم استلام دفعتك الإلكترونية بنجاح.',
-          { orderId: updatedOrder._id }
-        );
-        await createNotification(
-          null, updatedOrder.handymanId, 'payment_confirmed',
-          'تم دفع الطلب إلكترونياً',
-          `قام العميل بالدفع إلكترونياً عبر البطاقة — لا حاجة لاستلام كاش. مستحقاتك: ${net} ج.م`,
-          { orderId: updatedOrder._id }
-        );
-        break;
-      }
-
-      case 'payment_intent.payment_failed': {
-        const pi = event.data.object;
-
-        // Penalty payment failure
-        if (pi.metadata && pi.metadata.type === 'penalty_settlement') {
-          const userId = pi.metadata.userId;
-          if (userId) {
-            await createNotification(
-              null, userId, 'payment_failed',
-              'فشل تسوية الغرامة',
-              'فشلت عملية الدفع الإلكتروني للغرامة، يرجى المحاولة مرة أخرى.',
-              {}
-            );
-          }
-          break;
-        }
-
-        const failedOrder = await Order.findOneAndUpdate(
-          { stripePaymentIntentId: pi.id },
-          { paymentStatus: 'failed' },
-          { new: true }
-        );
-        if (failedOrder) {
-          await createNotification(
-            null,
-            failedOrder.customerId,
-            'payment_failed',
-            'فشل الدفع',
-            'فشلت عملية الدفع الإلكتروني، يرجى المحاولة مرة أخرى.',
-            { orderId: failedOrder._id }
-          );
-          await createNotification(
-            null,
-            failedOrder.handymanId,
-            'payment_failed',
-            'فشل دفع الطلب',
-            'فشلت محاولة الدفع الإلكتروني من العميل.',
-            { orderId: failedOrder._id }
-          );
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
-  } catch (err) {
-    console.error('Webhook handler error:', err.message);
-    return res.status(500).send('Internal webhook error');
-  }
-
-  res.json({ received: true });
-};
-
-module.exports = { handleStripeWebhook };
 </file>
 
 <file path="HerfyFrontend_fixed/src/pages/admin/AdminVerificationsPage.jsx">
@@ -31618,6 +31731,226 @@ export default function PaymentSuccess() {
 }
 </file>
 
+<file path="HerfyBackend/controllers/webhookController.js">
+const stripe = require('../config/stripe');
+const Order = require('../models/Order');
+const Handyman = require('../models/Handyman');
+const User = require('../models/User');
+const StripeSubscription = require('../models/StripeSubscription');
+const { createNotification } = require('./notificationController');
+
+// POST /api/webhooks/stripe
+// Registered with express.raw() in app.js BEFORE express.json()
+const handleStripeWebhook = async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    switch (event.type) {
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object;
+
+        // ---- Penalty settlement payment (metadata-routed) ----
+        if (pi.metadata && pi.metadata.type === 'penalty_settlement') {
+          const userId = pi.metadata.userId;
+          if (!userId) {
+            console.error('[Webhook] penalty_settlement missing userId in metadata');
+            break;
+          }
+          const result = await User.findOneAndUpdate(
+            { _id: userId, penaltyAmount: { $gt: 0 } },
+            { $set: { penaltyAmount: 0 } },
+            { returnDocument: 'after' }
+          );
+
+          const handymanResult = await Handyman.findOneAndUpdate(
+            { userId: userId, penaltyAmount: { $gt: 0 } },
+            { $set: { penaltyAmount: 0 } },
+            { returnDocument: 'after' }
+          );
+
+          if (result || handymanResult) {
+            const currentPenaltyCount = result?.penaltyCount || handymanResult?.penaltyCount || 0;
+            console.log(`[Webhook] Penalty settled for user ${userId} via Stripe. penaltyCount remains ${currentPenaltyCount}.`);
+            await createNotification(
+              null, userId, 'payment_confirmed',
+              'تم تسوية الغرامة',
+              'تم استلام دفعة الغرامة بنجاح عبر البطاقة. يمكنك الآن استخدام المنصة بشكل طبيعي.',
+              { penaltyAmount: 0, penaltyCount: currentPenaltyCount }
+            );
+          } else {
+            console.log(`[Webhook] Duplicate penalty settlement for user ${userId} — already settled, skipping.`);
+          }
+          break;
+        }
+
+        // ---- Order payment (existing flow) ----
+        const order = await Order.findOne({ stripePaymentIntentId: pi.id });
+        if (!order) break;
+
+        const updatedOrder = await Order.findOneAndUpdate(
+          { _id: order._id, paymentStatus: { $ne: 'paid' } },
+          { paymentStatus: 'paid', paidAt: new Date() },
+          { new: true }
+        );
+        if (!updatedOrder) {
+          console.log(`[Webhook] Duplicate payment_intent.succeeded for ${pi.id} — order already paid, skipping`);
+          break;
+        }
+
+        if (updatedOrder.penaltyAmount > 0) {
+          await User.findOneAndUpdate(
+            { _id: updatedOrder.customerId, penaltyAmount: { $gt: 0 } },
+            { $set: { penaltyAmount: 0 } }
+          );
+        }
+
+        const net = (updatedOrder.totalPrice || updatedOrder.price || 0) - (updatedOrder.commissionAmount || 0);
+        if (net > 0) {
+          await Handyman.findOneAndUpdate(
+            { userId: updatedOrder.handymanId },
+            { $inc: { pendingEarnings: net } }
+          );
+        }
+        await createNotification(
+          null, updatedOrder.customerId, 'payment_confirmed',
+          'تم الدفع بنجاح',
+          'تم استلام دفعتك الإلكترونية بنجاح.',
+          { orderId: updatedOrder._id }
+        );
+        await createNotification(
+          null, updatedOrder.handymanId, 'payment_confirmed',
+          'تم دفع الطلب إلكترونياً',
+          `قام العميل بالدفع إلكترونياً عبر البطاقة — لا حاجة لاستلام كاش. مستحقاتك: ${net} ج.م`,
+          { orderId: updatedOrder._id }
+        );
+        break;
+      }
+
+      case 'payment_intent.payment_failed': {
+        const pi = event.data.object;
+
+        if (pi.metadata && pi.metadata.type === 'penalty_settlement') {
+          const userId = pi.metadata.userId;
+          if (userId) {
+            await createNotification(
+              null, userId, 'payment_failed',
+              'فشل تسوية الغرامة',
+              'فشلت عملية الدفع الإلكتروني للغرامة، يرجى المحاولة مرة أخرى.',
+              {}
+            );
+          }
+          break;
+        }
+
+        const failedOrder = await Order.findOneAndUpdate(
+          { stripePaymentIntentId: pi.id },
+          { paymentStatus: 'failed' },
+          { new: true }
+        );
+        if (failedOrder) {
+          await createNotification(
+            null,
+            failedOrder.customerId,
+            'payment_failed',
+            'فشل الدفع',
+            'فشلت عملية الدفع الإلكتروني، يرجى المحاولة مرة أخرى.',
+            { orderId: failedOrder._id }
+          );
+          await createNotification(
+            null,
+            failedOrder.handymanId,
+            'payment_failed',
+            'فشل دفع الطلب',
+            'فشلت محاولة الدفع الإلكتروني من العميل.',
+            { orderId: failedOrder._id }
+          );
+        }
+        break;
+      }
+
+      // ---- Handyman subscription payment succeeded ----
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object;
+
+        const subscriptionId =
+          invoice.parent?.subscription_details?.subscription || invoice.subscription;
+
+        if (!subscriptionId) break;
+
+        const stripeSubDoc = await StripeSubscription.findOneAndUpdate(
+          { stripeSubscriptionId: subscriptionId },
+          { status: 'active' },
+          { new: true }
+        );
+
+        if (!stripeSubDoc) {
+          console.log(`[Webhook] No local StripeSubscription found for ${subscriptionId}`);
+          break;
+        }
+
+        // idempotent: لو الحرفي أصلاً PREMIUM، منعملش تحديث تاني
+        const handyman = await Handyman.findOneAndUpdate(
+          { userId: stripeSubDoc.user, subscriptionPlan: { $ne: 'PREMIUM' } },
+          { subscriptionPlan: 'PREMIUM' },
+          { new: true }
+        );
+
+        if (handyman) {
+          console.log(`[Webhook] Handyman ${stripeSubDoc.user} upgraded to PREMIUM`);
+          await createNotification(
+            null, stripeSubDoc.user, 'payment_confirmed',
+            'تم تفعيل باقتك بنجاح',
+            'تم الاشتراك بنجاح، عمولة المنصة وعدد العملاء المتاحين تحدثوا فورًا.',
+            { subscriptionPlan: 'PREMIUM' }
+          );
+        } else {
+          console.log(`[Webhook] Duplicate invoice.payment_succeeded for sub ${subscriptionId} — already PREMIUM`);
+        }
+        break;
+      }
+
+      // ---- Handyman subscription canceled/expired ----
+      case 'customer.subscription.deleted': {
+        const sub = event.data.object;
+
+        const stripeSubDoc = await StripeSubscription.findOneAndUpdate(
+          { stripeSubscriptionId: sub.id },
+          { status: 'canceled' },
+          { new: true }
+        );
+        if (!stripeSubDoc) break;
+
+        await Handyman.findOneAndUpdate(
+          { userId: stripeSubDoc.user },
+          { subscriptionPlan: 'FREE' }
+        );
+
+        console.log(`[Webhook] Handyman ${stripeSubDoc.user} downgraded to FREE (subscription canceled)`);
+        break;
+      }
+
+      default:
+        break;
+    }
+  } catch (err) {
+    console.error('Webhook handler error:', err.message);
+    return res.status(500).send('Internal webhook error');
+  }
+
+  res.json({ received: true });
+};
+
+module.exports = { handleStripeWebhook };
+</file>
+
 <file path="HerfyBackend/routes/authRoutes.js">
 // HerfyBackend/routes/authRoutes.js
 const express = require("express");
@@ -31817,104 +32150,6 @@ router.post(
 );
 
 module.exports = router;
-</file>
-
-<file path="HerfyFrontend_fixed/src/api/axios.js">
-import axios from 'axios';
-
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-
-const api = axios.create({
-  baseURL: BASE_URL,
-});
-
-api.interceptors.request.use(
-  (config) => {
-    // The browser must generate the multipart boundary for FormData uploads.
-    if (config.data instanceof FormData) {
-      if (config.headers) {
-        delete config.headers['Content-Type'];
-        delete config.headers['content-type'];
-        if (typeof config.headers.delete === 'function') {
-          config.headers.delete('Content-Type');
-          config.headers.delete('content-type');
-        }
-      }
-    }
-
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => Promise.reject(error)
-);
-
-// A short-lived access token (15m) means 401s from expiry are routine, not
-// exceptional — so instead of bouncing straight to /login we try one silent
-// refresh first and only replay the original request if that succeeds.
-// `refreshPromise` makes concurrent 401s share a single refresh call.
-let refreshPromise = null;
-
-const doRefresh = async () => {
-  const refreshToken = localStorage.getItem('refreshToken');
-  if (!refreshToken) throw new Error('no refresh token');
-
-  // Plain axios (not the `api` instance) so this call never recurses
-  // through the response interceptor below.
-  const response = await axios.post(`${BASE_URL}/users/refresh`, { refreshToken });
-  const { token, refreshToken: newRefreshToken } = response.data;
-  localStorage.setItem('token', token);
-  localStorage.setItem('refreshToken', newRefreshToken);
-  return token;
-};
-
-const goToLogin = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('refreshToken');
-  if (window.location.pathname !== '/login') {
-    window.location.href = '/login';
-  }
-};
-
-api.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    // Joi sends an array of messages. Convert it once so every Redux slice
-    // can render a useful validation error instead of an array value.
-    if (Array.isArray(error.response?.data?.msg)) {
-      error.response.data.msg = error.response.data.msg.join(', ');
-    }
-
-    const originalRequest = error.config;
-
-    if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url?.includes('/users/refresh')) {
-      originalRequest._retry = true;
-      try {
-        if (!refreshPromise) {
-          refreshPromise = doRefresh().finally(() => {
-            refreshPromise = null;
-          });
-        }
-        const newToken = await refreshPromise;
-        originalRequest.headers.Authorization = `Bearer ${newToken}`;
-        return api(originalRequest);
-      } catch (refreshErr) {
-        goToLogin();
-        return Promise.reject(error);
-      }
-    }
-
-    if (error.response?.status === 401) {
-      goToLogin();
-    }
-
-    return Promise.reject(error);
-  }
-);
-
-export default api;
 </file>
 
 <file path="HerfyBackend/models/Order.js">
@@ -32903,108 +33138,6 @@ export default function TrackingMap({
     </div>
   );
 }
-</file>
-
-<file path="HerfyFrontend_fixed/src/socket/socket.js">
-import { io } from 'socket.io-client';
-
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:8000';
-
-let socket = null;
-/** Stable id for the singleton socket wrapper — proves connect/join/on/emit use same instance */
-let socketInstanceSeq = 0;
-let activeSocketInstanceId = null;
-/** Increments whenever the singleton is created or destroyed — lets tracking pages re-bind */
-let socketGeneration = 0;
-/** Token used for the active server handshake — detect stale auth on reuse */
-let lastHandshakeToken = null;
-
-export const getSocket = () => socket;
-
-export const getSocketInstanceId = () => activeSocketInstanceId;
-
-export const getSocketGeneration = () => socketGeneration;
-
-export const connectSocket = (token) => {
-  if (socket) {
-    const tokenChanged = lastHandshakeToken != null && lastHandshakeToken !== token;
-    socket.auth = { token };
-    console.log('[SOCKET AUDIT] connectSocket REUSE', {
-      socketInstanceId: activeSocketInstanceId,
-      socketId: socket.id ?? null,
-      connected: socket.connected,
-      url: SOCKET_URL,
-      tokenChanged,
-    });
-    if (tokenChanged && socket.connected) {
-      console.log('[SOCKET AUDIT] connectSocket RECONNECT — token changed while connected');
-      socket.disconnect();
-      socket.connect();
-    } else if (!socket.connected) {
-      socket.connect();
-    }
-    lastHandshakeToken = token;
-    return socket;
-  }
-
-  activeSocketInstanceId = `sock-${++socketInstanceSeq}-${Date.now()}`;
-  socketGeneration += 1;
-  lastHandshakeToken = token;
-  socket = io(SOCKET_URL, {
-    auth: { token },
-    transports: ['websocket'],
-    autoConnect: false,
-    reconnection: true,
-    reconnectionAttempts: Infinity,
-    reconnectionDelay: 1000,
-  });
-
-  console.log('[SOCKET AUDIT] connectSocket CREATE', {
-    socketInstanceId: activeSocketInstanceId,
-    url: SOCKET_URL,
-  });
-
-  socket.connect();
-
-  socket.on('connect', () => {
-    console.log('[SOCKET AUDIT] socket connected', {
-      socketInstanceId: activeSocketInstanceId,
-      socketId: socket.id,
-      url: SOCKET_URL,
-    });
-  });
-
-  socket.on('disconnect', (reason) => {
-    console.log('[SOCKET AUDIT] socket disconnected', {
-      socketInstanceId: activeSocketInstanceId,
-      socketId: socket.id,
-      reason,
-    });
-  });
-
-  return socket;
-};
-
-export const disconnectSocket = () => {
-  if (socket) {
-    console.warn('[SOCKET AUDIT] disconnectSocket — ALL listeners removed', {
-      socketInstanceId: activeSocketInstanceId,
-      socketId: socket.id,
-    });
-    socket.removeAllListeners();
-    socket.disconnect();
-    socket = null;
-    activeSocketInstanceId = null;
-    lastHandshakeToken = null;
-    socketGeneration += 1;
-  }
-};
-
-export default {
-  getSocket,
-  connectSocket,
-  disconnectSocket,
-};
 </file>
 
 <file path="HerfyBackend/controllers/adminControllers.js">
@@ -34881,6 +35014,552 @@ module.exports = {
 };
 </file>
 
+<file path="HerfyBackend/models/User.js">
+const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
+
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      trim: true,
+      lowercase: true,
+      // FIX (M2): email was never normalized anywhere — Foo@Example.com and
+      // foo@example.com used to be two different accounts against the
+      // case-sensitive unique index. `lowercase: true` normalizes on every
+      // save; lookups are normalized at the call site (see authController.js).
+    },
+    phone: {
+      // FIX (H7): unique without sparse treats every missing/empty phone as
+      // the same "null" value in the index — the first user without a
+      // phone would block every subsequent phoneless account with a
+      // duplicate-key error. sparse: true excludes docs missing the field
+      // from the unique index entirely.
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    password: {
+      type: String,
+      required: true,
+    },
+    profileImage: {
+      type: String,
+      default: "",
+    },
+    role: {
+      type: String,
+      enum: ["customer", "handyman"],
+      default: "customer",
+    },
+    isAdmin: {
+      type: Boolean,
+      default: false,
+    },
+    // FIX (Low #2): coordinates used to be `required: true`, which forced
+    // registerUser to default to [0, 0] (a real point in the Gulf of
+    // Guinea) whenever a user didn't share their location — silently
+    // polluting $near queries like getNearbyHandymen with a phantom
+    // "nearby" result. Making it genuinely optional means a user with no
+    // location simply has no `location` field, which a 2dsphere $near
+    // query correctly excludes rather than misreports as "very far away".
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+      },
+      coordinates: {
+        type: [Number],
+      },
+    },
+    address: {
+      type: String,
+      default: "",
+    },
+    city: {
+      type: String,
+      default: "",
+    },
+    area: {
+      type: String,
+      default: "",
+    },
+    // Password-reset OTP (existing flow)
+    otp: String,
+    otpExpire: Date,
+
+    // Email verification OTP (registration flow)
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
+    emailOtp: String,
+    emailOtpExpire: Date,
+    penaltyCount: {
+      type: Number,
+      default: 0,
+    },
+    // NOTE: the controller has always set `customer.penaltyAmount = ...`
+    // but this field was never declared on the schema, so Mongoose (strict
+    // mode, the default) silently dropped it on every save — the penalty
+    // amount was never actually persisted to the database.
+    penaltyAmount: {
+      type: Number,
+      default: 0,
+    },
+    // Same bug as penaltyAmount above: adminControllers.toggleUserBan has
+    // always set `user.isBanned = ...` and saved it, but without this field
+    // declared on the schema Mongoose silently dropped it — banning a user
+    // from the admin panel had no real effect.
+    isBanned: {
+      type: Boolean,
+      default: false,
+    },
+    banReason: {
+      type: String,
+      default: null,
+    },
+    // FIX (M4): admin account deletion used to hard-delete the User row,
+    // leaving Order/Message/Review/Notification documents pointing at a
+    // now-nonexistent user (populate() silently returns null for that
+    // field, permanently losing which party was involved). Soft-deleting
+    // instead keeps history intact; deletedAt also blocks login everywhere
+    // isBanned is already checked.
+    deletedAt: {
+      type: Date,
+      default: null,
+    },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved",
+    },
+    stripeCustomerId: {
+      type: String,
+      default: null,
+    },
+    nationalId: {
+      type: String,
+      default: "",
+    },
+    documents: [
+      {
+        type: {
+          type: String,
+          default: "national_id",
+        },
+        url: {
+          type: String,
+          required: true,
+        },
+        filename: {
+          type: String,
+          default: "",
+        },
+        originalName: {
+          type: String,
+          default: "",
+        },
+        mimeType: {
+          type: String,
+          default: "",
+        },
+        uploadedAt: {
+          type: Date,
+          default: Date.now,
+        },
+        status: {
+          type: String,
+          enum: ["pending", "verified", "rejected"],
+          default: "pending",
+        },
+      },
+    ],
+  },
+  { timestamps: true },
+);
+
+userSchema.index({ location: "2dsphere" });
+userSchema.index({ role: 1 });
+
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
+  this.password = await bcrypt.hash(this.password, 10);
+});
+
+userSchema.methods.matchPassword = async function (matchedPassword) {
+  return bcrypt.compare(matchedPassword, this.password);
+};
+
+const User = mongoose.model("User", userSchema);
+module.exports = User;
+</file>
+
+<file path="HerfyFrontend_fixed/src/api/axios.js">
+import axios from 'axios';
+
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+
+const api = axios.create({
+  baseURL: BASE_URL,
+});
+
+api.interceptors.request.use(
+  (config) => {
+    // The browser must generate the multipart boundary for FormData uploads.
+    if (config.data instanceof FormData) {
+      if (config.headers) {
+        delete config.headers['Content-Type'];
+        delete config.headers['content-type'];
+        if (typeof config.headers.delete === 'function') {
+          config.headers.delete('Content-Type');
+          config.headers.delete('content-type');
+        }
+      }
+    }
+
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// A short-lived access token (15m) means 401s from expiry are routine, not
+// exceptional — so instead of bouncing straight to /login we try one silent
+// refresh first and only replay the original request if that succeeds.
+// `refreshPromise` makes concurrent 401s share a single refresh call.
+let refreshPromise = null;
+
+const doRefresh = async () => {
+  const refreshToken = localStorage.getItem('refreshToken');
+  if (!refreshToken) throw new Error('no refresh token');
+
+  // Plain axios (not the `api` instance) so this call never recurses
+  // through the response interceptor below.
+  const response = await axios.post(`${BASE_URL}/users/refresh`, { refreshToken });
+  const { token, refreshToken: newRefreshToken } = response.data;
+  localStorage.setItem('token', token);
+  localStorage.setItem('refreshToken', newRefreshToken);
+  return token;
+};
+
+const goToLogin = () => {
+  localStorage.removeItem('token');
+  localStorage.removeItem('refreshToken');
+  if (window.location.pathname !== '/login') {
+    window.location.href = '/login';
+  }
+};
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    // Joi sends an array of messages. Convert it once so every Redux slice
+    // can render a useful validation error instead of an array value.
+    if (Array.isArray(error.response?.data?.msg)) {
+      error.response.data.msg = error.response.data.msg.join(', ');
+    }
+
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry && !originalRequest.url?.includes('/users/refresh')) {
+      originalRequest._retry = true;
+      try {
+        if (!refreshPromise) {
+          refreshPromise = doRefresh().finally(() => {
+            refreshPromise = null;
+          });
+        }
+        const newToken = await refreshPromise;
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return api(originalRequest);
+      } catch (refreshErr) {
+        goToLogin();
+        return Promise.reject(error);
+      }
+    }
+
+    if (error.response?.status === 401) {
+      goToLogin();
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+export default api;
+</file>
+
+<file path="HerfyFrontend_fixed/src/hooks/useCurrentLocation.js">
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { isValidGpsCoord } from '../utils/routeValidation';
+
+const CAIRO_FALLBACK = { latitude: 30.0444, longitude: 31.2357 };
+
+const GPS_WATCH_OPTIONS = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
+const GPS_INIT_OPTIONS = { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 };
+
+/**
+ * @param {{ fallbackOnError?: boolean, tracking?: boolean }} options
+ *   fallbackOnError=false — live tracking: location stays null on failure
+ *   tracking=true — getCurrentPosition first, then watchPosition, with audit logs
+ */
+export default function useCurrentLocation(options = {}) {
+  const { fallbackOnError = true, tracking = false, enabled = true } = options;
+  const [location, setLocation] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const watchIdRef = useRef(null);
+  const initialFixDoneRef = useRef(false);
+
+  const applyValidPosition = useCallback((lat, lng) => {
+    if (!isValidGpsCoord(lat, lng)) return false;
+    setLocation({ latitude: lat, longitude: lng });
+    setError(null);
+    if (tracking) {
+      console.log('✅ [CUSTOMER GPS] Valid location');
+    }
+    return true;
+  }, [tracking]);
+
+  const handleGeoError = useCallback(
+    (err, context = 'GPS') => {
+      if (err.code === 1) {
+        console.error(`❌ [CUSTOMER GPS] Permission denied (${context})`);
+      } else if (err.code === 2) {
+        console.error(`❌ [CUSTOMER GPS] Position unavailable (${context})`);
+      } else {
+        console.error(`❌ [CUSTOMER GPS] Error (${context}):`, err.message);
+      }
+      setError(err.message);
+      if (fallbackOnError) {
+        setLocation((prev) => prev ?? CAIRO_FALLBACK);
+      } else {
+        setLocation(null);
+      }
+      setLoading(false);
+    },
+    [fallbackOnError]
+  );
+
+  const startWatch = useCallback(() => {
+    if (!enabled || watchIdRef.current !== null) return;
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const lat = position?.coords?.latitude;
+        const lng = position?.coords?.longitude;
+        if (tracking && isValidGpsCoord(lat, lng)) {
+          console.log('📍 [CUSTOMER GPS] watch update | latitude =', lat, '| longitude =', lng);
+        }
+        if (applyValidPosition(lat, lng)) {
+          setLoading(false);
+        }
+      },
+      (err) => handleGeoError(err, 'watchPosition'),
+      GPS_WATCH_OPTIONS
+    );
+  }, [applyValidPosition, enabled, handleGeoError, tracking]);
+
+  const requestLocation = useCallback(() => {
+    if (!enabled) return;
+
+    if (!navigator.geolocation) {
+      setError('المتصفح لا يدعم تحديد الموقع');
+      setLocation(null);
+      return;
+    }
+
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    initialFixDoneRef.current = false;
+    setLoading(true);
+
+    if (tracking) {
+      console.log('📍 [CUSTOMER GPS] Requesting location...');
+    }
+
+    if (tracking) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!enabled) return;
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          console.log('📍 [CUSTOMER GPS] Location received');
+          console.log('📍 [CUSTOMER GPS] latitude =', lat);
+          console.log('📍 [CUSTOMER GPS] longitude =', lng);
+          initialFixDoneRef.current = true;
+          applyValidPosition(lat, lng);
+          setLoading(false);
+          startWatch();
+        },
+        (err) => {
+          if (!enabled) return;
+          handleGeoError(err, 'getCurrentPosition');
+        },
+        GPS_INIT_OPTIONS
+      );
+      return;
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        if (!enabled) return;
+        const lat = position?.coords?.latitude;
+        const lng = position?.coords?.longitude;
+        if (applyValidPosition(lat, lng)) {
+          setLoading(false);
+        }
+      },
+      (err) => {
+        if (!enabled) return;
+        handleGeoError(err, 'watchPosition');
+      },
+      GPS_WATCH_OPTIONS
+    );
+  }, [applyValidPosition, enabled, handleGeoError, startWatch, tracking]);
+
+  useEffect(() => {
+    if (!enabled) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      setLoading(false);
+      return;
+    }
+
+    requestLocation();
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [enabled, requestLocation]);
+
+  return { location, error, loading, requestLocation };
+};
+</file>
+
+<file path="HerfyFrontend_fixed/src/socket/socket.js">
+import { io } from 'socket.io-client';
+
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:8000';
+
+let socket = null;
+/** Stable id for the singleton socket wrapper — proves connect/join/on/emit use same instance */
+let socketInstanceSeq = 0;
+let activeSocketInstanceId = null;
+/** Increments whenever the singleton is created or destroyed — lets tracking pages re-bind */
+let socketGeneration = 0;
+/** Token used for the active server handshake — detect stale auth on reuse */
+let lastHandshakeToken = null;
+
+export const getSocket = () => socket;
+
+export const getSocketInstanceId = () => activeSocketInstanceId;
+
+export const getSocketGeneration = () => socketGeneration;
+
+export const connectSocket = (token) => {
+  if (socket) {
+    const tokenChanged = lastHandshakeToken != null && lastHandshakeToken !== token;
+    socket.auth = { token };
+    console.log('[SOCKET AUDIT] connectSocket REUSE', {
+      socketInstanceId: activeSocketInstanceId,
+      socketId: socket.id ?? null,
+      connected: socket.connected,
+      url: SOCKET_URL,
+      tokenChanged,
+    });
+    if (tokenChanged && socket.connected) {
+      console.log('[SOCKET AUDIT] connectSocket RECONNECT — token changed while connected');
+      socket.disconnect();
+      socket.connect();
+    } else if (!socket.connected) {
+      socket.connect();
+    }
+    lastHandshakeToken = token;
+    return socket;
+  }
+
+  activeSocketInstanceId = `sock-${++socketInstanceSeq}-${Date.now()}`;
+  socketGeneration += 1;
+  lastHandshakeToken = token;
+  socket = io(SOCKET_URL, {
+    auth: { token },
+    transports: ['polling', 'websocket'],
+    upgrade: true,
+    autoConnect: false,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 20000,
+  });
+
+  console.log('[SOCKET AUDIT] connectSocket CREATE', {
+    socketInstanceId: activeSocketInstanceId,
+    url: SOCKET_URL,
+  });
+
+  socket.connect();
+
+  socket.on('connect', () => {
+    console.log('[SOCKET AUDIT] socket connected', {
+      socketInstanceId: activeSocketInstanceId,
+      socketId: socket.id,
+      url: SOCKET_URL,
+    });
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('[SOCKET AUDIT] socket disconnected', {
+      socketInstanceId: activeSocketInstanceId,
+      socketId: socket.id,
+      reason,
+    });
+  });
+
+  return socket;
+};
+
+export const disconnectSocket = () => {
+  if (socket) {
+    console.warn('[SOCKET AUDIT] disconnectSocket — ALL listeners removed', {
+      socketInstanceId: activeSocketInstanceId,
+      socketId: socket.id,
+    });
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+    activeSocketInstanceId = null;
+    lastHandshakeToken = null;
+    socketGeneration += 1;
+  }
+};
+
+export default {
+  getSocket,
+  connectSocket,
+  disconnectSocket,
+};
+</file>
+
 <file path="HerfyBackend/controllers/handymanController.js">
 // HerfyBackend/controllers/handymanController.js
 const User = require("../models/User");
@@ -34897,6 +35576,8 @@ const { checkScheduleConflict } = require("./orderController");
 
 const EARTH_RADIUS_M = 6371000;
 const ASSUMED_AVG_SPEED_KMH = 30;
+// MongoDB's spherical distance cannot exceed half the Earth's circumference.
+const MAX_GEOSPHERE_DISTANCE_METERS = 20037508;
 
 function haversineDistanceMeters([lng1, lat1], [lng2, lat2]) {
   const toRad = (deg) => (deg * Math.PI) / 180;
@@ -34923,7 +35604,7 @@ const getNearbyHandymen = async (req, res) => {
     const {
       lat,
       lng,
-      radius = 50000000,
+      radius = MAX_GEOSPHERE_DISTANCE_METERS,
       profession,
       sort = "distance",
       scheduledDate,
@@ -34939,6 +35620,7 @@ const getNearbyHandymen = async (req, res) => {
 
     const latitude = parseFloat(lat);
     const longitude = parseFloat(lng);
+    const requestedRadius = Number(radius);
 
     if (
       isNaN(latitude) ||
@@ -34953,17 +35635,43 @@ const getNearbyHandymen = async (req, res) => {
       });
     }
 
+    if (!Number.isFinite(requestedRadius) || requestedRadius <= 0) {
+      return res.status(400).json({
+        msg: "Radius must be a positive number of meters",
+      });
+    }
+
+    // `$near` uses Handyman.location's 2dsphere index. Cap a larger supplied
+    // radius at the maximum valid spherical distance rather than passing an
+    // invalid value to MongoDB.
+    const effectiveRadius = Math.min(
+      requestedRadius,
+      MAX_GEOSPHERE_DISTANCE_METERS
+    );
+
     // Build filter for approved, available, non-suspended handymen
     const handymanFilter = {
       registrationStatus: "approved",
       isSuspended: false,
       isAvailable: true,
+      location: {
+        $near: {
+          $geometry: {
+            type: "Point",
+            coordinates: [longitude, latitude],
+          },
+          $maxDistance: effectiveRadius,
+        },
+      },
     };
 
     if (profession && profession.trim().length > 0) {
       handymanFilter.profession = profession.trim();
     }
 
+    // MongoDB filters and returns candidates nearest-first through the
+    // 2dsphere index. Haversine below is retained only for display distance
+    // and optional smart-score normalization.
     const handymenDetails = await Handyman.find(handymanFilter)
       .populate("userId", "name email phone profileImage location address isBanned deletedAt")
       .lean();
@@ -34974,13 +35682,10 @@ const getNearbyHandymen = async (req, res) => {
       const user = h.userId;
       if (!user || user.isBanned || user.deletedAt) continue;
 
-      // Extract Base Location coordinates (from Handyman profile or User doc)
-      let coords = null;
-      if (Array.isArray(h.location?.coordinates) && h.location.coordinates.length === 2) {
-        coords = h.location.coordinates;
-      } else if (Array.isArray(user.location?.coordinates) && user.location.coordinates.length === 2) {
-        coords = user.location.coordinates;
-      }
+      // `$near` guarantees an indexed Handyman location. User.location is
+      // populated for profile data but is not a discovery fallback because it
+      // belongs to a different collection/index.
+      const coords = h.location.coordinates;
 
       // Calculate distance from Handyman Base Location to Order Service Location
       let distance = null;
@@ -34994,11 +35699,6 @@ const getNearbyHandymen = async (req, res) => {
         distanceKm = Number((meters / 1000).toFixed(1));
         distanceText = distance < 1000 ? `${distance} م` : `${distanceKm} كم`;
         eta = Math.max(1, Math.round((meters / 1000 / ASSUMED_AVG_SPEED_KMH) * 60));
-      }
-
-      // Filter by max radius if applicable
-      if (distance !== null && Number(radius) > 0 && distance > Number(radius)) {
-        continue;
       }
 
       // Schedule conflict check if appointment date is requested
@@ -35059,7 +35759,7 @@ const getNearbyHandymen = async (req, res) => {
       const DIST_WEIGHT = parseFloat(process.env.MATCHING_DISTANCE_WEIGHT) || 0.4;
       const RATING_WEIGHT = parseFloat(process.env.MATCHING_RATING_WEIGHT) || 0.4;
       const ACCEPT_WEIGHT = parseFloat(process.env.MATCHING_ACCEPTANCE_WEIGHT) || 0.2;
-      const maxDistance = Number(radius) || 50000;
+      const maxDistance = effectiveRadius;
 
       candidates.forEach((h) => {
         const normDist = h.distance ? Math.max(0, (maxDistance - h.distance) / maxDistance) : 0;
@@ -35655,71 +36355,182 @@ module.exports = {
 };
 </file>
 
-<file path="HerfyBackend/models/User.js">
+<file path="HerfyBackend/models/Handyman.js">
+// HerfyBackend/models/Handyman.js
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
 
-const userSchema = new mongoose.Schema(
+const handymanSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    email: {
-      type: String,
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       required: true,
       unique: true,
-      trim: true,
-      lowercase: true,
-      // FIX (M2): email was never normalized anywhere — Foo@Example.com and
-      // foo@example.com used to be two different accounts against the
-      // case-sensitive unique index. `lowercase: true` normalizes on every
-      // save; lookups are normalized at the call site (see authController.js).
     },
-    phone: {
-      // FIX (H7): unique without sparse treats every missing/empty phone as
-      // the same "null" value in the index — the first user without a
-      // phone would block every subsequent phoneless account with a
-      // duplicate-key error. sparse: true excludes docs missing the field
-      // from the unique index entirely.
-      type: String,
-      unique: true,
-      sparse: true,
-    },
-    password: {
+
+    profession: {
       type: String,
       required: true,
     },
-    profileImage: {
+
+    bio: {
       type: String,
       default: "",
     },
-    role: {
-      type: String,
-      enum: ["customer", "handyman"],
-      default: "customer",
+
+    price: {
+      type: Number,
+      required: true,
     },
-    isAdmin: {
+
+    experienceYears: {
+      type: Number,
+      default: 0,
+    },
+
+    rating: {
+      type: Number,
+      default: 0,
+    },
+
+    completedOrders: {
+      type: Number,
+      default: 0,
+    },
+
+    totalOffers: {
+      type: Number,
+      default: 0,
+    },
+
+    acceptedOffers: {
+      type: Number,
+      default: 0,
+    },
+
+    acceptanceRate: {
+      type: Number,
+      default: 1.0, // defaults to 100%
+    },
+
+    verified: {
       type: Boolean,
       default: false,
     },
-    // FIX (Low #2): coordinates used to be `required: true`, which forced
-    // registerUser to default to [0, 0] (a real point in the Gulf of
-    // Guinea) whenever a user didn't share their location — silently
-    // polluting $near queries like getNearbyHandymen with a phantom
-    // "nearby" result. Making it genuinely optional means a user with no
-    // location simply has no `location` field, which a 2dsphere $near
-    // query correctly excludes rather than misreports as "very far away".
+
+    isAvailable: {
+      type: Boolean,
+      default: true,
+    },
+
+    gallery: [
+      {
+        type: String,
+      },
+    ],
+
+    walletBalance: {
+      type: Number,
+      default: 0,
+    },
+
+    // Earnings from card-paid orders waiting to be transferred to the handyman
+    pendingEarnings: {
+      type: Number,
+      default: 0,
+    },
+
+    totalPaidOut: {
+      type: Number,
+      default: 0,
+    },
+
+    penaltyAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    penaltyCount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyCancellationCount: {
+      type: Number,
+      default: 0,
+    },
+
+    monthlyCancellationMonth: {
+      type: Number,
+      default: new Date().getMonth(),
+    },
+
+    monthlyCancellationYear: {
+      type: Number,
+      default: new Date().getFullYear(),
+    },
+
+    isSuspended: {
+      type: Boolean,
+      default: false,
+    },
+
+    suspendedReason: {
+      type: String,
+      default: null,
+    },
+
+    // ** إضافة حقول التسجيل والموافقة **
+    registrationStatus: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    },
+
+    adminNote: {
+      type: String,
+      default: ''
+    },
+
+    registeredAt: {
+      type: Date,
+      default: Date.now
+    },
+
+    approvedAt: {
+      type: Date
+    },
+
+    rejectedAt: {
+      type: Date
+    },
+
+    // ** إضافة الملفات المرفقة **
+    nationalId: {
+      type: String, // مسار الصورة
+      default: '',
+    },
+
+    certificate: {
+      type: String // مسار الصورة
+    },
+
+    profileImage: {
+      type: String
+    },
+
+    // ** إضافة الموقع **
     location: {
       type: {
         type: String,
-        enum: ["Point"],
+        enum: ['Point']
       },
       coordinates: {
         type: [Number],
-      },
+        required: false
+      }
     },
+
     address: {
       type: String,
       default: "",
@@ -35732,270 +36543,103 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    // Password-reset OTP (existing flow)
-    otp: String,
-    otpExpire: Date,
 
-    // Email verification OTP (registration flow)
-    isVerified: {
+    // ** حقل للـ rejected القديم (للتوافق مع الكود الموجود) **
+    rejected: {
       type: Boolean,
-      default: false,
+      default: false
     },
-    emailOtp: String,
-    emailOtpExpire: Date,
-    penaltyCount: {
-      type: Number,
-      default: 0,
-    },
-    // NOTE: the controller has always set `customer.penaltyAmount = ...`
-    // but this field was never declared on the schema, so Mongoose (strict
-    // mode, the default) silently dropped it on every save — the penalty
-    // amount was never actually persisted to the database.
-    penaltyAmount: {
-      type: Number,
-      default: 0,
-    },
-    // Same bug as penaltyAmount above: adminControllers.toggleUserBan has
-    // always set `user.isBanned = ...` and saved it, but without this field
-    // declared on the schema Mongoose silently dropped it — banning a user
-    // from the admin panel had no real effect.
-    isBanned: {
-      type: Boolean,
-      default: false,
-    },
-    banReason: {
+
+    rejectedReason: {
       type: String,
-      default: null,
+      default: null
     },
-    // FIX (M4): admin account deletion used to hard-delete the User row,
-    // leaving Order/Message/Review/Notification documents pointing at a
-    // now-nonexistent user (populate() silently returns null for that
-    // field, permanently losing which party was involved). Soft-deleting
-    // instead keeps history intact; deletedAt also blocks login everywhere
-    // isBanned is already checked.
-    deletedAt: {
-      type: Date,
-      default: null,
-    },
-    status: {
+
+    // ========== Subscription ==========
+    // Plan defaults to FREE so all existing handymen are automatically
+    // on the free tier without any migration.
+    // Stripe integration will update this field via webhook — do NOT
+    // accept this field from user-facing request bodies.
+    subscriptionPlan: {
       type: String,
-      enum: ["pending", "approved", "rejected"],
-      default: "approved",
+      enum: ["FREE", "PREMIUM"],
+      default: "FREE",
     },
-    stripeCustomerId: {
-      type: String,
-      default: null,
-    },
-    nationalId: {
-      type: String,
-      default: "",
-    },
-    documents: [
-      {
-        type: {
-          type: String,
-          default: "national_id",
-        },
-        url: {
-          type: String,
-          required: true,
-        },
-        filename: {
-          type: String,
-          default: "",
-        },
-        originalName: {
-          type: String,
-          default: "",
-        },
-        mimeType: {
-          type: String,
-          default: "",
-        },
-        uploadedAt: {
-          type: Date,
-          default: Date.now,
-        },
-        status: {
-          type: String,
-          enum: ["pending", "verified", "rejected"],
-          default: "pending",
-        },
-      },
-    ],
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
-userSchema.index({ location: "2dsphere" });
-userSchema.index({ role: 1 });
+// إضافة index للموقع
+handymanSchema.index({ location: '2dsphere' });
 
-userSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
-  this.password = await bcrypt.hash(this.password, 10);
-});
-
-userSchema.methods.matchPassword = async function (matchedPassword) {
-  return bcrypt.compare(matchedPassword, this.password);
-};
-
-const User = mongoose.model("User", userSchema);
-module.exports = User;
+const Handyman = mongoose.model("Handyman", handymanSchema);
+module.exports = Handyman;
 </file>
 
-<file path="HerfyFrontend_fixed/src/hooks/useCurrentLocation.js">
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { isValidGpsCoord } from '../utils/routeValidation';
+<file path="HerfyBackend/routes/orderRoutes.js">
+const express = require("express");
+const router = express.Router();
 
-const CAIRO_FALLBACK = { latitude: 30.0444, longitude: 31.2357 };
+const { authMiddleware, allowedToMiddleware } = require("../middlewares/authMiddleware");
+const validate = require("../middlewares/validationMiddleware");
+const createOrderSchema = require("../validations/createOrderSchema");
+const updateOrderSchema = require("../validations/updateOrderSchema");
+const idempotency = require("../middlewares/idempotencyMiddleware");
 
-const GPS_WATCH_OPTIONS = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
-const GPS_INIT_OPTIONS = { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 };
+const {
+  createOrder,
+  getOrder,
+  getCustomerOrders,
+  getHandymanOrders,
+  updateOrderStatus,
+  getPendingOrders,
+  confirmPrice,
+  respondReschedule,
+  requestReschedule,
+  markOnTheWay,
+  confirmCashPayment,
+  createStripePaymentIntent,
+  selectPaymentMethod,
+  startOrder,
+  updateLiveLocation,
+  getDepartureWindow,
+} = require("../controllers/orderController");
+const { createReport } = require("../controllers/reportController");
 
-/**
- * @param {{ fallbackOnError?: boolean, tracking?: boolean }} options
- *   fallbackOnError=false — live tracking: location stays null on failure
- *   tracking=true — getCurrentPosition first, then watchPosition, with audit logs
- */
-export default function useCurrentLocation(options = {}) {
-  const { fallbackOnError = true, tracking = false, enabled = true } = options;
-  const [location, setLocation] = useState(null);
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const watchIdRef = useRef(null);
-  const initialFixDoneRef = useRef(false);
+router.use(authMiddleware);
 
-  const applyValidPosition = useCallback((lat, lng) => {
-    if (!isValidGpsCoord(lat, lng)) return false;
-    setLocation({ latitude: lat, longitude: lng });
-    setError(null);
-    if (tracking) {
-      console.log('✅ [CUSTOMER GPS] Valid location');
-    }
-    return true;
-  }, [tracking]);
+// ========== Customer only ==========
+router.post("/create", allowedToMiddleware("customer", "admin"), idempotency, validate(createOrderSchema), createOrder);
 
-  const handleGeoError = useCallback(
-    (err, context = 'GPS') => {
-      if (err.code === 1) {
-        console.error(`❌ [CUSTOMER GPS] Permission denied (${context})`);
-      } else if (err.code === 2) {
-        console.error(`❌ [CUSTOMER GPS] Position unavailable (${context})`);
-      } else {
-        console.error(`❌ [CUSTOMER GPS] Error (${context}):`, err.message);
-      }
-      setError(err.message);
-      if (fallbackOnError) {
-        setLocation((prev) => prev ?? CAIRO_FALLBACK);
-      } else {
-        setLocation(null);
-      }
-      setLoading(false);
-    },
-    [fallbackOnError]
-  );
+// ========== Queries ==========
+router.get("/customer/:customerId", allowedToMiddleware("customer", "admin"), getCustomerOrders);
+router.get("/handyman/:handymanId", allowedToMiddleware("handyman", "admin"), getHandymanOrders);
+router.get("/handyman/:handymanId/pending", getPendingOrders);
+router.get("/:id", getOrder);
+router.get("/:id/departure-window", getDepartureWindow);
 
-  const startWatch = useCallback(() => {
-    if (!enabled || watchIdRef.current !== null) return;
+// ========== Status transitions ==========
+router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrderStatus);
+router.post("/:id/start", startOrder);
+router.patch("/:id/confirm-price", idempotency, confirmPrice);
+router.patch("/:id/on-the-way", markOnTheWay);
+router.put("/:id/live-location", updateLiveLocation);
 
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const lat = position?.coords?.latitude;
-        const lng = position?.coords?.longitude;
-        if (tracking && isValidGpsCoord(lat, lng)) {
-          console.log('📍 [CUSTOMER GPS] watch update | latitude =', lat, '| longitude =', lng);
-        }
-        if (applyValidPosition(lat, lng)) {
-          setLoading(false);
-        }
-      },
-      (err) => handleGeoError(err, 'watchPosition'),
-      GPS_WATCH_OPTIONS
-    );
-  }, [applyValidPosition, enabled, handleGeoError, tracking]);
+// ========== Payment: method selection (customer chooses cash or card after completion) ==========
+router.patch("/:id/select-payment-method", idempotency, selectPaymentMethod);
 
-  const requestLocation = useCallback(() => {
-    if (!enabled) return;
+// ========== Payment: cash (handyman confirms receipt) ==========
+router.patch("/:id/confirm-payment", idempotency, confirmCashPayment);
 
-    if (!navigator.geolocation) {
-      setError('المتصفح لا يدعم تحديد الموقع');
-      setLocation(null);
-      return;
-    }
+// ========== Payment: card (Stripe PaymentIntent — created only after completion) ==========
+router.post("/:id/create-payment-intent", createStripePaymentIntent);
 
-    if (watchIdRef.current !== null) {
-      navigator.geolocation.clearWatch(watchIdRef.current);
-      watchIdRef.current = null;
-    }
-    initialFixDoneRef.current = false;
-    setLoading(true);
+// ========== Other ==========
+router.post("/:id/reschedule-request", requestReschedule);
+router.post("/:id/reschedule-response", respondReschedule);
+router.post("/:orderId/report", createReport);
 
-    if (tracking) {
-      console.log('📍 [CUSTOMER GPS] Requesting location...');
-    }
-
-    if (tracking) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          if (!enabled) return;
-          const lat = pos.coords.latitude;
-          const lng = pos.coords.longitude;
-          console.log('📍 [CUSTOMER GPS] Location received');
-          console.log('📍 [CUSTOMER GPS] latitude =', lat);
-          console.log('📍 [CUSTOMER GPS] longitude =', lng);
-          initialFixDoneRef.current = true;
-          applyValidPosition(lat, lng);
-          setLoading(false);
-          startWatch();
-        },
-        (err) => {
-          if (!enabled) return;
-          handleGeoError(err, 'getCurrentPosition');
-        },
-        GPS_INIT_OPTIONS
-      );
-      return;
-    }
-
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      (position) => {
-        if (!enabled) return;
-        const lat = position?.coords?.latitude;
-        const lng = position?.coords?.longitude;
-        if (applyValidPosition(lat, lng)) {
-          setLoading(false);
-        }
-      },
-      (err) => {
-        if (!enabled) return;
-        handleGeoError(err, 'watchPosition');
-      },
-      GPS_WATCH_OPTIONS
-    );
-  }, [applyValidPosition, enabled, handleGeoError, startWatch, tracking]);
-
-  useEffect(() => {
-    if (!enabled) {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-      setLoading(false);
-      return;
-    }
-
-    requestLocation();
-
-    return () => {
-      if (watchIdRef.current !== null) {
-        navigator.geolocation.clearWatch(watchIdRef.current);
-        watchIdRef.current = null;
-      }
-    };
-  }, [enabled, requestLocation]);
-
-  return { location, error, loading, requestLocation };
-};
+module.exports = router;
 </file>
 
 <file path="HerfyFrontend_fixed/src/pages/handyman/HandymanDashboard.jsx">
@@ -36859,293 +37503,6 @@ export default function HandymanDashboard() {
 }
 </file>
 
-<file path="HerfyBackend/models/Handyman.js">
-// HerfyBackend/models/Handyman.js
-const mongoose = require("mongoose");
-
-const handymanSchema = new mongoose.Schema(
-  {
-    userId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-      unique: true,
-    },
-
-    profession: {
-      type: String,
-      required: true,
-    },
-
-    bio: {
-      type: String,
-      default: "",
-    },
-
-    price: {
-      type: Number,
-      required: true,
-    },
-
-    experienceYears: {
-      type: Number,
-      default: 0,
-    },
-
-    rating: {
-      type: Number,
-      default: 0,
-    },
-
-    completedOrders: {
-      type: Number,
-      default: 0,
-    },
-
-    totalOffers: {
-      type: Number,
-      default: 0,
-    },
-
-    acceptedOffers: {
-      type: Number,
-      default: 0,
-    },
-
-    acceptanceRate: {
-      type: Number,
-      default: 1.0, // defaults to 100%
-    },
-
-    verified: {
-      type: Boolean,
-      default: false,
-    },
-
-    isAvailable: {
-      type: Boolean,
-      default: true,
-    },
-
-    gallery: [
-      {
-        type: String,
-      },
-    ],
-
-    walletBalance: {
-      type: Number,
-      default: 0,
-    },
-
-    // Earnings from card-paid orders waiting to be transferred to the handyman
-    pendingEarnings: {
-      type: Number,
-      default: 0,
-    },
-
-    totalPaidOut: {
-      type: Number,
-      default: 0,
-    },
-
-    penaltyAmount: {
-      type: Number,
-      default: 0,
-    },
-
-    penaltyCount: {
-      type: Number,
-      default: 0,
-    },
-
-    monthlyCancellationCount: {
-      type: Number,
-      default: 0,
-    },
-
-    monthlyCancellationMonth: {
-      type: Number,
-      default: new Date().getMonth(),
-    },
-
-    monthlyCancellationYear: {
-      type: Number,
-      default: new Date().getFullYear(),
-    },
-
-    isSuspended: {
-      type: Boolean,
-      default: false,
-    },
-
-    suspendedReason: {
-      type: String,
-      default: null,
-    },
-
-    // ** إضافة حقول التسجيل والموافقة **
-    registrationStatus: {
-      type: String,
-      enum: ['pending', 'approved', 'rejected'],
-      default: 'pending'
-    },
-
-    adminNote: {
-      type: String,
-      default: ''
-    },
-
-    registeredAt: {
-      type: Date,
-      default: Date.now
-    },
-
-    approvedAt: {
-      type: Date
-    },
-
-    rejectedAt: {
-      type: Date
-    },
-
-    // ** إضافة الملفات المرفقة **
-    nationalId: {
-      type: String, // مسار الصورة
-      default: '',
-    },
-
-    certificate: {
-      type: String // مسار الصورة
-    },
-
-    profileImage: {
-      type: String
-    },
-
-    // ** إضافة الموقع **
-    location: {
-      type: {
-        type: String,
-        enum: ['Point']
-      },
-      coordinates: {
-        type: [Number],
-        required: false
-      }
-    },
-
-    address: {
-      type: String,
-      default: "",
-    },
-    city: {
-      type: String,
-      default: "",
-    },
-    area: {
-      type: String,
-      default: "",
-    },
-
-    // ** حقل للـ rejected القديم (للتوافق مع الكود الموجود) **
-    rejected: {
-      type: Boolean,
-      default: false
-    },
-
-    rejectedReason: {
-      type: String,
-      default: null
-    },
-
-    // ========== Subscription ==========
-    // Plan defaults to FREE so all existing handymen are automatically
-    // on the free tier without any migration.
-    // Stripe integration will update this field via webhook — do NOT
-    // accept this field from user-facing request bodies.
-    subscriptionPlan: {
-      type: String,
-      enum: ["FREE", "PREMIUM"],
-      default: "FREE",
-    },
-  },
-  { timestamps: true }
-);
-
-// إضافة index للموقع
-handymanSchema.index({ location: '2dsphere' });
-
-const Handyman = mongoose.model("Handyman", handymanSchema);
-module.exports = Handyman;
-</file>
-
-<file path="HerfyBackend/routes/orderRoutes.js">
-const express = require("express");
-const router = express.Router();
-
-const { authMiddleware, allowedToMiddleware } = require("../middlewares/authMiddleware");
-const validate = require("../middlewares/validationMiddleware");
-const createOrderSchema = require("../validations/createOrderSchema");
-const updateOrderSchema = require("../validations/updateOrderSchema");
-const idempotency = require("../middlewares/idempotencyMiddleware");
-
-const {
-  createOrder,
-  getOrder,
-  getCustomerOrders,
-  getHandymanOrders,
-  updateOrderStatus,
-  getPendingOrders,
-  confirmPrice,
-  respondReschedule,
-  requestReschedule,
-  markOnTheWay,
-  confirmCashPayment,
-  createStripePaymentIntent,
-  selectPaymentMethod,
-  startOrder,
-  updateLiveLocation,
-  getDepartureWindow,
-} = require("../controllers/orderController");
-const { createReport } = require("../controllers/reportController");
-
-router.use(authMiddleware);
-
-// ========== Customer only ==========
-router.post("/create", allowedToMiddleware("customer", "admin"), idempotency, validate(createOrderSchema), createOrder);
-
-// ========== Queries ==========
-router.get("/customer/:customerId", allowedToMiddleware("customer", "admin"), getCustomerOrders);
-router.get("/handyman/:handymanId", allowedToMiddleware("handyman", "admin"), getHandymanOrders);
-router.get("/handyman/:handymanId/pending", getPendingOrders);
-router.get("/:id", getOrder);
-router.get("/:id/departure-window", getDepartureWindow);
-
-// ========== Status transitions ==========
-router.patch("/:id/status", idempotency, validate(updateOrderSchema), updateOrderStatus);
-router.post("/:id/start", startOrder);
-router.patch("/:id/confirm-price", idempotency, confirmPrice);
-router.patch("/:id/on-the-way", markOnTheWay);
-router.put("/:id/live-location", updateLiveLocation);
-
-// ========== Payment: method selection (customer chooses cash or card after completion) ==========
-router.patch("/:id/select-payment-method", idempotency, selectPaymentMethod);
-
-// ========== Payment: cash (handyman confirms receipt) ==========
-router.patch("/:id/confirm-payment", idempotency, confirmCashPayment);
-
-// ========== Payment: card (Stripe PaymentIntent — created only after completion) ==========
-router.post("/:id/create-payment-intent", createStripePaymentIntent);
-
-// ========== Other ==========
-router.post("/:id/reschedule-request", requestReschedule);
-router.post("/:id/reschedule-response", respondReschedule);
-router.post("/:orderId/report", createReport);
-
-module.exports = router;
-</file>
-
 <file path="HerfyBackend/routes/adminRoutes.js">
 // HerfyBackend/routes/adminRoutes.js
 const express = require("express");
@@ -37308,325 +37665,6 @@ router.post("/broadcast", broadcastAnnouncement);
 router.get("/fine-payments", getFinePayments);
 
 module.exports = router;
-</file>
-
-<file path="HerfyBackend/package.json">
-{
-  "name": "herfybackend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "jest --runInBand --detectOpenHandles --forceExit",
-    "start": "node app.js",
-    "dev": "nodemon --exec \"node --use-system-ca app.js\""
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "dependencies": {
-    "@google/genai": "^2.18.0",
-    "axios": "^1.18.1",
-    "bcrypt": "^6.0.0",
-    "bcryptjs": "^3.0.3",
-    "cloudinary": "^1.41.3",
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "express-mongo-sanitize": "^2.2.0",
-    "express-rate-limit": "^8.6.0",
-    "helmet": "^8.3.0",
-    "hpp": "^0.2.3",
-    "joi": "^18.2.1",
-    "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.6.3",
-    "morgan": "^1.11.0",
-    "multer": "^1.4.5-lts.1",
-    "multer-storage-cloudinary": "^4.0.0",
-    "node-cron": "^4.6.0",
-    "nodemailer": "^8.0.10",
-    "nodemon": "^3.1.14",
-    "socket.io": "^4.8.3",
-    "stripe": "^22.5.0",
-    "swagger-jsdoc": "^6.3.0",
-    "swagger-ui-express": "^5.0.1"
-  },
-  "devDependencies": {
-    "jest": "^29.7.0",
-    "mongodb-memory-server": "^10.4.3",
-    "socket.io-client": "^4.8.3",
-    "supertest": "^7.2.2"
-  }
-}
-</file>
-
-<file path="HerfyFrontend_fixed/src/App.jsx">
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import AuthInit from './components/layout/AuthInit';
-import ProtectedRoute from './components/layout/ProtectedRoute';
-import CustomerLayout from './components/layout/CustomerLayout';
-import HandymanLayout from './components/layout/HandymanLayout';
-import AdminLayout from './components/layout/AdminLayout';
-
-import WelcomePage from './pages/auth/WelcomePage';
-import LoginPage from './pages/auth/LoginPage';
-import RegisterPage from './pages/auth/RegisterPage';
-import VerifyEmailPage from './pages/auth/VerifyEmailPage';
-import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
-
-import HomePage from './pages/customer/HomePage';
-import MapPage from './pages/customer/MapPage';
-import HandymanProfilePage from './pages/customer/HandymanProfilePage';
-import CreateOrderPage from './pages/customer/CreateOrderPage';
-import TrackingPage from './pages/customer/TrackingPage';
-import ReviewPage from './pages/customer/ReviewPage';
-import CustomerDashboard from './pages/customer/CustomerDashboard';
-import CustomerProfilePage from './pages/customer/CustomerProfilePage';
-import NotificationsPage from './pages/customer/NotificationsPage';
-import CustomerOrderDetailsPage from './pages/customer/CustomerOrderDetailsPage';
-import CustomerSupportPage from './pages/customer/CustomerSupportPage';
-
-import HandymanDashboard from './pages/handyman/HandymanDashboard';
-import HandymanOrdersPage from './pages/handyman/HandymanOrdersPage';
-import HandymanOrderDetailsPage from './pages/handyman/HandymanOrderDetailsPage';
-import HandymanSettingsPage from './pages/handyman/HandymanSettingsPage';
-import HandymanSupportPage from './pages/handyman/HandymanSupportPage';
-
-import AdminDashboard from './pages/admin/AdminDashboard';
-import AdminUsersPage from './pages/admin/AdminUsersPage';
-import AdminUserDetailPage from './pages/admin/AdminUserDetailPage';
-import AdminVerificationsPage from './pages/admin/AdminVerificationsPage';
-import AdminReportsPage from './pages/admin/AdminReportsPage';
-import AdminWalletsPage from './pages/admin/AdminWalletsPage';
-import AdminReferenceDataPage from './pages/admin/AdminReferenceDataPage';
-import AdminAnalyticsPage from './pages/admin/AdminAnalyticsPage';
-import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
-import AdminProfilePage from './pages/admin/AdminProfilePage';
-import AdminNotificationsPage from './pages/admin/AdminNotificationsPage';
-import AdminSupportPage from './pages/admin/AdminSupportPage';
-
-import ChatPage from './pages/chat/ChatPage';
-import MyReportsPage from './pages/shared/MyReportsPage';
-import OrderPaymentPage from './pages/payment/OrderPaymentPage';
-import PaymentSuccess from './pages/payment/PaymentSuccess';
-import PaymentCancel from './pages/payment/PaymentCancel';
-
-import ChatbotWidget from './components/chatbot/ChatbotWidget';
-
-import SubscriptionPlans from './components/stripe/SubscriptionPlans';
-function App() {
-  return (
-    <BrowserRouter>
-      <AuthInit>
-        <Routes>
-          {/* Public */}
-          <Route path="/" element={<WelcomePage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/register" element={<RegisterPage />} />
-          <Route path="/verify-email" element={<VerifyEmailPage />} />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-
-          {/* Customer */}
-          <Route
-            path="/customer"
-            element={
-              <ProtectedRoute allowedRoles={['customer']}>
-                <CustomerLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route index element={<Navigate to="home" replace />} />
-            <Route path="home" element={<HomePage />} />
-            <Route path="map" element={<MapPage />} />
-            <Route path="handyman/:id" element={<HandymanProfilePage />} />
-            <Route
-              path="create-order/:handymanId"
-              element={<CreateOrderPage />}
-            />
-            <Route
-              path="tracking/:orderId"
-              element={<TrackingPage />}
-            />
-            <Route
-              path="review/:orderId"
-              element={<ReviewPage />}
-            />
-            <Route path="dashboard" element={<CustomerDashboard />} />
-            <Route path="support" element={<CustomerSupportPage />} />
-            <Route path="profile" element={<CustomerProfilePage />} />
-            <Route path="notifications" element={<NotificationsPage />} />
-            <Route path="reports" element={<MyReportsPage />} />
-          </Route>
-
-          {/* Handyman */}
-          <Route
-            path="/handyman"
-            element={
-              <ProtectedRoute allowedRoles={['handyman']}>
-                <HandymanLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route
-              index
-              element={<Navigate to="dashboard" replace />}
-            />
-            <Route
-              path="dashboard"
-              element={<HandymanDashboard />}
-            />
-            <Route
-              path="orders"
-              element={<HandymanOrdersPage />}
-            />
-            <Route
-              path="orders/:id"
-              element={<HandymanOrderDetailsPage />}
-            />
-            <Route
-              path="support"
-              element={<HandymanSupportPage />}
-            />
-            <Route
-              path="notifications"
-              element={<NotificationsPage />}
-            />
-            <Route
-              path="reports"
-              element={<MyReportsPage />}
-            />
-            <Route
-              path="profile"
-              element={<HandymanSettingsPage />}
-            />
-            <Route
-  path="subscription"
-  element={
-    <ProtectedRoute allowedRoles={['handyman']}>
-      <SubscriptionPlans />
-    </ProtectedRoute>
-  }
-/>
-          </Route>
-
-          {/* Admin */}
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute allowedRoles={['admin']}>
-                <AdminLayout />
-              </ProtectedRoute>
-            }
-          >
-            <Route
-              index
-              element={<Navigate to="dashboard" replace />}
-            />
-            <Route
-              path="dashboard"
-              element={<AdminDashboard />}
-            />
-            <Route
-              path="users"
-              element={<AdminUsersPage />}
-            />
-            <Route
-              path="users/:userId"
-              element={<AdminUserDetailPage />}
-            />
-            <Route
-              path="support"
-              element={<AdminSupportPage />}
-            />
-            <Route
-              path="verifications"
-              element={<AdminVerificationsPage />}
-            />
-            <Route
-              path="reports"
-              element={<AdminReportsPage />}
-            />
-            <Route
-              path="wallets"
-              element={<AdminWalletsPage />}
-            />
-            <Route
-              path="reference-data"
-              element={<AdminReferenceDataPage />}
-            />
-            <Route
-              path="analytics"
-              element={<AdminAnalyticsPage />}
-            />
-            <Route
-              path="audit-log"
-              element={<AdminAuditLogPage />}
-            />
-            <Route
-              path="profile"
-              element={<AdminProfilePage />}
-            />
-            <Route
-              path="notifications"
-              element={<AdminNotificationsPage />}
-            />
-          </Route>
-
-          {/* Chat (customer & handyman) */}
-          <Route
-            path="/chat/:orderId"
-            element={
-              <ProtectedRoute allowedRoles={['customer', 'handyman']}>
-                <ChatPage />
-              </ProtectedRoute>
-            }
-          />
-
-          {/* Payment */}
-          <Route
-            path="/customer/payment/:orderId"
-            element={
-              <ProtectedRoute allowedRoles={['customer']}>
-                <OrderPaymentPage />
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/customer/orders/:orderId"
-            element={
-              <ProtectedRoute allowedRoles={['customer']}>
-                <CustomerOrderDetailsPage />
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/payment/success"
-            element={<PaymentSuccess />}
-          />
-
-          <Route
-            path="/payment/cancel"
-            element={<PaymentCancel />}
-          />
-
-          {/* Fallback */}
-          <Route
-            path="*"
-            element={<Navigate to="/" replace />}
-          />
-        </Routes>
-
-        {/* Chatbot */}
-        <ChatbotWidget />
-      </AuthInit>
-    </BrowserRouter>
-  );
-}
-
-export default App;
 </file>
 
 <file path="HerfyBackend/socket/livetracking.socket.js">
@@ -38766,6 +38804,274 @@ module.exports.__internals = {
 };
 </file>
 
+<file path="HerfyFrontend_fixed/src/App.jsx">
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import AuthInit from './components/layout/AuthInit';
+import ProtectedRoute from './components/layout/ProtectedRoute';
+import CustomerLayout from './components/layout/CustomerLayout';
+import HandymanLayout from './components/layout/HandymanLayout';
+import AdminLayout from './components/layout/AdminLayout';
+
+import WelcomePage from './pages/auth/WelcomePage';
+import LoginPage from './pages/auth/LoginPage';
+import RegisterPage from './pages/auth/RegisterPage';
+import VerifyEmailPage from './pages/auth/VerifyEmailPage';
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+
+import HomePage from './pages/customer/HomePage';
+import MapPage from './pages/customer/MapPage';
+import HandymanProfilePage from './pages/customer/HandymanProfilePage';
+import CreateOrderPage from './pages/customer/CreateOrderPage';
+import TrackingPage from './pages/customer/TrackingPage';
+import ReviewPage from './pages/customer/ReviewPage';
+import CustomerDashboard from './pages/customer/CustomerDashboard';
+import CustomerProfilePage from './pages/customer/CustomerProfilePage';
+import NotificationsPage from './pages/customer/NotificationsPage';
+import CustomerOrderDetailsPage from './pages/customer/CustomerOrderDetailsPage';
+import CustomerSupportPage from './pages/customer/CustomerSupportPage';
+
+import HandymanDashboard from './pages/handyman/HandymanDashboard';
+import HandymanOrdersPage from './pages/handyman/HandymanOrdersPage';
+import HandymanOrderDetailsPage from './pages/handyman/HandymanOrderDetailsPage';
+import HandymanSettingsPage from './pages/handyman/HandymanSettingsPage';
+import HandymanSupportPage from './pages/handyman/HandymanSupportPage';
+
+import AdminDashboard from './pages/admin/AdminDashboard';
+import AdminUsersPage from './pages/admin/AdminUsersPage';
+import AdminUserDetailPage from './pages/admin/AdminUserDetailPage';
+import AdminVerificationsPage from './pages/admin/AdminVerificationsPage';
+import AdminReportsPage from './pages/admin/AdminReportsPage';
+import AdminWalletsPage from './pages/admin/AdminWalletsPage';
+import AdminReferenceDataPage from './pages/admin/AdminReferenceDataPage';
+import AdminAnalyticsPage from './pages/admin/AdminAnalyticsPage';
+import AdminAuditLogPage from './pages/admin/AdminAuditLogPage';
+import AdminProfilePage from './pages/admin/AdminProfilePage';
+import AdminNotificationsPage from './pages/admin/AdminNotificationsPage';
+import AdminSupportPage from './pages/admin/AdminSupportPage';
+
+import ChatPage from './pages/chat/ChatPage';
+import MyReportsPage from './pages/shared/MyReportsPage';
+import OrderPaymentPage from './pages/payment/OrderPaymentPage';
+import PaymentSuccess from './pages/payment/PaymentSuccess';
+import PaymentCancel from './pages/payment/PaymentCancel';
+
+import ChatbotWidget from './components/chatbot/ChatbotWidget';
+
+import SubscriptionPlans from './components/stripe/SubscriptionPlans';
+function App() {
+  return (
+    <BrowserRouter>
+      <AuthInit>
+        <Routes>
+          {/* Public */}
+          <Route path="/" element={<WelcomePage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+
+          {/* Customer */}
+          <Route
+            path="/customer"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <CustomerLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="home" replace />} />
+            <Route path="home" element={<HomePage />} />
+            <Route path="map" element={<MapPage />} />
+            <Route path="handyman/:id" element={<HandymanProfilePage />} />
+            <Route
+              path="create-order/:handymanId"
+              element={<CreateOrderPage />}
+            />
+            <Route
+              path="tracking/:orderId"
+              element={<TrackingPage />}
+            />
+            <Route
+              path="review/:orderId"
+              element={<ReviewPage />}
+            />
+            <Route path="dashboard" element={<CustomerDashboard />} />
+            <Route path="support" element={<CustomerSupportPage />} />
+            <Route path="profile" element={<CustomerProfilePage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="reports" element={<MyReportsPage />} />
+          </Route>
+
+          {/* Handyman */}
+          <Route
+            path="/handyman"
+            element={
+              <ProtectedRoute allowedRoles={['handyman']}>
+                <HandymanLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route
+              index
+              element={<Navigate to="dashboard" replace />}
+            />
+            <Route
+              path="dashboard"
+              element={<HandymanDashboard />}
+            />
+            <Route
+              path="orders"
+              element={<HandymanOrdersPage />}
+            />
+            <Route
+              path="orders/:id"
+              element={<HandymanOrderDetailsPage />}
+            />
+            <Route
+              path="support"
+              element={<HandymanSupportPage />}
+            />
+            <Route
+              path="notifications"
+              element={<NotificationsPage />}
+            />
+            <Route
+              path="reports"
+              element={<MyReportsPage />}
+            />
+            <Route
+              path="profile"
+              element={<HandymanSettingsPage />}
+            />
+            <Route
+  path="subscription"
+  element={
+    <ProtectedRoute allowedRoles={['handyman']}>
+      <SubscriptionPlans />
+    </ProtectedRoute>
+  }
+/>
+          </Route>
+
+          {/* Admin */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <AdminLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route
+              index
+              element={<Navigate to="dashboard" replace />}
+            />
+            <Route
+              path="dashboard"
+              element={<AdminDashboard />}
+            />
+            <Route
+              path="users"
+              element={<AdminUsersPage />}
+            />
+            <Route
+              path="users/:userId"
+              element={<AdminUserDetailPage />}
+            />
+            <Route
+              path="support"
+              element={<AdminSupportPage />}
+            />
+            <Route
+              path="verifications"
+              element={<AdminVerificationsPage />}
+            />
+            <Route
+              path="reports"
+              element={<AdminReportsPage />}
+            />
+            <Route
+              path="wallets"
+              element={<AdminWalletsPage />}
+            />
+            <Route
+              path="reference-data"
+              element={<AdminReferenceDataPage />}
+            />
+            <Route
+              path="analytics"
+              element={<AdminAnalyticsPage />}
+            />
+            <Route
+              path="audit-log"
+              element={<AdminAuditLogPage />}
+            />
+            <Route
+              path="profile"
+              element={<AdminProfilePage />}
+            />
+            <Route
+              path="notifications"
+              element={<AdminNotificationsPage />}
+            />
+          </Route>
+
+          {/* Chat (customer & handyman) */}
+          <Route
+            path="/chat/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer', 'handyman']}>
+                <ChatPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Payment */}
+          <Route
+            path="/customer/payment/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <OrderPaymentPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/customer/orders/:orderId"
+            element={
+              <ProtectedRoute allowedRoles={['customer']}>
+                <CustomerOrderDetailsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/payment/success"
+            element={<PaymentSuccess />}
+          />
+
+          <Route
+            path="/payment/cancel"
+            element={<PaymentCancel />}
+          />
+
+          {/* Fallback */}
+          <Route
+            path="*"
+            element={<Navigate to="/" replace />}
+          />
+        </Routes>
+
+        {/* Chatbot */}
+        <ChatbotWidget />
+      </AuthInit>
+    </BrowserRouter>
+  );
+}
+
+export default App;
+</file>
+
 <file path="HerfyBackend/app.js">
 require("dotenv").config();
 
@@ -39052,6 +39358,57 @@ process.on("unhandledRejection", (err) => {
 });
 
 module.exports = server;
+</file>
+
+<file path="HerfyBackend/package.json">
+{
+  "name": "herfybackend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --runInBand --detectOpenHandles --forceExit",
+    "start": "node app.js",
+    "dev": "nodemon --exec \"node --use-system-ca app.js\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/genai": "^2.19.0",
+    "axios": "^1.18.1",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^1.41.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-mongo-sanitize": "^2.2.0",
+    "express-rate-limit": "^8.6.0",
+    "helmet": "^8.3.0",
+    "hpp": "^0.2.3",
+    "joi": "^18.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.6.3",
+    "morgan": "^1.11.0",
+    "multer": "^1.4.5-lts.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "node-cron": "^4.6.0",
+    "nodemailer": "^8.0.10",
+    "nodemon": "^3.1.14",
+    "socket.io": "^4.8.3",
+    "stripe": "^22.5.0",
+    "swagger-jsdoc": "^6.3.0",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.4.3",
+    "socket.io-client": "^4.8.3",
+    "supertest": "^7.2.2"
+  }
+}
 </file>
 
 <file path="HerfyFrontend_fixed/src/services/api.js">

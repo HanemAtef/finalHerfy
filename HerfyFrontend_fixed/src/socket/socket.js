@@ -28,9 +28,11 @@ export const connectSocket = (token) => {
       url: SOCKET_URL,
       tokenChanged,
     });
-    if (tokenChanged && socket.connected) {
-      console.log('[SOCKET AUDIT] connectSocket RECONNECT — token changed while connected');
-      socket.disconnect();
+    if (tokenChanged) {
+      console.log('[SOCKET AUDIT] connectSocket RECONNECT — token changed, forcing new handshake');
+      if (socket.connected) {
+        socket.disconnect();
+      }
       socket.connect();
     } else if (!socket.connected) {
       socket.connect();

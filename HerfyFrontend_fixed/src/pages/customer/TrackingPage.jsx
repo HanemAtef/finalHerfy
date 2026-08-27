@@ -147,6 +147,18 @@ export default function TrackingPage() {
       routeDestinationRef.current = routeDestinationRef.current ?? orderDest;
       setRouteDestination((prev) => prev ?? orderDest);
     }
+    // Seed handyman location from order record if not already received via socket
+    if (!handymanLocRef.current && currentOrder?.handymanLiveLocation?.coordinates?.length === 2) {
+      const [lng, lat] = currentOrder.handymanLiveLocation.coordinates;
+      const numLat = Number(lat);
+      const numLng = Number(lng);
+      if (isValidGpsCoord(numLat, numLng)) {
+        const initialLoc = { latitude: numLat, longitude: numLng, lat: numLat, lng: numLng };
+        handymanLocRef.current = initialLoc;
+        setHandymanLoc(initialLoc);
+        console.log('[CUSTOMER] Initialized handyman location from order.handymanLiveLocation', initialLoc);
+      }
+    }
   }, [currentOrder]);
 
   useEffect(() => {
@@ -306,7 +318,7 @@ export default function TrackingPage() {
       console.log('[CUSTOMER] locationUpdate | handyman =', { lat: numLat, lng: numLng }, '| distance =', distanceRemaining, '| eta =', eta, '| routeCalcTimestamp =', routeCalcTimestamp ? new Date(routeCalcTimestamp).toISOString() : 'N/A');
 
       if (Number.isFinite(numLat) && Number.isFinite(numLng) && isValidGpsCoord(numLat, numLng)) {
-        const handy = { latitude: numLat, longitude: numLng };
+        const handy = { latitude: numLat, longitude: numLng, lat: numLat, lng: numLng };
         console.log('[DEBUG HANDYMAN STATE] BEFORE', {
           current: handymanLocRef.current,
           next: handy,
@@ -1193,7 +1205,7 @@ export default function TrackingPage() {
 
   const hasValidHandymanLoc =
     handymanLoc &&
-    isValidGpsCoord(handymanLoc.latitude, handymanLoc.longitude);
+    isValidGpsCoord(handymanLoc.latitude ?? handymanLoc.lat, handymanLoc.longitude ?? handymanLoc.lng);
 
   console.log('[DEBUG TRACKING MAP INPUT]', {
     handymanLocation: hasValidHandymanLoc ? handymanLoc : null,

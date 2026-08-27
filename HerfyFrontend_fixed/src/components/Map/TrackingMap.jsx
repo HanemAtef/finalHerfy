@@ -12,8 +12,8 @@ import { devGroup } from '../../utils/devLog';
 /** Returns [lng, lat] or null — never pass null/NaN to TomTom APIs */
 const toLngLat = (location) => {
   if (!location) return null;
-  const lat = Number(location.latitude);
-  const lng = Number(location.longitude);
+  const lat = Number(location.latitude ?? location.lat);
+  const lng = Number(location.longitude ?? location.lng);
   if (!isValidGpsCoord(lat, lng)) return null;
   return [lng, lat];
 };
@@ -128,10 +128,14 @@ export default function TrackingMap({
   const handymanLngLat = useMemo(() => toLngLat(handymanLocation), [
     handymanLocation?.latitude,
     handymanLocation?.longitude,
+    handymanLocation?.lat,
+    handymanLocation?.lng,
   ]);
   const customerLngLat = useMemo(() => toLngLat(customerLocation), [
     customerLocation?.latitude,
     customerLocation?.longitude,
+    customerLocation?.lat,
+    customerLocation?.lng,
   ]);
 
   const routeDestLocation = routeDestination ?? customerLocation;

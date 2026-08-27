@@ -295,7 +295,7 @@ const verifySocketInRoom = async (io, socket, roomStr) => {
 
 /** Replay last known handyman GPS to a socket that joined late (e.g. customer) */
 const replayHandymanLocationToSocket = (socket, roomStr, order, role = 'unknown') => {
-  const stored = lastHandymanLocations.get(roomStr);
+  let stored = lastHandymanLocations.get(roomStr);
 
   console.log('[DEBUG REPLAY] TARGET SOCKET', {
     id: socket.id,
@@ -303,6 +303,21 @@ const replayHandymanLocationToSocket = (socket, roomStr, order, role = 'unknown'
     role,
     orderId: roomStr,
   });
+
+  if (!stored && order?.handymanLiveLocation?.coordinates?.length === 2) {
+    const [dbLng, dbLat] = order.handymanLiveLocation.coordinates;
+    if (isValidHandymanGps(dbLat, dbLng)) {
+      stored = {
+        lat: dbLat,
+        lng: dbLng,
+        updatedAt: order.handymanLiveLocation.updatedAt
+          ? new Date(order.handymanLiveLocation.updatedAt).getTime()
+          : Date.now(),
+      };
+      lastHandymanLocations.set(roomStr, stored);
+      console.log('📍 [REPLAY] Restored handyman location from order.handymanLiveLocation:', stored);
+    }
+  }
 
   if (!stored) {
     console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION', {
@@ -331,22 +346,6 @@ const replayHandymanLocationToSocket = (socket, roomStr, order, role = 'unknown'
     ageMs: stored.updatedAt != null ? Date.now() - stored.updatedAt : null,
   });
 
-  if (!isGpsEntryFresh(stored)) {
-    console.log('[DEBUG REPLAY] STORED HANDYMAN LOCATION stale — replay skipped', {
-      key: roomStr,
-      ageMs: Date.now() - (stored.updatedAt ?? 0),
-      maxAgeMs: GPS_REPLAY_MAX_AGE_MS,
-    });
-    console.log('[SOCKET AUDIT][HANDYMAN LOCATION REPLAY] skipped — stale handyman GPS', {
-      socketId: socket.id,
-      orderId: roomStr,
-      roomStr,
-      ageMs: Date.now() - (stored.updatedAt ?? 0),
-      storedHandymanLocation: stored,
-    });
-    return;
-  }
-
   const lat = Number(stored.lat);
   const lng = Number(stored.lng);
   if (!isValidHandymanGps(lat, lng)) {
@@ -367,12 +366,30 @@ const replayHandymanLocationToSocket = (socket, roomStr, order, role = 'unknown'
 
   const origin = { lat, lng };
   const customerDest = order ? resolveCustomerDestination(order, roomStr) : null;
+  const cachedRoute = lastTrustedRouteData.get(roomStr) ?? null;
+  const routePayload = cachedRoute && customerDest && isRouteCacheValid(cachedRoute, origin, customerDest, customerDest.source)
+    ? withRouteGeometryAliases({
+        distanceRemaining: cachedRoute.distance,
+        eta: cachedRoute.eta,
+        trafficDelay: cachedRoute.trafficDelay,
+        arrivalTime: cachedRoute.arrivalTime,
+        etaTimestamp: cachedRoute.etaTimestamp,
+        routeCalcTimestamp: cachedRoute.routeCalcTimestamp,
+        routeOrigin: cachedRoute.origin,
+        routeDestination: cachedRoute.destination,
+      }, cachedRoute.geometry)
+    : {};
+
   const payload = {
+    orderId: roomStr,
     lat,
     lng,
+    latitude: lat,
+    longitude: lng,
     updatedAt: stored.updatedAt,
     replay: true,
     ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
+    ...routePayload,
   };
 
   console.log('[DEBUG REPLAY] ABOUT TO EMIT LOCATION', {
@@ -761,18 +778,34 @@ const liveTrackingSocket = (io) => {
 
         invalidateRouteCacheIfNeeded(roomStr, fixedDest);
 
-        const handymanPoint = lastHandymanLocations.get(roomStr) ?? null;
+        let handymanPoint = lastHandymanLocations.get(roomStr) ?? null;
+        if (!handymanPoint && order?.handymanLiveLocation?.coordinates?.length === 2) {
+          const [dbLng, dbLat] = order.handymanLiveLocation.coordinates;
+          if (isValidHandymanGps(dbLat, dbLng)) {
+            handymanPoint = {
+              lat: dbLat,
+              lng: dbLng,
+              updatedAt: order.handymanLiveLocation.updatedAt
+                ? new Date(order.handymanLiveLocation.updatedAt).getTime()
+                : Date.now(),
+            };
+            lastHandymanLocations.set(roomStr, handymanPoint);
+          }
+        }
         console.log('[ROUTE INPUT] handyman =', handymanPoint ?? 'not yet received');
         console.log('[ROUTE INPUT] customer (fixed order dest) =', fixedDest, '| live GPS (display only) = { lat:', numLat, ', lng:', numLng, '}');
 
-        if (handymanPoint && isGpsEntryFresh(handymanPoint)) {
+        if (handymanPoint) {
           const directMeters = haversineMeters(handymanPoint, fixedDest);
           console.log('[ROUTE INPUT] directDistanceMeters (to fixed dest) =', Math.round(directMeters));
 
           // ── Always deliver handyman coords BEFORE arrival check ──
           const baseUpdate = {
+            orderId: roomStr,
             lat: handymanPoint.lat,
             lng: handymanPoint.lng,
+            latitude: handymanPoint.lat,
+            longitude: handymanPoint.lng,
             ...buildCustomerFields(fixedDest, handymanPoint),
           };
           await broadcastLocationUpdate(io, roomStr, baseUpdate, 'sendCustomerLocation');
@@ -795,8 +828,11 @@ const liveTrackingSocket = (io) => {
 
           if (Object.keys(routePayload).length > 0) {
             const updateData = {
+              orderId: roomStr,
               lat: handymanPoint.lat,
               lng: handymanPoint.lng,
+              latitude: handymanPoint.lat,
+              longitude: handymanPoint.lng,
               ...buildCustomerFields(fixedDest, handymanPoint),
               ...routePayload,
             };
@@ -806,8 +842,6 @@ const liveTrackingSocket = (io) => {
             console.log('  distanceRemaining =', updateData.distanceRemaining ?? 'N/A');
             console.log('  geometry points =', Array.isArray(updateData.geometry) ? updateData.geometry.length : 0);
           }
-        } else if (handymanPoint && !isGpsEntryFresh(handymanPoint)) {
-          console.log('[BACKEND] Ignoring stale stored handyman GPS for sendCustomerLocation route/arrival | orderId =', roomStr);
         }
       } catch (err) {
         console.error('sendCustomerLocation failed:', err.message);
@@ -848,9 +882,23 @@ const liveTrackingSocket = (io) => {
 
         const trackingRole = socket.data?.trackingRooms?.get?.(roomStr);
         if (!trackingRole || trackingRole !== 'handyman') {
-          console.warn(`❌ [BACKEND REJECT] sendLocation — Socket ${socket.id} not joined as handyman to room ${roomStr}`);
-          socket.emit('sendLocationError', { msg: 'Socket not joined or authorized for this order room' });
-          return socket.emit('error', { msg: 'Socket not joined or authorized for this order room' });
+          // Auto-join: handyman sent location without joining first (e.g. after backend restart).
+          // Verify they are actually the assigned handyman before accepting.
+          const preCheckOrder = await Order.findById(orderId).select('handymanId');
+          const userId = socket.user?._id?.toString();
+          if (preCheckOrder && userId && preCheckOrder.handymanId.toString() === userId) {
+            console.log(`[SOCKET AUDIT] sendLocation AUTO-JOIN handyman to room ${roomStr} | socketId=${socket.id}`);
+            socket.join(roomStr);
+            if (!socket.data.trackingRooms) socket.data.trackingRooms = new Map();
+            socket.data.trackingRooms.set(roomStr, 'handyman');
+            socket.data.lastTrackingRole = 'handyman';
+            // Notify handyman that they are now joined
+            socket.emit('joinOrderRoomAck', { orderId, roomStr, role: 'handyman', success: true, autoJoined: true });
+          } else {
+            console.warn(`❌ [BACKEND REJECT] sendLocation — Socket ${socket.id} not joined as handyman to room ${roomStr}`);
+            socket.emit('sendLocationError', { msg: 'Socket not joined or authorized for this order room' });
+            return socket.emit('error', { msg: 'Socket not joined or authorized for this order room' });
+          }
         }
 
         // If handyman already arrived for this order, ignore further location updates.
@@ -930,8 +978,11 @@ const liveTrackingSocket = (io) => {
 
         // ─── Always broadcast handyman coords BEFORE arrival check ───────────
         const baseHandymanUpdate = {
+          orderId: roomStr,
           lat: numLat,
           lng: numLng,
+          latitude: numLat,
+          longitude: numLng,
           ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
         };
         await broadcastLocationUpdate(io, roomStr, baseHandymanUpdate, 'sendLocation');
@@ -1019,8 +1070,11 @@ const liveTrackingSocket = (io) => {
         }
 
         const updateData = {
+          orderId: roomStr,
           lat: numLat,
           lng: numLng,
+          latitude: numLat,
+          longitude: numLng,
           ...(customerDest ? buildCustomerFields(customerDest, origin) : {}),
           ...routePayload,
         };
