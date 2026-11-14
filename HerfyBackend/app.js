@@ -13,6 +13,19 @@ const hpp = require("hpp");
 
 const chatbotRoutes = require("./routes/chatbotRoutes");
 
+
+
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://127.0.0.1:5173",
+  "http://127.0.0.1:5174",
+  process.env.FRONTEND_URL, // هنضيفه في Vercel بعد ما نرفع الفرونت
+].filter(Boolean);
+
+
+
+
 // Global error handlers for uncaught exceptions
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION! Shutting down...");
@@ -23,12 +36,12 @@ process.on("uncaughtException", (err) => {
 const app = express();
 const server = http.createServer(app);
 
-const ALLOWED_ORIGINS = [
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:5174",
-];
+// const ALLOWED_ORIGINS = [
+//   "http://localhost:5173",
+//   "http://localhost:5174",
+//   "http://127.0.0.1:5173",
+//   "http://127.0.0.1:5174",
+// ];
 
 // ========== CORS ==========
 app.use(
@@ -273,6 +286,8 @@ if (require.main === module) {
   });
 }
 
+
+
 // ========== Handle Unhandled Promise Rejections ==========
 process.on("unhandledRejection", (err) => {
   console.error(
@@ -281,5 +296,6 @@ process.on("unhandledRejection", (err) => {
     err?.message || err
   );
 });
+
 
 module.exports = server;
